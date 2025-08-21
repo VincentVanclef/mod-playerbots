@@ -167,6 +167,7 @@ bool IntenseColdJumpAction::Execute(Event event)
     // This does a tiny bunnyhop that takes a couple of ms, it doesn't do a natural jump.
     // Adding extra Z offset causes floating, and appears to scale the jump speed based on Z difference.
     // Probably best to revisit once bot movement is improved
-    return JumpTo(bot->GetMap()->GetId(), bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ() + 0.01f);
+    // Fixed: JumpTo now properly validates Z coordinates to prevent floating
+    return JumpTo(bot->GetMap()->GetId(), bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
     // bot->GetMotionMaster()->MoveFall();
 }
