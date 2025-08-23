@@ -122,10 +122,17 @@ bool MovementAction::JumpTo(uint32 mapId, float x, float y, float z, MovementPri
     if (!bot->GetMap()->CheckCollisionAndGetValidCoords(bot, bot->GetPositionX(), bot->GetPositionY(),
                                                        bot->GetPositionZ(), finalX, finalY, finalZ, false))
     {
-        // If collision check fails, fall back to original coordinates but still use corrected Z
+        // If collision check fails, try original coordinates
         finalX = x;
         finalY = y;
-        finalZ = validZ;
+        finalZ = z; // Use original Z if collision check failed with modified Z
+        
+        // If original coordinates also fail collision check, use the corrected Z as last resort
+        if (!bot->GetMap()->CheckCollisionAndGetValidCoords(bot, bot->GetPositionX(), bot->GetPositionY(),
+                                                           bot->GetPositionZ(), finalX, finalY, finalZ, false))
+        {
+            finalZ = validZ;
+        }
     }
     
     float botZ = bot->GetPositionZ();
