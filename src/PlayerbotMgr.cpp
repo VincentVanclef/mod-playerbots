@@ -338,13 +338,14 @@ void PlayerbotHolder::LogoutPlayerBot(ObjectGuid guid)
         if (masterWorldSessionPtr && !masterWorldSessionPtr->GetPlayer())
             logout = true;
 
-        if (bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING) || bot->HasUnitState(UNIT_STATE_IN_FLIGHT) ||
-            botWorldSessionPtr->GetSecurity() >= (AccountTypes)sWorld->getIntConfig(CONFIG_INSTANT_LOGOUT))
+        if (bot && bot->IsInWorld() && 
+            (bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING) || bot->HasUnitState(UNIT_STATE_IN_FLIGHT) ||
+            botWorldSessionPtr->GetSecurity() >= (AccountTypes)sWorld->getIntConfig(CONFIG_INSTANT_LOGOUT)))
         {
             logout = true;
         }
 
-        if (master &&
+        if (master && master->IsInWorld() &&
             (master->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_RESTING) || master->HasUnitState(UNIT_STATE_IN_FLIGHT) ||
              (masterWorldSessionPtr &&
               masterWorldSessionPtr->GetSecurity() >= (AccountTypes)sWorld->getIntConfig(CONFIG_INSTANT_LOGOUT))))
