@@ -536,7 +536,6 @@ void MovementAction::UpdateMovementState()
         bot->SendMovementFlagUpdate();
     }
 }
-}
 
 bool MovementAction::Follow(Unit* target, float distance, float angle)
 {
