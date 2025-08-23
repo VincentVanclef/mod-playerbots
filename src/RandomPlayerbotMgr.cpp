@@ -995,7 +995,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 }
 
                 if (bgQueue.IsPlayerInvitedToRatedArena(player->GetGUID()) ||
-                    (player->InArena() && player->GetBattleground()->isRated()))
+                    (player->InArena() && player->GetBattleground() && player->GetBattleground()->isRated()))
                     isRated = true;
 
                 if (isRated)
