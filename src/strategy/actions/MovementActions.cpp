@@ -99,9 +99,19 @@ bool MovementAction::JumpTo(uint32 mapId, float x, float y, float z, MovementPri
         float groundLevel = bot->GetMapWaterOrGroundLevel(x, y, z);
         if (groundLevel != -100000.0f && groundLevel != -200000.0f)
         {
-            // Allow small variations but prevent major floating
-            if (z > groundLevel + 2.0f)
+            float currentBotZ = bot->GetPositionZ();
+            float heightDifference = z - currentBotZ;
+            
+            // Only restrict upward jumps to prevent air-walking
+            // Allow downward movement (falling/jumping down slopes) with more lenient restrictions
+            if (z > groundLevel + 2.0f && heightDifference > 0.0f)
             {
+                // Only restrict if jumping upward and the target is too high above ground
+                validZ = groundLevel + 2.0f; // Allow small upward variation but cap it
+            }
+            else if (z < groundLevel - 0.5f)
+            {
+                // For downward movement, don't go below ground level minus small tolerance
                 validZ = groundLevel;
             }
         }
@@ -112,10 +122,17 @@ bool MovementAction::JumpTo(uint32 mapId, float x, float y, float z, MovementPri
     if (!bot->GetMap()->CheckCollisionAndGetValidCoords(bot, bot->GetPositionX(), bot->GetPositionY(),
                                                        bot->GetPositionZ(), finalX, finalY, finalZ, false))
     {
-        // If collision check fails, fall back to original coordinates but still use corrected Z
+        // If collision check fails, try original coordinates
         finalX = x;
         finalY = y;
-        finalZ = validZ;
+        finalZ = z; // Use original Z if collision check failed with modified Z
+        
+        // If original coordinates also fail collision check, use the corrected Z as last resort
+        if (!bot->GetMap()->CheckCollisionAndGetValidCoords(bot, bot->GetPositionX(), bot->GetPositionY(),
+                                                           bot->GetPositionZ(), finalX, finalY, finalZ, false))
+        {
+            finalZ = validZ;
+        }
     }
     
     float botZ = bot->GetPositionZ();
