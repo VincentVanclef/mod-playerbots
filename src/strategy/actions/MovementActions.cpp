@@ -99,9 +99,19 @@ bool MovementAction::JumpTo(uint32 mapId, float x, float y, float z, MovementPri
         float groundLevel = bot->GetMapWaterOrGroundLevel(x, y, z);
         if (groundLevel != -100000.0f && groundLevel != -200000.0f)
         {
-            // Allow small variations but prevent major floating
-            if (z > groundLevel + 2.0f)
+            float currentBotZ = bot->GetPositionZ();
+            float heightDifference = z - currentBotZ;
+            
+            // Only restrict upward jumps to prevent air-walking
+            // Allow downward movement (falling/jumping down slopes) with more lenient restrictions
+            if (z > groundLevel + 2.0f && heightDifference > 0.0f)
             {
+                // Only restrict if jumping upward and the target is too high above ground
+                validZ = groundLevel + 2.0f; // Allow small upward variation but cap it
+            }
+            else if (z < groundLevel - 0.5f)
+            {
+                // For downward movement, don't go below ground level minus small tolerance
                 validZ = groundLevel;
             }
         }
