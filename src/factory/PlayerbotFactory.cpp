@@ -176,7 +176,13 @@ void PlayerbotFactory::Init()
         
         if (proto->Flags & ITEM_FLAG_UNIQUE_EQUIPPABLE)
         {
-            continue;
+            if (proto->ItemLevel < 60)
+                continue;
+
+            if (proto->Flags & ITEM_FLAG_UNIQUE_EQUIPPABLE)
+            {
+                continue;
+            }
         }
 
         if (sRandomItemMgr->IsTestItem(gemId))
@@ -1030,16 +1036,12 @@ void PlayerbotFactory::ClearSkills()
     // unlearn default race/class skills
     if (PlayerInfo const* info = sObjectMgr->GetPlayerInfo(bot->getRace(), bot->getClass()))
     {    
-        // Additional safety check to ensure skills container is valid
-        if (!info->skills.empty())
+        for (PlayerCreateInfoSkills::const_iterator itr = info->skills.begin(); itr != info->skills.end(); ++itr)
         {
-            for (PlayerCreateInfoSkills::const_iterator itr = info->skills.begin(); itr != info->skills.end(); ++itr)
-            {
-                uint32 skillId = itr->SkillId;
-                if (!bot->HasSkill(skillId))
-                    continue;
-                bot->SetSkill(skillId, 0, 0, 0);
-            }
+            uint32 skillId = itr->SkillId;
+            if (!bot->HasSkill(skillId))
+                continue;
+            bot->SetSkill(skillId, 0, 0, 0);
         }
     }
 }
