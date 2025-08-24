@@ -78,52 +78,12 @@ bool MovementAction::JumpTo(uint32 mapId, float x, float y, float z, MovementPri
     {
         return false;
     }
-    
-    // Validate and correct Z coordinate to prevent floating
-    // Use the actual ground/water level at target position
-    float validZ = bot->GetMapWaterOrGroundLevel(x, y, z);
-    if (validZ == -100000.0f || validZ == -200000.0f)
-    {
-        // Fallback to map height if water/ground level is invalid
-        validZ = bot->GetMapHeight(x, y, z);
-        if (validZ == INVALID_HEIGHT)
-        {
-            validZ = z; // Use original Z as last resort
-        }
-    }
-    
-    // In battlegrounds, ensure we don't jump to positions significantly above ground
-    // unless we're actually supposed to be flying
-    if (bot->InBattleground() && !bot->HasAuraType(SPELL_AURA_MOD_INCREASE_MOUNTED_FLIGHT_SPEED))
-    {
-        float groundLevel = bot->GetMapWaterOrGroundLevel(x, y, z);
-        if (groundLevel != -100000.0f && groundLevel != -200000.0f)
-        {
-            // Allow small variations but prevent major floating
-            if (z > groundLevel + 2.0f)
-            {
-                validZ = groundLevel;
-            }
-        }
-    }
-    
-    // Validate coordinates with collision detection like MoveTo does
-    float finalX = x, finalY = y, finalZ = validZ;
-    if (!bot->GetMap()->CheckCollisionAndGetValidCoords(bot, bot->GetPositionX(), bot->GetPositionY(),
-                                                       bot->GetPositionZ(), finalX, finalY, finalZ, false))
-    {
-        // If collision check fails, fall back to original coordinates but still use corrected Z
-        finalX = x;
-        finalY = y;
-        finalZ = validZ;
-    }
-    
     float botZ = bot->GetPositionZ();
     float speed = bot->GetSpeed(MOVE_RUN);
     MotionMaster& mm = *bot->GetMotionMaster();
     mm.Clear();
-    mm.MoveJump(finalX, finalY, finalZ, speed, speed, 1);
-    AI_VALUE(LastMovement&, "last movement").Set(mapId, finalX, finalY, finalZ, bot->GetOrientation(), 1000, priority);
+    mm.MoveJump(x, y, z, speed, speed, 1);
+    AI_VALUE(LastMovement&, "last movement").Set(mapId, x, y, z, bot->GetOrientation(), 1000, priority);
     return true;
 }
 
