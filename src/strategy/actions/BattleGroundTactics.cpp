@@ -1911,15 +1911,19 @@ bool BGTactics::selectObjective(bool reset)
         {
             if (Creature* storm = bot->FindNearestCreature(BG_BR_NPC_STORM, 5000.0f))
             {
-                if (GameObject* chest = bot->FindNearestGameObject(BR_CHEST_ENTRY, 5000.0f))
+                if (GameObject* chest = bot->FindNearestGameObject(BR_CHEST_ENTRY, 250.0f))
                 {
-                    float dist = sServerFacade->GetDistance2d(chest, storm);
-                    float radius = BR_DOME_RADIUS * storm->GetObjectScale();
-                    if (dist <= radius)
+                    if (chest->isSpawned() && chest->GetGoState() == GO_STATE_READY)
                     {
-                        pos.Set(chest->GetPositionX(), chest->GetPositionY(), chest->GetPositionZ(), bot->GetMapId());
-                        posMap["bg objective"] = pos;
-                        return true;
+                        float dist = sServerFacade->GetDistance2d(chest, storm);
+                        float radius = BR_DOME_RADIUS * storm->GetObjectScale();
+                        if (dist <= radius)
+                        {
+                            pos.Set(chest->GetPositionX(), chest->GetPositionY(), chest->GetPositionZ(),
+                                    bot->GetMapId());
+                            posMap["bg objective"] = pos;
+                            return true;
+                        }
                     }
                 }
 
