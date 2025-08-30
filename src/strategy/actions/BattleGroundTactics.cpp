@@ -12,6 +12,7 @@
 #include "BattlegroundAB.h"
 #include "BattlegroundAV.h"
 #include "BattlegroundBE.h"
+#include "BattlegroundBR.h"
 #include "BattlegroundDS.h"
 #include "BattlegroundEY.h"
 #include "BattlegroundIC.h"
@@ -56,6 +57,13 @@ Position const AB_WAITING_POS_HORDE = {702.884f, 703.045f, -16.115f, 0.77f};
 Position const AB_WAITING_POS_ALLIANCE = {1286.054f, 1282.500f, -15.697f, 3.95f};
 Position const AB_GY_CAMPING_HORDE = {723.513f, 725.924f, -28.265f, 3.99f};
 Position const AB_GY_CAMPING_ALLIANCE = {1262.627f, 1256.341f, -27.289f, 0.64f};
+
+Position const BR_WAITING_PLATFORM = {-11799.6f, -1647.92f, 217.359f, 0.0f};
+
+uint32 const BR_CHEST_ENTRY = 999998;
+float const BR_DOME_RADIUS = 1.57f;
+uint32 const BR_PARACHUTE_ITEM = 95010;
+uint32 const BR_PARACHUTE_SPELL = 54649;
 
 // the captains aren't the actual creatures but invisible trigger creatures - they still have correct death state and
 // location (unless they move)
@@ -1551,6 +1559,42 @@ bool BGTactics::eyJumpDown()
     return false;
 }
 
+bool BGTactics::brJumpDown()
+{
+    Battleground* bg = bot->GetBattleground();
+    if (!bg)
+        return false;
+
+    BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
+
+    if (bgType != BATTLEGROUND_BR)
+        return false;
+
+    if (bg->GetStatus() != STATUS_IN_PROGRESS)
+        return false;
+
+    if (bot->HasUnitMovementFlag(MOVEMENTFLAG_FALLING))
+        return false;
+
+    if (bot->GetPositionZ() > 210.0f)
+    {
+        if (!bot->HasAura(BR_PARACHUTE_SPELL))
+            if (bot->GetItemByEntry(BR_PARACHUTE_ITEM))
+                bot->CastSpell(bot, BR_PARACHUTE_SPELL, true);
+
+        uint32 index = urand(0, maxStormStartPositions - 1);
+        Position dest = StormStartPositions[index].Position;
+        float x = dest.GetPositionX() + frand(-20.0f, 20.0f);
+        float y = dest.GetPositionY() + frand(-20.0f, 20.0f);
+        JumpTo(bg->GetMapId(), x, y, dest.GetPositionZ());
+        return true;
+    }
+
+    return false;
+}
+
 //
 // actual bg tactics below
 //
@@ -1612,6 +1656,13 @@ bool BGTactics::Execute(Event event)
         {
             vPaths = &vPaths_IC;
             vFlagIds = &vFlagsIC;
+            break;
+        }
+        case BATTLEGROUND_BR:
+        {
+            static std::vector<BattleBotPath*> emptyPaths;
+            vPaths = &emptyPaths;
+            vFlagIds = nullptr;
             break;
         }
         default:
@@ -1832,6 +1883,11 @@ bool BGTactics::moveToStart(bool force)
                        IC_WAITING_POS_ALLIANCE.GetPositionZ());
         }
     }
+    else if (bgType == BATTLEGROUND_BR)
+    {
+        MoveTo(bg->GetMapId(), BR_WAITING_PLATFORM.GetPositionX() + frand(-5.0f, 5.0f),
+               BR_WAITING_PLATFORM.GetPositionY() + frand(-5.0f, 5.0f), BR_WAITING_PLATFORM.GetPositionZ());
+    }
 
     return true;
 }
@@ -1857,6 +1913,32 @@ bool BGTactics::selectObjective(bool reset)
         bgType = bg->GetBgTypeID(true);
     switch (bgType)
     {
+        case BATTLEGROUND_BR:
+        {
+            if (Creature* storm = bot->FindNearestCreature(BG_BR_NPC_STORM, 5000.0f))
+            {
+                if (GameObject* chest = bot->FindNearestGameObject(BR_CHEST_ENTRY, 250.0f))
+                {
+                    if (chest->isSpawned() && chest->GetGoState() == GO_STATE_READY)
+                    {
+                        float dist = sServerFacade->GetDistance2d(chest, storm);
+                        float radius = BR_DOME_RADIUS * storm->GetObjectScale();
+                        if (dist <= radius)
+                        {
+                            pos.Set(chest->GetPositionX(), chest->GetPositionY(), chest->GetPositionZ(),
+                                    bot->GetMapId());
+                            posMap["bg objective"] = pos;
+                            return true;
+                        }
+                    }
+                }
+
+                pos.Set(storm->GetPositionX(), storm->GetPositionY(), storm->GetPositionZ(), bot->GetMapId());
+                posMap["bg objective"] = pos;
+                return true;
+            }
+            return false;
+        }
         case BATTLEGROUND_AV:
         {
             BattlegroundAV* av = static_cast<BattlegroundAV*>(bg);
@@ -3193,6 +3275,13 @@ bool BGTactics::moveToObjective(bool ignoreDist)
             if (IsLockedInsideKeep())
                 return true;
         }
+        else if (bgType == BATTLEGROUND_BR)
+        {
+            if (brJumpDown())
+                return true;
+            selectObjective(true);
+            pos = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
+        }
 
         if (!ignoreDist && sServerFacade->IsDistanceGreaterThan(sServerFacade->GetDistance2d(bot, pos.x, pos.y), 100.0f))
         {
@@ -3251,6 +3340,11 @@ bool BGTactics::selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths)
     else if (bgType == BATTLEGROUND_EY)
     {
         if (eyJumpDown())
+            return true;
+    }
+    else if (bgType == BATTLEGROUND_BR)
+    {
+        if (brJumpDown())
             return true;
     }
 
