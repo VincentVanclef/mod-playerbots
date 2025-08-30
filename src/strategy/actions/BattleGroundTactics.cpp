@@ -62,6 +62,8 @@ Position const BR_WAITING_PLATFORM = {-11799.6f, -1647.92f, 217.359f, 0.0f};
 
 uint32 const BR_CHEST_ENTRY = 999998;
 float const BR_DOME_RADIUS = 1.57f;
+uint32 const BR_PARACHUTE_ITEM = 95010;
+uint32 const BR_PARACHUTE_SPELL = 54649;
 
 // the captains aren't the actual creatures but invisible trigger creatures - they still have correct death state and
 // location (unless they move)
@@ -1578,6 +1580,10 @@ bool BGTactics::brJumpDown()
 
     if (bot->GetPositionZ() > 210.0f)
     {
+        if (!bot->HasAura(BR_PARACHUTE_SPELL))
+            if (bot->GetItemByEntry(BR_PARACHUTE_ITEM))
+                bot->CastSpell(bot, BR_PARACHUTE_SPELL, true);
+
         uint32 index = urand(0, maxStormStartPositions - 1);
         Position dest = StormStartPositions[index].Position;
         float x = dest.GetPositionX() + frand(-20.0f, 20.0f);
