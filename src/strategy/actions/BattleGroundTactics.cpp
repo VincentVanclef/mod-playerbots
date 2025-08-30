@@ -1570,20 +1570,20 @@ bool BGTactics::brJumpDown()
     if (bg->GetStatus() != STATUS_IN_PROGRESS)
         return false;
 
-    if (bot->HasUnitMovementFlag(MOVEMENTFLAG_FALLING))
-        return false;
-
-    if (bot->GetPositionZ() > 210.0f)
+    // Trigger a jump only while the bot is still on the waiting platform to
+    // prevent them from being stuck after the match starts.
+    if (bot->GetPositionZ() > 210.0f && bot->GetDistance(BR_WAITING_PLATFORM) < 100.0f)
     {
-        if (!bot->HasAura(BR_PARACHUTE_SPELL))
-            if (bot->GetItemByEntry(BR_PARACHUTE_ITEM))
-                bot->CastSpell(bot, BR_PARACHUTE_SPELL, true);
-
-        uint32 index = urand(0, maxStormStartPositions - 1);
-        Position dest = StormStartPositions[index].Position;
+        uint32 index = urand(0u, maxStormStartPositions - 1);
+        Position const& dest = StormStartPositions[index].Position;
         float x = dest.GetPositionX() + frand(-20.0f, 20.0f);
         float y = dest.GetPositionY() + frand(-20.0f, 20.0f);
-        JumpTo(bg->GetMapId(), x, y, dest.GetPositionZ());
+
+        bot->TeleportTo(bg->GetMapId(), x, y, dest.GetPositionZ(), bot->GetOrientation());
+
+        if (bot->GetItemByEntry(BR_PARACHUTE_ITEM))
+            bot->CastSpell(bot, BR_PARACHUTE_SPELL, true);
+
         return true;
     }
 
