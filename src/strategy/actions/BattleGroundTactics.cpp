@@ -60,11 +60,6 @@ Position const AB_GY_CAMPING_ALLIANCE = {1262.627f, 1256.341f, -27.289f, 0.64f};
 
 Position const BR_WAITING_PLATFORM = {-11799.6f, -1647.92f, 217.359f, 0.0f};
 
-uint32 const BR_CHEST_ENTRY = 999998;
-float const BR_DOME_RADIUS = 1.57f;
-uint32 const BR_PARACHUTE_ITEM = 95010;
-uint32 const BR_PARACHUTE_SPELL = 54649;
-
 // the captains aren't the actual creatures but invisible trigger creatures - they still have correct death state and
 // location (unless they move)
 uint32 const AV_CREATURE_A_CAPTAIN = AV_CPLACE_TRIGGER16;
@@ -1921,7 +1916,7 @@ bool BGTactics::selectObjective(bool reset)
                 {
                     if (chest->isSpawned() && chest->GetGoState() == GO_STATE_READY)
                     {
-                        float dist = sServerFacade->GetDistance2d(chest, storm);
+                        float dist = sServerFacade->GetDistance2d(storm, chest);
                         float radius = BR_DOME_RADIUS * storm->GetObjectScale();
                         if (dist <= radius)
                         {
