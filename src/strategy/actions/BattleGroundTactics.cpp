@@ -1567,16 +1567,12 @@ bool BGTactics::brJumpDown()
     if (bgType != BATTLEGROUND_BR)
         return false;
 
-    // Wait until the battleground has at least started its join countdown.
-    // This allows bots to leave the platform even if the match has not fully
-    // begun yet, avoiding them being stuck when it eventually starts.
-    if (bg->GetStatus() <= STATUS_WAIT_QUEUE)
+    if (bg->GetStatus() != STATUS_IN_PROGRESS)
         return false;
 
     // Trigger a jump only while the bot is still on the waiting platform to
-    // prevent them from being stuck after the match starts. Increase the
-    // distance threshold to account for wider spawn areas on the platform.
-    if (bot->GetPositionZ() > 210.0f && bot->GetDistance(BR_WAITING_PLATFORM) < 250.0f)
+    // prevent them from being stuck after the match starts.
+    if (bot->GetPositionZ() > 210.0f && bot->GetDistance(BR_WAITING_PLATFORM) < 100.0f)
     {
         uint32 index = urand(0u, maxStormStartPositions - 1);
         Position const& dest = StormStartPositions[index].Position;
@@ -1584,11 +1580,6 @@ bool BGTactics::brJumpDown()
         float y = dest.GetPositionY() + frand(-20.0f, 20.0f);
 
         bot->TeleportTo(bg->GetMapId(), x, y, dest.GetPositionZ(), bot->GetOrientation());
-
-        bot->SetCanFly(false);
-        bot->RemoveUnitMovementFlag(MOVEMENTFLAG_FLYING);
-        bot->RemoveUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY);
-        bot->SendMovementFlagUpdate();
 
         if (bot->GetItemByEntry(BR_PARACHUTE_ITEM))
             bot->CastSpell(bot, BR_PARACHUTE_SPELL, true);
