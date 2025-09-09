@@ -4,9 +4,7 @@
  */
 
 #include "EquipAction.h"
-
 #include <ItemPackets.h>
-
 #include "Event.h"
 #include "ItemCountValue.h"
 #include "ItemUsageValue.h"
