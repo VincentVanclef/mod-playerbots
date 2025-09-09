@@ -7,7 +7,7 @@
 
 #include <random>
 #include <utility>
-
+#include <ItemPackets.h>
 #include "AccountMgr.h"
 #include "AiFactory.h"
 #include "ArenaTeam.h"
@@ -1900,7 +1900,8 @@ void PlayerbotFactory::InitEquipment(bool incremental, bool second_chance)
 
             WorldPacket packet(CMSG_AUTOSTORE_BAG_ITEM, 3);
             packet << bagIndex << slot << dstBag;
-            bot->GetSession()->HandleAutoStoreBagItemOpcode(packet);
+            WorldPackets::Item::AutoStoreBagItem packet2 = WorldPacket(packet);
+            bot->GetSession()->HandleAutoStoreBagItemOpcode(packet2);
         }
 
         oldItem = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot);
