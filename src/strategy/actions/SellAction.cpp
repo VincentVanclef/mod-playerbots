@@ -4,7 +4,7 @@
  */
 
 #include "SellAction.h"
-
+#include <ItemPackets.h>
 #include "Event.h"
 #include "ItemUsageValue.h"
 #include "ItemVisitors.h"
@@ -116,7 +116,8 @@ void SellAction::Sell(Item* item)
 
         WorldPacket p;
         p << vendorguid << itemguid << count;
-        bot->GetSession()->HandleSellItemOpcode(p);
+        WorldPackets::Item::SellItem sellItemPacket(std::move(p));
+        bot->GetSession()->HandleSellItemOpcode(sellItemPacket);
 
         if (botAI->HasCheat(BotCheatMask::gold))
         {
