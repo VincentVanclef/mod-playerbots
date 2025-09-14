@@ -26,16 +26,31 @@ bool OpenItemAction::Execute(Event event)
 
 void OpenItemAction::OpenItem(Item* item, uint8 bag, uint8 slot)
 {
+    if (!item)
+    {
+        botAI->TellError("Cannot open item: item not found");
+        return;
+    }
+
+    if (!item->IsInWorld())
+    {
+        botAI->TellError("Cannot open item: item already removed");
+        return;
+    }
+
+    const ObjectGuid guid = item->GetGUID();
+    const std::string name = item->GetTemplate()->Name1;
+
     WorldPacket packet(CMSG_OPEN_ITEM);
     packet << bag << slot;
     bot->GetSession()->HandleOpenItemOpcode(packet);
 
     // Store the item GUID as the loot target
     LootObject lootObject;
-    lootObject.guid = item->GetGUID();
+    lootObject.guid = guid;
     botAI->GetAiObjectContext()->GetValue<LootObject>("loot target")->Set(lootObject);
 
     std::ostringstream out;
-    out << "Opened item: " << item->GetTemplate()->Name1;
+    out << "Opened item: " << name;
     botAI->TellMaster(out.str());
 }
