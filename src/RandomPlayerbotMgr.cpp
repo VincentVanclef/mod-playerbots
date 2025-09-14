@@ -8,7 +8,7 @@
 #include <WorldSessionMgr.h>
 
 #include <algorithm>
-#include <boost/thread/thread.hpp>
+#include <thread>
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
@@ -106,7 +106,7 @@ void PrintStatsThread() { sRandomPlayerbotMgr->PrintStats(); }
 
 void activatePrintStatsThread()
 {
-    boost::thread t(PrintStatsThread);
+    std::thread t(PrintStatsThread);
     t.detach();
 }
 
@@ -114,7 +114,7 @@ void CheckBgQueueThread() { sRandomPlayerbotMgr->CheckBgQueue(); }
 
 void activateCheckBgQueueThread()
 {
-    boost::thread t(CheckBgQueueThread);
+    std::thread t(CheckBgQueueThread);
     t.detach();
 }
 
@@ -122,7 +122,7 @@ void CheckLfgQueueThread() { sRandomPlayerbotMgr->CheckLfgQueue(); }
 
 void activateCheckLfgQueueThread()
 {
-    boost::thread t(CheckLfgQueueThread);
+    std::thread t(CheckLfgQueueThread);
     t.detach();
 }
 
@@ -130,7 +130,7 @@ void CheckPlayersThread() { sRandomPlayerbotMgr->CheckPlayers(); }
 
 void activateCheckPlayersThread()
 {
-    boost::thread t(CheckPlayersThread);
+    std::thread t(CheckPlayersThread);
     t.detach();
 }
 
