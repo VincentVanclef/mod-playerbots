@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "LfgActions.h"
@@ -15,7 +15,6 @@
 #include "WorldPacket.h"
 
 using namespace lfg;
-
 
 bool LfgJoinAction::Execute(Event event) { return JoinLFG(); }
 
@@ -77,7 +76,7 @@ uint32 LfgJoinAction::GetRoles()
 
         default:
             return PLAYER_ROLE_DAMAGE;
-			break;
+            break;
     }
 
     return PLAYER_ROLE_DAMAGE;
@@ -113,7 +112,7 @@ bool LfgJoinAction::JoinLFG()
                          dungeon->TypeID != LFG_TYPE_HEROIC && dungeon->TypeID != LFG_TYPE_RAID))
             continue;
 
-        const auto& botLevel = bot->GetLevel();
+        auto const& botLevel = bot->GetLevel();
 
         /*LFG_TYPE_RANDOM on classic is 15-58 so bot over level 25 will never queue*/
         if (dungeon->MinLevel && (botLevel < dungeon->MinLevel || botLevel > dungeon->MaxLevel) ||
@@ -151,7 +150,7 @@ bool LfgJoinAction::JoinLFG()
 
     // Set RbotAId Browser comment
     std::string const _gs = std::to_string(botAI->GetEquipGearScore(bot/*, false, false*/));
-    
+
     // JoinLfg is not threadsafe, so make packet and queue into session
     // sLFGMgr->JoinLfg(bot, roleMask, list, _gs);
 
@@ -180,7 +179,6 @@ bool LfgRoleCheckAction::Execute(Event event)
         // if (currentRoles == newRoles)
         //     return false;
 
-        
         WorldPacket* packet = new WorldPacket(CMSG_LFG_SET_ROLES);
         *packet << (uint8)newRoles;
         bot->GetSession()->QueuePacket(packet);
@@ -267,7 +265,6 @@ bool LfgAcceptAction::Execute(Event event)
     return false;
 }
 
-
 bool LfgLeaveAction::Execute(Event event)
 {
     // Don't leave if lfg strategy enabled
@@ -317,8 +314,8 @@ bool LfgJoinAction::isUseful()
 
     if (bot->GetLevel() < 15)
         return false;
-	
-	// don't use if active player master
+
+    // don't use if active player master
     if (GET_PLAYERBOT_AI(bot)->IsRealPlayer())
         return false;
 

@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "PlayerbotSecurity.h"
@@ -164,7 +164,7 @@ PlayerbotSecurityLevel PlayerbotSecurity::LevelFor(Player* from, DenyReason* rea
 
         if (reason)
             *reason = PLAYERBOT_DENY_INVITE;
-        
+
         return PLAYERBOT_SECURITY_INVITE;
     }
 
@@ -251,9 +251,9 @@ bool PlayerbotSecurity::CheckLevelFor(PlayerbotSecurityLevel level, bool silent,
                     out << "I am currently leading a group. I can invite you if you want.";
                     break;
                 case PLAYERBOT_DENY_NOT_LEADER:
-                    if (botAI->GetGroupMaster())
+                    if (botAI->GetGroupLeader())
                     {
-                        out << "I am in a group with " << botAI->GetGroupMaster()->GetName()
+                        out << "I am in a group with " << botAI->GetGroupLeader()->GetName()
                             << ". You can ask him for invite.";
                     }
                     else

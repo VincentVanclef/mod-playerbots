@@ -1,7 +1,6 @@
 #include "AzjolNerubStrategy.h"
 #include "AzjolNerubMultipliers.h"
 
-
 void WotlkDungeonANStrategy::InitTriggers(std::vector<TriggerNode*> &triggers)
 {
     // Krik'thir the Gatewatcher
@@ -11,7 +10,7 @@ void WotlkDungeonANStrategy::InitTriggers(std::vector<TriggerNode*> &triggers)
         NextAction::array(0, new NextAction("attack web wrap", ACTION_RAID + 5), nullptr)));
     triggers.push_back(new TriggerNode("krik'thir watchers",
         NextAction::array(0, new NextAction("krik'thir priority", ACTION_RAID + 4), nullptr)));
-    
+
     // Hadronox
     // The core AC triggers are very buggy with this boss, but default strat seems to play correctly
 

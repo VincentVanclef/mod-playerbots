@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "PlayerbotMgr.h"
@@ -27,7 +27,9 @@
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotDbStore.h"
 #include "PlayerbotFactory.h"
+#include "PlayerbotOperations.h"
 #include "PlayerbotSecurity.h"
+#include "PlayerbotWorldThreadProcessor.h"
 #include "Playerbots.h"
 #include "RandomPlayerbotMgr.h"
 #include "SharedDefines.h"
@@ -85,7 +87,6 @@ public:
 
 void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId)
 {
-    // bot is loading
     if (botLoading.find(playerGuid) != botLoading.end())
         return;
 
@@ -195,7 +196,9 @@ void PlayerbotHolder::HandlePlayerBotLoginCallback(PlayerbotLoginQueryHolder con
     }
 
     sRandomPlayerbotMgr->OnPlayerLogin(bot);
-    OnBotLogin(bot);
+
+    auto op = std::make_unique<OnBotLoginOperation>(bot->GetGUID(), this);
+    sPlayerbotWorldProcessor->QueueOperation(std::move(op));
 
     botLoading.erase(holder.GetGuid());
 }
@@ -227,6 +230,12 @@ void PlayerbotHolder::HandleBotPackets(WorldSession* session)
     {
         OpcodeClient opcode = static_cast<OpcodeClient>(packet->GetOpcode());
         ClientOpcodeHandler const* opHandle = opcodeTable[opcode];
+        if (!opHandle)
+        {
+            LOG_ERROR("playerbots", "Unhandled opcode {} queued for bot session {}. Packet dropped.", static_cast<uint32>(opcode), session->GetAccountId());
+            delete packet;
+            continue;
+        }
         opHandle->Call(session, *packet);
         delete packet;
     }
@@ -310,11 +319,9 @@ void PlayerbotHolder::LogoutPlayerBot(ObjectGuid guid)
         if (!botAI)
             return;
 
-        Group* group = bot->GetGroup();
-        if (group && !bot->InBattleground() && !bot->InBattlegroundQueue() && botAI->HasActivePlayerMaster())
-        {
-            sPlayerbotDbStore->Save(botAI);
-        }
+        // Queue group cleanup operation for world thread
+        auto cleanupOp = std::make_unique<BotLogoutGroupCleanupOperation>(guid);
+        sPlayerbotWorldProcessor->QueueOperation(std::move(cleanupOp));
 
         LOG_DEBUG("playerbots", "Bot {} logging out", bot->GetName().c_str());
         bot->SaveToDB(false, false);
@@ -476,7 +483,7 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
     }
 
     Player* master = botAI->GetMaster();
-	if (master)
+    if (master)
     {
         ObjectGuid masterGuid = master->GetGUID();
         if (master->GetGroup() && !master->GetGroup()->IsLeader(masterGuid))
@@ -500,7 +507,7 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
                 }
             }
 
-			// Don't disband alt groups when master goes away
+            // Don't disband alt groups when master goes away
             // Controlled by config
             if (sPlayerbotAIConfig->KeepAltsInGroup())
             {
@@ -515,7 +522,7 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
 
         if (!groupValid)
         {
-            bot->RemoveFromGroup();
+            botAI->LeaveOrDisbandGroup();
         }
     }
 
@@ -544,6 +551,7 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
 
     botAI->TellMaster("Hello!", PLAYERBOT_SECURITY_TALK);
 
+    // Queue group operations for world thread
     if (master && master->GetGroup() && !group)
     {
         Group* mgroup = master->GetGroup();
@@ -551,24 +559,29 @@ void PlayerbotHolder::OnBotLogin(Player* const bot)
         {
             if (!mgroup->isRaidGroup() && !mgroup->isLFGGroup() && !mgroup->isBGGroup() && !mgroup->isBFGroup())
             {
-                mgroup->ConvertToRaid();
+                // Queue ConvertToRaid operation
+                auto convertOp = std::make_unique<GroupConvertToRaidOperation>(master->GetGUID());
+                sPlayerbotWorldProcessor->QueueOperation(std::move(convertOp));
             }
             if (mgroup->isRaidGroup())
             {
-                mgroup->AddMember(bot);
+                // Queue AddMember operation
+                auto addOp = std::make_unique<GroupInviteOperation>(master->GetGUID(), bot->GetGUID());
+                sPlayerbotWorldProcessor->QueueOperation(std::move(addOp));
             }
         }
         else
         {
-            mgroup->AddMember(bot);
+            // Queue AddMember operation
+            auto addOp = std::make_unique<GroupInviteOperation>(master->GetGUID(), bot->GetGUID());
+            sPlayerbotWorldProcessor->QueueOperation(std::move(addOp));
         }
     }
     else if (master && !group)
     {
-        Group* newGroup = new Group();
-        newGroup->Create(master);
-        sGroupMgr->AddGroup(newGroup);
-        newGroup->AddMember(bot);
+        // Queue group creation and AddMember operation
+        auto inviteOp = std::make_unique<GroupInviteOperation>(master->GetGUID(), bot->GetGUID());
+        sPlayerbotWorldProcessor->QueueOperation(std::move(inviteOp));
     }
     // if (master)
     // {
@@ -1131,18 +1144,18 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
         int8 gender = -1; // -1 = gender will be random
         if (genderArg)
         {
-        	std::string g = genderArg;
-        	std::transform(g.begin(), g.end(), g.begin(), ::tolower);
-        
-        	if (g == "male" || g == "0")
-        		gender = GENDER_MALE; // 0
-        	else if (g == "female" || g == "1")
-        		gender = GENDER_FEMALE; // 1
-        	else
-        	{
-        		messages.push_back("Unknown gender : " + g + " (male/female/0/1)");
-        		return messages;
-        	}
+            std::string g = genderArg;
+            std::transform(g.begin(), g.end(), g.begin(), ::tolower);
+
+            if (g == "male" || g == "0")
+                gender = GENDER_MALE; // 0
+            else if (g == "female" || g == "1")
+                gender = GENDER_FEMALE; // 1
+            else
+            {
+                messages.push_back("Unknown gender : " + g + " (male/female/0/1)");
+                return messages;
+            }
         } //end
 
         if (claz == 6 && master->GetLevel() < sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
@@ -1156,7 +1169,7 @@ std::vector<std::string> PlayerbotHolder::HandlePlayerbotCommand(char const* arg
         {
             // If the user requested a specific gender, skip any character that doesn't match.
             if (gender != -1 && GetOfflinePlayerGender(guid) != gender)
-                continue;			
+                continue;
             if (botLoading.find(guid) != botLoading.end())
                 continue;
             if (ObjectAccessor::FindConnectedPlayer(guid))
@@ -1597,8 +1610,26 @@ void PlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
 void PlayerbotMgr::OnPlayerLogin(Player* player)
 {
+    if (!player)
+        return;
+
+    WorldSession* session = player->GetSession();
+    if (!session)
+    {
+        LOG_WARN("playerbots", "Unable to register locale priority for player {} because the session is missing", player->GetName());
+        return;
+    }
+
+    // DB locale (source of bot text translation)
+    LocaleConstant const databaseLocale = session->GetSessionDbLocaleIndex();
+
+    // For bot texts (DB-driven), prefer the database locale with a safe fallback.
+    LocaleConstant usedLocale = databaseLocale;
+    if (usedLocale >= MAX_LOCALES)
+        usedLocale = LOCALE_enUS; // fallback
+
     // set locale priority for bot texts
-    sPlayerbotTextMgr->AddLocalePriority(player->GetSession()->GetSessionDbcLocale());
+    sPlayerbotTextMgr->AddLocalePriority(usedLocale);
 
     if (sPlayerbotAIConfig->selfBotLevel > 2)
         HandlePlayerbotCommand("self", player);
@@ -1606,7 +1637,7 @@ void PlayerbotMgr::OnPlayerLogin(Player* player)
     if (!sPlayerbotAIConfig->botAutologin)
         return;
 
-    uint32 accountId = player->GetSession()->GetAccountId();
+    uint32 accountId = session->GetAccountId();
     QueryResult results = CharacterDatabase.Query("SELECT name FROM characters WHERE account = {}", accountId);
     if (results)
     {
@@ -1731,7 +1762,8 @@ PlayerbotAI* PlayerbotsMgr::GetPlayerbotAI(Player* player)
     {
         return nullptr;
     }
-    // if (player->GetSession()->isLogingOut() || player->IsDuringRemoveFromWorld()) {
+    // if (player->GetSession()->isLogingOut() || player->IsDuringRemoveFromWorld())
+    // {
     //     return nullptr;
     // }
     auto itr = _playerbotsAIMap.find(player->GetGUID());

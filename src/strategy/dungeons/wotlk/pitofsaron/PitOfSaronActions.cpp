@@ -4,7 +4,7 @@
 #include "SharedDefines.h"
 
 bool IckAndKrickAction::Execute(Event event)
-{    
+{
     Unit* boss = AI_VALUE2(Unit*, "find target", "Ick");
     if (!boss)
         return false;
@@ -135,7 +135,6 @@ bool IckAndKrickAction::PoisonNova(bool poisonNova, Unit* boss)
 
     return false;
 }
-
 
 bool IckAndKrickAction::ExplosiveBarrage(bool explosiveBarrage, Unit* boss)
 {
@@ -309,7 +308,7 @@ bool TyrannusAction::RangedSpread(bool rangedSpread)
                 return FleePosition(unit->GetPosition(), moveDistance, 250U);
             }
         }
-    }    
+    }
 
     return false;
 }

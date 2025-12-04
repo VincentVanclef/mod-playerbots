@@ -1,9 +1,9 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
-#include "PetAction.h"
+#include "PetsAction.h"
 
 #include "CharmInfo.h"
 #include "Creature.h"
@@ -13,7 +13,7 @@
 #include "PlayerbotAI.h"
 #include "SharedDefines.h"
 
-bool PetAction::Execute(Event event)
+bool PetsAction::Execute(Event event)
 {
     // Extract the command parameter from the event (e.g., "aggressive", "defensive", "attack", etc.)
     std::string param = event.getParam();

@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "GuildTaskMgr.h"
@@ -590,7 +590,7 @@ uint32 GuildTaskMgr::GetTaskValue(uint32 owner, uint32 guildId, std::string cons
     {
         return 0;
     }
-    
+
     uint32 value = 0;
 
     PlayerbotsDatabasePreparedStatement* stmt =
@@ -1067,7 +1067,7 @@ void GuildTaskMgr::SendCompletionMessage(Player* player, std::string const verb)
 void GuildTaskMgr::CheckKillTaskInternal(Player* player, Unit* victim)
 {
     ObjectGuid::LowType owner = player->GetGUID().GetCounter();
-    if (victim->GetTypeId() != TYPEID_UNIT)
+    if (!victim->IsCreature())
         return;
 
     Creature* creature = reinterpret_cast<Creature*>(victim);

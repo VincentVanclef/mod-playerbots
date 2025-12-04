@@ -2,7 +2,6 @@
 #include "VioletHoldActions.h"
 #include "VioletHoldStrategy.h"
 
-
 bool AttackErekemAction::Execute(Event event)
 {
     // Focus boss first, adds after
@@ -32,7 +31,7 @@ bool AttackIchorGlobuleAction::Execute(Event event)
         }
         return false;
     }
-    
+
     // Target is not findable from threat table using AI_VALUE2(),
     // therefore need to search manually for the unit name
     GuidVector targets = AI_VALUE(GuidVector, "possible targets");
@@ -67,7 +66,7 @@ bool AttackVoidSentryAction::Execute(Event event)
     if (!boss) { return false; }
 
     Unit* currentTarget = AI_VALUE(Unit*, "current target");
-    
+
     // Target is not findable from threat table using AI_VALUE2(),
     // therefore need to search manually for the unit name
     // GuidVector targets = AI_VALUE(GuidVector, "possible targets no los");

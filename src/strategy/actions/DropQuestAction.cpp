@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "DropQuestAction.h"
@@ -57,7 +57,6 @@ bool DropQuestAction::Execute(Event event)
     botAI->TellMaster("Quest removed");
     return true;
 }
-
 
 bool CleanQuestLogAction::Execute(Event event)
 {
@@ -164,7 +163,6 @@ bool CleanQuestLogAction::Execute(Event event)
 
     return true;
 }
-
 
 void CleanQuestLogAction::DropQuestType(uint8& numQuest, uint8 wantNum, bool isGreen, bool hasProgress, bool isComplete)
 {

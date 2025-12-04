@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "TravelNode.h"
@@ -177,6 +177,9 @@ uint32 TravelNodePath::getPrice()
         return 0;
 
     TaxiPathEntry const* taxiPath = sTaxiPathStore.LookupEntry(pathObject);
+
+    if (!taxiPath)
+        return 0;
 
     return taxiPath->price;
 }
@@ -466,7 +469,6 @@ bool TravelNode::cropUselessLinks()
     //std::vector<std::pair<TravelNode*, TravelNode*>> toRemove;
     for (auto& firstLink : getLinks())
     {
-
 
         TravelNode* firstNode = firstLink.first;
         float firstLength = firstLink.second.getDistance();
@@ -1299,7 +1301,7 @@ TravelNodeRoute TravelNodeMap::getRoute(TravelNode* start, TravelNode* goal, Pla
             return TravelNodeRoute(path);
         }
 
-        for (const auto& link : *currentNode->dataNode->getLinks())  // for each successor n' of n
+        for (auto const& link : *currentNode->dataNode->getLinks())  // for each successor n' of n
         {
             TravelNode* linkNode = link.first;
             float linkCost = link.second->getCost(bot, currentNode->currentGold);
@@ -1348,7 +1350,7 @@ TravelNodeRoute TravelNodeMap::getRoute(WorldPosition startPos, WorldPosition en
     std::vector<WorldPosition> newStartPath;
     std::vector<TravelNode*> startNodes = m_nodes, endNodes = m_nodes;
 
-    if(!startNodes.size() || !endNodes.size())
+    if (!startNodes.size() || !endNodes.size())
          return TravelNodeRoute();
 
     // Partial sort to get the closest 5 nodes at the begin of the array.
@@ -1899,7 +1901,7 @@ void TravelNodeMap::generateTransportNodes()
 
                     // if (data->displayId == 3015)
                     //     pos.setZ(pos.getZ() + 6.0f);
-                    // else if(data->displayId == 3031)
+                    // else if (data->displayId == 3031)
                     //     pos.setZ(pos.getZ() - 17.0f);
 
                     if (prevNode)
@@ -2299,7 +2301,7 @@ void TravelNodeMap::printNodeStore()
         }
     }
 
-    sPlayerbotAIConfig->log(nodeStore, "	}");
+    sPlayerbotAIConfig->log(nodeStore, "    }");
     sPlayerbotAIConfig->log(nodeStore, "};");
 
     printf("\r [Done] \r\x3D");

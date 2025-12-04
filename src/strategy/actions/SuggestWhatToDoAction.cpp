@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include <functional>
@@ -120,7 +120,8 @@ void SuggestWhatToDoAction::grindMaterials()
 
     for (std::map<std::string, double>::iterator i = categories.begin(); i != categories.end(); ++i)
     {
-        if (urand(0, 10) < 3) {
+        if (urand(0, 10) < 3)
+        {
             std::string name = i->first;
             double multiplier = i->second;
 

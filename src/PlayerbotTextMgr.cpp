@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "PlayerbotTextMgr.h"
@@ -101,6 +101,22 @@ std::string PlayerbotTextMgr::GetBotText(std::string name, std::map<std::string,
     return botText;
 }
 
+std::string PlayerbotTextMgr::GetBotTextOrDefault(std::string name, std::string defaultText,
+    std::map<std::string, std::string> placeholders)
+{
+    std::string botText = GetBotText(name, placeholders);
+    if (botText.empty())
+    {
+        for (std::map<std::string, std::string>::iterator i = placeholders.begin(); i != placeholders.end(); ++i)
+        {
+            replaceAll(defaultText, i->first, i->second);
+        }
+        return defaultText;
+    }
+
+    return botText;
+}
+
 // chat replies
 
 std::string PlayerbotTextMgr::GetBotText(ChatReplyType replyType, std::map<std::string, std::string> placeholders)
@@ -174,26 +190,29 @@ bool PlayerbotTextMgr::GetBotText(std::string name, std::string& text, std::map<
 
 void PlayerbotTextMgr::AddLocalePriority(uint32 locale)
 {
-    if (!locale)
+    if (locale >= MAX_LOCALES)
+    {
+        LOG_WARN("playerbots", "Ignoring locale {} for bot texts because it exceeds MAX_LOCALES ({})", locale, MAX_LOCALES - 1);
         return;
+    }
 
     botTextLocalePriority[locale]++;
 }
 
 uint32 PlayerbotTextMgr::GetLocalePriority()
 {
-    uint32 topLocale = 0;
-
     // if no real players online, reset top locale
-    if (!sWorldSessionMgr->GetActiveSessionCount())
+    uint32 const activeSessions = sWorldSessionMgr->GetActiveSessionCount();
+    if (!activeSessions)
     {
         ResetLocalePriority();
         return 0;
     }
 
+    uint32 topLocale = 0;
     for (uint8 i = 0; i < MAX_LOCALES; ++i)
     {
-        if (botTextLocalePriority[i] > topLocale)
+        if (botTextLocalePriority[i] > botTextLocalePriority[topLocale])
             topLocale = i;
     }
 

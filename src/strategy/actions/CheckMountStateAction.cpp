@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "CheckMountStateAction.h"
@@ -66,7 +66,7 @@ bool CheckMountStateAction::isUseful()
 
     // Get shapeshift states, only applicable when there's a master
     if (master)
-    {   
+    {
         botInShapeshiftForm = bot->GetShapeshiftForm();
         masterInShapeshiftForm = master->GetShapeshiftForm();
     }
@@ -81,7 +81,7 @@ bool CheckMountStateAction::isUseful()
     // to mostly be an issue in tunnels of WSG and AV)
     float posZ = bot->GetPositionZ();
     float groundLevel = bot->GetMapWaterOrGroundLevel(bot->GetPositionX(), bot->GetPositionY(), posZ);
-    if (!bot->IsMounted() && posZ < groundLevel)
+    if (!bot->IsMounted() && !bot->HasWaterWalkAura() && posZ < groundLevel)
         return false;
 
     // Not useful when bot does not have mount strat and is not currently mounted
@@ -152,13 +152,9 @@ bool CheckMountStateAction::Execute(Event /*event*/)
 
     bool inBattleground = bot->InBattleground();
 
-    // If there is a master and bot not in BG
+    // If there is a master and bot not in BG, follow master's mount state regardless of group leader
     if (master && !inBattleground)
     {
-        Group* group = bot->GetGroup();
-        if (!group || group->GetLeaderGUID() != master->GetGUID())
-            return false;
-
         if (ShouldFollowMasterMountState(master, noAttackers, shouldMount))
             return Mount();
 
@@ -374,7 +370,7 @@ bool CheckMountStateAction::TryPreferredMount(Player* master) const
 
 bool CheckMountStateAction::TryRandomMountFiltered(const std::map<int32, std::vector<uint32>>& spells, int32 masterSpeed) const
 {
-    for (const auto& pair : spells)
+    for (auto const& pair : spells)
     {
         int32 currentSpeed = pair.first;
 
@@ -382,7 +378,7 @@ bool CheckMountStateAction::TryRandomMountFiltered(const std::map<int32, std::ve
             continue;
 
         // Pick a random mount from the candidate group.
-        const auto& ids = pair.second;
+        auto const& ids = pair.second;
         if (!ids.empty())
         {
             // Required here as otherwise bots won't mount in BG's due to them constant moving

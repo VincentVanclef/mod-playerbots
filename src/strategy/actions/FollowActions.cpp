@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "FollowActions.h"
@@ -30,13 +30,13 @@ bool FollowAction::Execute(Event event)
         WorldLocation loc = formation->GetLocation();
         if (Formation::IsNullLocation(loc) || loc.GetMapId() == -1)
             return false;
-        
+
         MovementPriority priority = botAI->GetState() == BOT_STATE_COMBAT ? MovementPriority::MOVEMENT_COMBAT : MovementPriority::MOVEMENT_NORMAL;
         moved = MoveTo(loc.GetMapId(), loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ(), false, false, false,
                        true, priority, true);
     }
 
-    // This section has been commented out because it was forcing the pet to 
+    // This section has been commented out because it was forcing the pet to
     // follow the bot on every "follow" action tick, overriding any attack or
     // stay commands that might have been issued by the player.
     // if (Pet* pet = bot->GetPet())
@@ -70,7 +70,7 @@ bool FollowAction::isUseful()
     if (!target.empty())
         fTarget = AI_VALUE(Unit*, target);
     else
-        fTarget = AI_VALUE(Unit*, "master target");
+        fTarget = AI_VALUE(Unit*, "group leader");
 
     if (fTarget)
     {
@@ -114,9 +114,9 @@ bool FollowAction::CanDeadFollow(Unit* target)
     return true;
 }
 
-bool FleeToMasterAction::Execute(Event event)
+bool FleeToGroupLeaderAction::Execute(Event event)
 {
-    Unit* fTarget = AI_VALUE(Unit*, "master target");
+    Unit* fTarget = AI_VALUE(Unit*, "group leader");
     bool canFollow = Follow(fTarget);
     if (!canFollow)
     {
@@ -146,22 +146,22 @@ bool FleeToMasterAction::Execute(Event event)
     return true;
 }
 
-bool FleeToMasterAction::isUseful()
+bool FleeToGroupLeaderAction::isUseful()
 {
-    if (!botAI->GetGroupMaster())
+    if (!botAI->GetGroupLeader())
         return false;
 
-    if (botAI->GetGroupMaster() == bot)
+    if (botAI->GetGroupLeader() == bot)
         return false;
 
     Unit* target = AI_VALUE(Unit*, "current target");
-    if (target && botAI->GetGroupMaster()->GetTarget() == target->GetGUID())
+    if (target && botAI->GetGroupLeader()->GetTarget() == target->GetGUID())
         return false;
 
     if (!botAI->HasStrategy("follow", BOT_STATE_NON_COMBAT))
         return false;
 
-    Unit* fTarget = AI_VALUE(Unit*, "master target");
+    Unit* fTarget = AI_VALUE(Unit*, "group leader");
 
     if (!CanDeadFollow(fTarget))
         return false;

@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "RandomItemMgr.h"
@@ -982,7 +982,7 @@ void RandomItemMgr::BuildItemInfoCache()
             continue;
         }
 
-        if (proto->Flags & ITEM_FLAG_DEPRECATED)
+        if (proto->HasFlag(ITEM_FLAG_DEPRECATED))
         {
             itemForTest.insert(proto->ItemId);
             continue;
@@ -1072,10 +1072,10 @@ void RandomItemMgr::BuildItemInfoCache()
         // cacheInfo.team = TEAM_NEUTRAL;
 
         // // check faction
-        // if (proto->Flags2 & ITEM_FLAG2_FACTION_HORDE)
+        // if (proto->HasFlag2(ITEM_FLAG2_FACTION_HORDE))
         //     cacheInfo.team = TEAM_HORDE;
 
-        // if (proto->Flags2 & ITEM_FLAG2_FACTION_ALLIANCE)
+        // if (proto->HasFlag2(ITEM_FLAG2_FACTION_ALLIANCE))
         //     cacheInfo.team = TEAM_ALLIANCE;
 
         // if (cacheInfo.team == TEAM_NEUTRAL && proto->AllowableRace > 1 && proto->AllowableRace < 8388607)
@@ -1099,7 +1099,7 @@ void RandomItemMgr::BuildItemInfoCache()
 
         // // check item source
 
-        // if (proto->Flags & ITEM_FLAG_NO_DISENCHANT)
+        // if (proto->HasFlag(ITEM_FLAG_NO_DISENCHANT))
         // {
         //     cacheInfo.source = ITEM_SOURCE_PVP;
         //     LOG_DEBUG("playerbots", "Item: {}, source: PvP Reward", proto->ItemId);
@@ -1367,7 +1367,7 @@ uint32 RandomItemMgr::CalculateStatWeight(uint8 playerclass, uint8 spec, ItemTem
     }
 
     // check item spells
-    for (const auto& spellData : proto->Spells)
+    for (auto const& spellData : proto->Spells)
     {
         // no spell
         if (!spellData.SpellId)
@@ -2360,7 +2360,7 @@ void RandomItemMgr::BuildPotionCache()
                     (proto->SubClass != ITEM_SUBCLASS_POTION && proto->SubClass != ITEM_SUBCLASS_FLASK) ||
                     proto->Bonding != NO_BIND)
                     continue;
-                
+
                 uint32 requiredLevel = proto->RequiredLevel;
                 if (requiredLevel > level || (level > 13 && requiredLevel < level - 13))
                     continue;
@@ -2374,10 +2374,9 @@ void RandomItemMgr::BuildPotionCache()
                 if (proto->Duration & 0x80000000)
                     continue;
 
-                
                 if (proto->AllowableClass != -1)
                     continue;
-                
+
                 bool hybrid = false;
                 SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(proto->Spells[0].SpellId);
                 if (!spellInfo)

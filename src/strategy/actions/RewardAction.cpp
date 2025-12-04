@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "RewardAction.h"
@@ -35,8 +35,8 @@ bool RewardAction::Execute(Event event)
                 return true;
     }
 
-    Unit* mtar = AI_VALUE(Unit*, "master target");
-    if (mtar && Reward(itemId, mtar))
+    Unit* groupLeaderUnit = AI_VALUE(Unit*, "group leader");
+    if (groupLeaderUnit && Reward(itemId, groupLeaderUnit))
         return true;
 
     botAI->TellError("Cannot talk to quest giver");

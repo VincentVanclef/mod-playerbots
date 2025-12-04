@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "BankAction.h"
@@ -17,7 +17,7 @@ bool BankAction::Execute(Event event)
     for (GuidVector::iterator i = npcs.begin(); i != npcs.end(); i++)
     {
         Unit* npc = botAI->GetUnit(*i);
-        if (!npc || !npc->HasFlag(UNIT_NPC_FLAGS, UNIT_NPC_FLAG_BANKER))
+        if (!npc || !npc->HasNpcFlag(UNIT_NPC_FLAG_BANKER))
             continue;
 
         return ExecuteBank(text, npc);

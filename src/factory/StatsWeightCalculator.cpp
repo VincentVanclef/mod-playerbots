@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "StatsWeightCalculator.h"
@@ -92,9 +92,18 @@ float StatsWeightCalculator::CalculateItem(uint32 itemId, int32 randomPropertyId
     CalculateSocketBonus(player_, proto);
 
     if (enable_quality_blend_)
-        // Blend with item quality and level
-        weight_ *= PlayerbotFactory::CalcMixedGearScore(proto->ItemLevel, proto->Quality);
+    {
+        // Heirloom items scale with player level
+        // Use player level as effective item level for heirlooms - Quality EPIC
+        // Else - Blend with item quality and level for normal items
+        if (proto->Quality == ITEM_QUALITY_HEIRLOOM)
+            weight_ *= PlayerbotFactory::CalcMixedGearScore(lvl, ITEM_QUALITY_EPIC);
+        else
+            weight_ *= PlayerbotFactory::CalcMixedGearScore(proto->ItemLevel, proto->Quality);
 
+        return weight_;
+    }
+    // If quality/level blending is disabled, also return the calculated weight.
     return weight_;
 }
 
@@ -184,7 +193,7 @@ void StatsWeightCalculator::GenerateBasicWeights(Player* player)
     stats_weights_[STATS_TYPE_MELEE_DPS] += 0.01f;
     stats_weights_[STATS_TYPE_RANGED_DPS] += 0.01f;
 
-    if (cls == CLASS_HUNTER && (tab == HUNTER_TAB_BEASTMASTER || tab == HUNTER_TAB_SURVIVAL))
+    if (cls == CLASS_HUNTER && (tab == HUNTER_TAB_BEASTMASTERY || tab == HUNTER_TAB_SURVIVAL))
     {
         stats_weights_[STATS_TYPE_AGILITY] += 2.5f;
         stats_weights_[STATS_TYPE_ATTACK_POWER] += 1.0f;
@@ -571,7 +580,7 @@ void StatsWeightCalculator::CalculateItemTypePenalty(ItemTemplate const* proto)
         {
             weight_ *= 0.1;
         }
-        
+
         if (lvl >= 10 && cls == CLASS_ROGUE && (tab == ROGUE_TAB_ASSASSINATION || tab == ROGUE_TAB_SUBTLETY) &&
             proto->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER)
         {

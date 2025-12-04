@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "TalkToQuestGiverAction.h"
@@ -102,7 +102,7 @@ void TalkToQuestGiverAction::RewardNoItem(Quest const* quest, Object* questGiver
 {
     std::map<std::string, std::string> args;
     args["%quest"] = chat->FormatQuest(quest);
-    
+
     if (bot->CanRewardQuest(quest, false))
     {
         out << BOT_TEXT2("quest_status_completed", args);
@@ -205,17 +205,18 @@ void TalkToQuestGiverAction::RewardMultipleItem(Quest const* quest, Object* ques
     }
     else
     {
-        // Try to pick the usable item. If multiple list usable rewards.
+        // Try to pick the usable item. If multiple, list usable rewards.
         bestIds = BestRewards(quest);
-        if (!bestIds.empty())
-        {
+
+        if (bestIds.size() > 1)
             AskToSelectReward(quest, out, true);
-        }
-        else
+
+        else if (!bestIds.empty())
         {
             // Pick the first item
-            ItemTemplate const* item = sObjectMgr->GetItemTemplate(quest->RewardChoiceItemId[*bestIds.begin()]);
-            bot->RewardQuest(quest, *bestIds.begin(), questGiver, true);
+            uint32 firstId = *bestIds.begin();
+            ItemTemplate const* item = sObjectMgr->GetItemTemplate(quest->RewardChoiceItemId[firstId]);
+            bot->RewardQuest(quest, firstId, questGiver, true);
 
             out << "Rewarded " << ChatHelper::FormatItem(item);
         }

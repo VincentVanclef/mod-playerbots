@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "WarriorActions.h"
@@ -126,7 +126,7 @@ bool CastRetaliationAction::isUseful()
             continue;
 
         // Check if the attacker is melee-based using unit_class
-        if (attacker->GetTypeId() == TYPEID_UNIT)
+        if (attacker->IsCreature())
         {
             Creature* creature = attacker->ToCreature();
             if (creature && (creature->IsClass(CLASS_WARRIOR)
@@ -136,7 +136,7 @@ bool CastRetaliationAction::isUseful()
                 ++meleeAttackers;
             }
         }
-        else if (attacker->GetTypeId() == TYPEID_PLAYER)
+        else if (attacker->IsPlayer())
         {
             Player* playerAttacker = attacker->ToPlayer();
             if (playerAttacker && botAI->IsMelee(playerAttacker)) // Reuse existing Player melee check
@@ -218,7 +218,7 @@ bool CastShatteringThrowAction::isPossible()
     if (!target)
         return false;
 
-    // Range check: Shattering Throw is 30 yards    
+    // Range check: Shattering Throw is 30 yards
     if (!bot->IsWithinDistInMap(target, 30.0f))
     {
         return false;

@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "ChooseTravelTargetAction.h"
@@ -16,7 +16,7 @@ bool ChooseTravelTargetAction::Execute(Event event)
     //Get the current travel target. This target is no longer active.
     TravelTarget* oldTarget = context->GetValue<TravelTarget*>("travel target")->Get();
 
-    //Select a new target to travel to. 
+    //Select a new target to travel to.
     TravelTarget newTarget = TravelTarget(botAI);
 
     if (!oldTarget) return false;
@@ -120,7 +120,6 @@ void ChooseTravelTargetAction::getNewTarget(TravelTarget* newTarget, TravelTarge
         }
     }
 
-
     //Continue current target. 90% chance
     if (!foundTarget && urand(1, 100) > 10)
     {
@@ -146,7 +145,7 @@ void ChooseTravelTargetAction::getNewTarget(TravelTarget* newTarget, TravelTarge
             foundTarget = SetBossTarget(newTarget);
         }
     }
-    
+
     //Do quests (start, do, end) 95% chance
     if (!foundTarget && urand(1, 100) > 5)
     {
@@ -181,7 +180,7 @@ void ChooseTravelTargetAction::getNewTarget(TravelTarget* newTarget, TravelTarge
 void ChooseTravelTargetAction::setNewTarget(TravelTarget* newTarget, TravelTarget* oldTarget)
 {
     // Tell the master where we are going.
-    if (!bot->GetGroup() || (botAI->GetGroupMaster() == bot))
+    if (!bot->GetGroup() || (botAI->GetGroupLeader() == bot))
         ReportTravelTarget(newTarget, oldTarget);
 
     // If we are heading to a creature/npc clear it from the ignore list.
@@ -673,7 +672,7 @@ bool ChooseTravelTargetAction::SetExploreTarget(TravelTarget* target)
         //271 south shore
         //35 booty bay
         //380 The Barrens The Crossroads
-        if(((ExploreTravelDestination * )activeTarget)->getAreaId() == 380)
+        if (((ExploreTravelDestination * )activeTarget)->getAreaId() == 380)
         {
             activePoints.push_back(activeTarget->getPoints(true)[0]);
         }

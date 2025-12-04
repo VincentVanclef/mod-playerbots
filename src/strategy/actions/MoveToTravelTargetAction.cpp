@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "MoveToTravelTargetAction.h"
@@ -18,7 +18,7 @@ bool MoveToTravelTargetAction::Execute(Event event)
     WorldLocation location = *target->getPosition();
 
     Group* group = bot->GetGroup();
-    if (group && !urand(0, 1) && bot == botAI->GetGroupMaster() && !bot->IsInCombat())
+    if (group && !urand(0, 1) && bot == botAI->GetGroupLeader() && !bot->IsInCombat())
     {
         for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
         {

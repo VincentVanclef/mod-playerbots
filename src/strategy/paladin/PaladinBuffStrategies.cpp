@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "PaladinBuffStrategies.h"
@@ -11,7 +11,7 @@ void PaladinBuffManaStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
 {
     triggers.push_back(new TriggerNode("blessing of wisdom on party",
         NextAction::array(0, new NextAction("blessing of wisdom on party", 11.0f), NULL)));
-		
+
     triggers.push_back(new TriggerNode("blessing of kings on party",
         NextAction::array(0, new NextAction("blessing of kings on party", 10.5f), NULL)));
 }
@@ -85,7 +85,7 @@ void PaladinBuffThreatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers
 }
 
 void PaladinBuffStatsStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
-{					
+{
     // First Sanctuary (prio > Kings)
     triggers.push_back(
         new TriggerNode("blessing of sanctuary on party",

@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #ifndef _PLAYERBOT_NAMEDOBJECTCONEXT_H
@@ -47,6 +47,8 @@ public:
     std::unordered_map<std::string, ObjectCreator> creators;
 
 public:
+    virtual ~NamedObjectFactory() = default;
+
     virtual T* create(std::string name, PlayerbotAI* botAI)
     {
         size_t found = name.find("::");
@@ -146,10 +148,8 @@ public:
     void Add(NamedObjectContext<T>* context)
     {
         contexts.push_back(context);
-        for (const auto& iter : context->creators)
-        {
+        for (auto const& iter : context->creators)
             creators[iter.first] = iter.second;
-        }
     }
 };
 
@@ -208,6 +208,7 @@ public:
             if (T* object = create(name, botAI))
                 return created[name] = object;
         }
+
         return created[name];
     }
 
@@ -236,7 +237,6 @@ public:
         for (auto i = contexts.begin(); i != contexts.end(); i++)
         {
             std::set<std::string> supported = (*i)->supports();
-
             for (std::set<std::string>::const_iterator j = supported.begin(); j != supported.end(); ++j)
                 result.insert(*j);
         }
@@ -248,9 +248,7 @@ public:
     {
         std::set<std::string> result;
         for (typename std::unordered_map<std::string, T*>::const_iterator i = created.begin(); i != created.end(); i++)
-        {
             result.insert(i->first);
-        }
 
         return result;
     }
@@ -296,16 +294,15 @@ public:
     void Add(NamedObjectFactory<T>* context)
     {
         factories.push_back(context);
-        for (const auto& iter : context->creators)
-        {
+        for (auto const& iter : context->creators)
             creators[iter.first] = iter.second;
-        }
     }
 
     T* GetContextObject(const std::string& name, PlayerbotAI* botAI)
     {
         if (T* object = create(name, botAI))
             return object;
+
         return nullptr;
     }
 };

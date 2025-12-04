@@ -2,7 +2,6 @@
 #include "DrakTharonKeepActions.h"
 #include "DrakTharonKeepStrategy.h"
 
-
 bool CorpseExplodeSpreadAction::Execute(Event event)
 {
     Unit* boss = AI_VALUE2(Unit*, "find target", "trollgore");
@@ -64,11 +63,11 @@ bool NovosTargetPriorityAction::Execute(Event event)
 {
     // TODO: This can be improved, some parts are still buggy.
     // But it works for now and this fight is very easy
-    
+
     // Designate a dps char to handle the stairs adds.
     // This is probably better as a melee, so just pick the first
     // melee dps in the party. If none exist, pick the first ranged.
-    
+
     // TODO: Switch to botAI->Index instead, cleaner
     Player* stairsDps = nullptr;
     GuidVector members = AI_VALUE(GuidVector, "group members");
@@ -76,7 +75,7 @@ bool NovosTargetPriorityAction::Execute(Event event)
     {
         Player* groupMember = botAI->GetPlayer(member);
         if (!groupMember) { continue; }
-        
+
         if (botAI->IsDps(groupMember))
         {
             if (botAI->IsMelee(groupMember))
@@ -131,7 +130,7 @@ bool NovosTargetPriorityAction::Execute(Event event)
                 {
                     selectedTargets[0] = unit;
                 }
-                
+
             }
             else if (creatureId == NPC_FETID_TROLL_CORPSE)
             {

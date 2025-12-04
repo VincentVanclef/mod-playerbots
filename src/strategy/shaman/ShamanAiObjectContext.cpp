@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #include "ShamanAiObjectContext.h"
@@ -41,6 +41,11 @@ class ShamanCombatStrategyFactoryInternal : public NamedObjectContext<Strategy>
 public:
     ShamanCombatStrategyFactoryInternal() : NamedObjectContext<Strategy>(false, true)
     {
+        creators["heal"] = &ShamanCombatStrategyFactoryInternal::resto;
+        creators["melee"] = &ShamanCombatStrategyFactoryInternal::enh;
+        creators["dps"] = &ShamanCombatStrategyFactoryInternal::enh;
+        creators["caster"] = &ShamanCombatStrategyFactoryInternal::ele;
+        //creators["offheal"] = &ShamanCombatStrategyFactoryInternal::offheal;
         creators["resto"] = &ShamanCombatStrategyFactoryInternal::resto;
         creators["enh"] = &ShamanCombatStrategyFactoryInternal::enh;
         creators["ele"] = &ShamanCombatStrategyFactoryInternal::ele;

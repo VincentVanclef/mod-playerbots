@@ -13,7 +13,7 @@
 std::unordered_map<ObjectGuid, time_t> RazorscaleBossHelper::_harpoonCooldowns;
 // Prevent role assignment spam
 std::unordered_map<ObjectGuid, std::time_t> RazorscaleBossHelper::_lastRoleSwapTime;
-const std::time_t RazorscaleBossHelper::_roleSwapCooldown; 
+const std::time_t RazorscaleBossHelper::_roleSwapCooldown;
 
 bool RazorscaleBossHelper::UpdateBossAI()
 {
@@ -84,7 +84,7 @@ GameObject* RazorscaleBossHelper::FindNearestHarpoon(float x, float y, float z) 
     GameObject* nearestHarpoon = nullptr;
     float minDistanceSq = std::numeric_limits<float>::max();
 
-    for (const auto& harpoon : GetHarpoonData())
+    for (auto const& harpoon : GetHarpoonData())
     {
         if (GameObject* harpoonGO = bot->FindNearestGameObject(harpoon.gameObjectEntry, 200.0f))
         {
@@ -157,7 +157,6 @@ bool RazorscaleBossHelper::CanSwapRoles() const
 
     return (currentTime - lastSwapTime) >= _roleSwapCooldown;
 }
-
 
 void RazorscaleBossHelper::AssignRolesBasedOnHealth()
 {

@@ -3,7 +3,6 @@
 #include "AiObject.h"
 #include "AiObjectContext.h"
 
-
 bool NadoxGuardianTrigger::IsActive()
 {
     if (botAI->IsHeal(bot)) { return false; }
@@ -38,6 +37,6 @@ bool ShadowCrashTrigger::IsActive()
 {
     Unit* unit = AI_VALUE2(Unit*, "find target", "forgotten one");
     if (!unit) { return false; }
-    
+
     return !botAI->IsMelee(bot);
 }

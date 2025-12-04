@@ -16,7 +16,7 @@ float MountingDrakeMultiplier::GetValue(Action* action)
     // If we suppress everything, they seem to mount properly. A bit of a ham-fisted solution but it works
     Player* master = botAI->GetMaster();
     if (!master) { return 1.0f; }
-    
+
     if (bot->GetMapId() != OCULUS_MAP_ID || !master->GetVehicleBase() || bot->GetVehicleBase()) { return 1.0f; }
 
     if (!dynamic_cast<MountDrakeAction*>(action))
@@ -40,7 +40,7 @@ float OccFlyingMultiplier::GetValue(Action* action)
 
 float UromMultiplier::GetValue(Action* action)
 {
-    if(GetPhaseByCurrentPosition(bot) < 3)
+    if (GetPhaseByCurrentPosition(bot) < 3)
     {
         Unit* target = action->GetTarget();
         if (target && target->GetEntry() == NPC_MAGE_LORD_UROM)

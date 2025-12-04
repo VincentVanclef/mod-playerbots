@@ -135,7 +135,7 @@ enum SpellIdsICC
     SPELL_NITRO_BOOSTS                  = 54861, //Speed
     SPELL_PAIN_SUPPRESION               = 69910, //40% dmg reduction
     SPELL_AGEIS_OF_DALARAN              = 71638, //268 all ress
-    SPELL_CYCLONE                       = 33786, 
+    SPELL_CYCLONE                       = 33786,
     SPELL_HAMMER_OF_JUSTICE             = 10308, //stun
 
     // Lady Deathwhisper
@@ -336,7 +336,6 @@ public:
     bool IsActive() override;
 };
 
-
 class IccRotfaceMoveAwayFromExplosionTrigger : public Trigger
 {
 public:
@@ -359,7 +358,6 @@ public:
     bool IsActive() override;
 };
 
-
 class IccPutricideGrowingOozePuddleTrigger : public Trigger
 {
 public:
@@ -374,7 +372,7 @@ public:
     bool IsActive() override;
 };
 
-class IccPutricideMalleableGooTrigger : public Trigger 
+class IccPutricideMalleableGooTrigger : public Trigger
 {
 public:
     IccPutricideMalleableGooTrigger(PlayerbotAI* ai) : Trigger(ai, "icc putricide malleable goo") {}
@@ -382,7 +380,7 @@ public:
 };
 
 //BPC
-class IccBpcKelesethTankTrigger : public Trigger 
+class IccBpcKelesethTankTrigger : public Trigger
 {
 public:
     IccBpcKelesethTankTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc bpc keleseth tank") {}
@@ -445,7 +443,7 @@ class IccValkyreSpearTrigger : public Trigger
 public:
     IccValkyreSpearTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc valkyre spear") {}
     bool IsActive() override;
-};  
+};
 
 class IccSisterSvalnaTrigger : public Trigger
 {
@@ -453,7 +451,6 @@ public:
     IccSisterSvalnaTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc sister svalna") {}
     bool IsActive() override;
 };
-
 
 // Valithria Dreamwalker
 
@@ -485,7 +482,6 @@ public:
     bool IsActive() override;
 };
 
-
 //SINDRAGOSA
 class IccSindragosaGroupPositionTrigger : public Trigger
 {
@@ -508,7 +504,7 @@ public:
     bool IsActive() override;
 };
 
-class IccSindragosaUnchainedMagicTrigger : public Trigger   
+class IccSindragosaUnchainedMagicTrigger : public Trigger
 {
 public:
     IccSindragosaUnchainedMagicTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc sindragosa unchained magic") {}
@@ -550,7 +546,6 @@ public:
     bool IsActive() override;
 };
 
-
 //LICH KING
 class IccLichKingShadowTrapTrigger : public Trigger
 {
@@ -559,7 +554,7 @@ public:
     bool IsActive() override;
 };
 
-class IccLichKingNecroticPlagueTrigger : public Trigger 
+class IccLichKingNecroticPlagueTrigger : public Trigger
 {
 public:
     IccLichKingNecroticPlagueTrigger(PlayerbotAI* botAI) : Trigger(botAI, "icc lich king necrotic plague") {}

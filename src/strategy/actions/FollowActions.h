@@ -1,6 +1,6 @@
 /*
- * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU GPL v2 license, you may redistribute it
- * and/or modify it under version 2 of the License, or (at your option), any later version.
+ * Copyright (C) 2016+ AzerothCore <www.azerothcore.org>, released under GNU AGPL v3 license, you may redistribute it
+ * and/or modify it under version 3 of the License, or (at your option), any later version.
  */
 
 #ifndef _PLAYERBOT_FOLLOWACTIONS_H
@@ -20,10 +20,10 @@ public:
     bool CanDeadFollow(Unit* target);
 };
 
-class FleeToMasterAction : public FollowAction
+class FleeToGroupLeaderAction : public FollowAction
 {
 public:
-    FleeToMasterAction(PlayerbotAI* botAI) : FollowAction(botAI, "flee to master") {}
+    FleeToGroupLeaderAction(PlayerbotAI* botAI) : FollowAction(botAI, "flee to group leader") {}
 
     bool Execute(Event event) override;
     bool isUseful() override;
