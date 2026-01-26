@@ -6,10 +6,10 @@
 #ifndef _PLAYERBOT_RANDOMPLAYERBOTMGR_H
 #define _PLAYERBOT_RANDOMPLAYERBOTMGR_H
 
+#include "GameTime.h"
 #include "NewRpgInfo.h"
 #include "ObjectGuid.h"
 #include "PlayerbotMgr.h"
-#include "GameTime.h"
 
 struct BattlegroundInfo
 {
@@ -43,7 +43,7 @@ struct BattlegroundInfo
 };
 
 class ChatHandler;
-class PerfMonitorOperation;
+class PerformanceMonitorOperation;
 class WorldLocation;
 
 struct CachedEvent
@@ -167,18 +167,23 @@ public:
     void PrepareZone2LevelBracket();
     void PrepareTeleportCache();
     void Init();
+    // Forces immediate bot-count evaluation after config/ratio changes
+    void ForceBotCountRecheck();
     std::map<uint8, std::unordered_set<ObjectGuid>> addclassCache;
     std::map<uint8, std::vector<WorldLocation>> locsPerLevelCache;
     std::map<uint8, std::vector<WorldLocation>> allianceStarterPerLevelCache;
     std::map<uint8, std::vector<WorldLocation>> hordeStarterPerLevelCache;
-
-    struct LevelBracket {
+    std::vector<uint32> allianceFlightMasterCache;
+    std::vector<uint32> hordeFlightMasterCache;
+    struct LevelBracket
+    {
         uint32 low;
         uint32 high;
         bool InsideBracket(uint32 val) { return val >= low && val <= high; }
     };
     std::map<uint32, LevelBracket> zone2LevelBracket;
-    struct BankerLocation {
+    struct BankerLocation
+    {
         WorldLocation loc;
         uint32 entry;
     };
@@ -199,6 +204,16 @@ private:
     bool _isBotLogging = true;
     NewRpgStatistic rpgStasticTotal;
     CachedEvent* FindEvent(uint32 bot, std::string const& event);
+    // Counts online real players (excludes random bots and addclass bots).
+    uint32 GetOnlineRealPlayerCount() const;
+    
+    // Community-level pacing (optional): dynamic cap for random bot levels.
+    // Cached for a short period to avoid frequent DB hits.
+    // Returns 0 when the feature is disabled or when there are no online real players.
+    uint32 GetCommunityMaxBotLevel() const;
+    mutable uint32 communityLevelCapCachedAt = 0;
+    mutable uint32 communityLevelCapCachedValue = 0;
+
     uint32 GetEventValue(uint32 bot, std::string const& event);
     std::string GetEventData(uint32 bot, std::string const& event);
     uint32 SetEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn,
@@ -211,7 +226,17 @@ private:
     time_t RealPlayerLastTimeSeen = 0;
     time_t DelayLoginBotsTimer;
     time_t printStatsTimer;
+
+    // Periodically persist real player count to playerbots DB
+    time_t RealPlayersOnlineStoreTimer = 0;
+    // Ratio mode: periodically shrink random bots when real players log out
+    time_t RatioShrinkCheckTimer = 0;
     uint32 AddRandomBots();
+    // Ratio mode shrink helpers (natural, gradual logouts)
+    void RatioShrinkTick(uint32 desiredBotCount);
+    bool IsSafeToLogout(Player* bot);
+    uint8 GetLogoutPriority(Player* bot);
+
     bool ProcessBot(uint32 bot);
     void ScheduleRandomize(uint32 bot, uint32 time);
     void RandomTeleport(Player* bot);
@@ -220,6 +245,12 @@ private:
     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
     std::vector<Player*> players;
     uint32 processTicks;
+
+    // Persisted settings/state in playerbots DB
+    float LoadSavedBotsPerPlayerFromDB() const;
+    void SaveBotsPerPlayerToDB(float ratio) const;
+    // Config toggle (no persisting ratio in config anymore)
+    bool IsPlayerCountRatioEnabled() const;
 
     // std::map<uint32, std::vector<WorldLocation>> rpgLocsCache;
     std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> rpgLocsCacheLevel;
@@ -230,10 +261,10 @@ private:
     uint32 playersLevel;
 
     // Account lists
-    std::vector<uint32> rndBotTypeAccounts;             // Accounts marked as RNDbot (type 1)
-    std::vector<uint32> addClassTypeAccounts;           // Accounts marked as AddClass (type 2)
+    std::vector<uint32> rndBotTypeAccounts;    // Accounts marked as RNDbot (type 1)
+    std::vector<uint32> addClassTypeAccounts;  // Accounts marked as AddClass (type 2)
 
-    //void ScaleBotActivity();      // Deprecated function
+    // void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }
 };
 

@@ -126,6 +126,18 @@ public:
     float randomBotMinLevelChance, randomBotMaxLevelChance;
     float randomBotRpgChance;
     uint32 minRandomBots, maxRandomBots;
+
+    // Dynamic target bot count derived from online real players.
+    // When enabled, MinRandomBots / MaxRandomBots still act as hard clamps.
+    bool usePlayerCountRatio;
+    float botsPerPlayer;
+
+    // Community-level pacing (optional): dynamic cap for random bot levels.
+    // The cap is computed as round(avg(top N online real player levels)) + buffer.
+    bool communityLevelCapEnabled;
+    uint32 communityLevelCapTopN;
+    int32 communityLevelCapBuffer;
+    uint32 communityLevelCapCacheSeconds;
     uint32 randomBotUpdateInterval, randomBotCountChangeMinInterval, randomBotCountChangeMaxInterval;
     uint32 minRandomBotInWorldTime, maxRandomBotInWorldTime;
     uint32 minRandomBotRandomizeTime, maxRandomBotRandomizeTime;

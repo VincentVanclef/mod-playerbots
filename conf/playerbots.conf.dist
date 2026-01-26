@@ -3,9 +3,8 @@
 ##################################################
 
 # Overview
-# "Randombot": randomly generated bots that log in separately from players and populate the world. Randombots may automatically grind, quest, level up, and upgrade equipment and can be invited to groups and given commands.
-# "AddClass bot": bots from the AddClassAccountPoolSize accounts. They are used for quickly adding a leveled and geared bot of any class to your party. They are recommended for a quick formation of a party.
-# "Altbot": characters created on player accounts, which may be logged in by the player and invited to groups and given commands like randombots. They are best suited for long-progression playthroughs.
+# "Randombot": randomly generated bots that log in separately from players and populate the world. Depending on settings, randombots may automatically grind, quest, and upgrade equipment and can be invited to groups and given commands.
+# "Altbot": characters created on player accounts, which may be logged in by the player and invited to groups and given commands like randombots. Depending on settings, altbots can be limited to characters on the active player's account or in the active player's guild.
 # Information about commands to control bots and set their strategies can be found on the wiki at https://github.com/mod-playerbots/mod-playerbots/wiki/Playerbot-Commands.
 
 ####################################################################################################
@@ -84,12 +83,42 @@
 # Enable or disable Playerbots module
 AiPlayerbot.Enabled = 1
 
-# Enable randombot system
+# Enable randombot 
 AiPlayerbot.RandomBotAutologin = 1
 
 # Randombot count
-AiPlayerbot.MinRandomBots = 500
+AiPlayerbot.MinRandomBots = 1
 AiPlayerbot.MaxRandomBots = 500
+
+# Dynamic randombot scaling based on ONLINE REAL players.
+#
+# When ENABLED (1):
+#   Randombot population automatically scales using a player-based ratio
+#   that is defined and managed in the playerbot database: playerbot_server_settings.
+#
+# When DISABLED (0):
+#   No player-based ratio is used.
+#   Randombot count is controlled only by the fixed Min/Max settings.
+#
+# NOTE:
+#   MinRandomBots and MaxRandomBots always act as hard clamps,
+#   regardless of whether dynamic scaling is enabled.
+#
+AiPlayerbot.UsePlayerCountRatio = 1
+
+#
+# Community-level bot cap
+#
+# If enabled, randombot levels are capped by the average level
+# of the top N online REAL players (per account), plus a buffer.
+#
+# Final cap = clamp(round(avg(top N levels)) + buffer, 1, CONFIG_MAX_PLAYER_LEVEL)
+#
+
+AiPlayerbot.CommunityLevelCap.Enable       = 1
+AiPlayerbot.CommunityLevelCap.TopN         = 20
+AiPlayerbot.CommunityLevelCap.Buffer       = 3
+AiPlayerbot.CommunityLevelCap.CacheSeconds = 60
 
 # Randombot accounts
 # If you are not using any expansion at all, you may have to set this manually, in which case please
@@ -130,7 +159,7 @@ AiPlayerbot.MaxAddedBots = 40
 
 # Enable/Disable creating bots by addclass command (0 = GM only, 1 = enabled)
 # Default: 1 (enabled)
-AiPlayerbot.AddClassCommand = 1
+AiPlayerbot.AddClassCommand = 0
 
 # Set the addclass command account pool size
 AiPlayerbot.AddClassAccountPoolSize = 50
@@ -178,7 +207,7 @@ AiPlayerbot.RandomBotInvitePlayer = 0
 AiPlayerbot.InviteChat = 0
 
 # Bots will be automatically summoned to the player when they accept a group invitation
-AiPlayerbot.SummonWhenGroup = 1
+AiPlayerbot.SummonWhenGroup = 0
 
 # Player can be activated as a bot (selfbot)
 # Selfbot permission level (0 = disabled, 1 = GM only (default), 2 = all players, 3 = activate on login)
@@ -208,23 +237,23 @@ AiPlayerbot.AutoTrainSpells = yes
 
 # Enable/Disable summoning bots when the master is in combat
 # Default: 1 (enabled)
-AiPlayerbot.AllowSummonInCombat = 1
+AiPlayerbot.AllowSummonInCombat = 0
 
 # Enable/Disable summoning bots when the master is dead
 # Default: 1 (enabled)
-AiPlayerbot.AllowSummonWhenMasterIsDead = 1
+AiPlayerbot.AllowSummonWhenMasterIsDead = 0
 
 # Enable/Disable summoning bots when they are dead (0 = only when the bots are ghosts, 1 = always)
 # Default: 1 (always)
-AiPlayerbot.AllowSummonWhenBotIsDead = 1
+AiPlayerbot.AllowSummonWhenBotIsDead = 0
 
 # Enable/Disable reviving bots when summoning them (0 = disabled, 1 = disabled in combat, 2 = enabled)
 # Default: 1 (disabled in combat)
-AiPlayerbot.ReviveBotWhenSummoned = 1
+AiPlayerbot.ReviveBotWhenSummoned = 0
 
 # Enable/Disable bots repairing gear when summoned
 # Default: 1 (enabled)
-AiPlayerbot.BotRepairWhenSummon = 1
+AiPlayerbot.BotRepairWhenSummon = 0
 
 #
 #
@@ -270,7 +299,7 @@ AiPlayerbot.UseFastFlyMountAtMinLevel = 70
 AiPlayerbot.RandomBotShowHelmet = 1
 AiPlayerbot.RandomBotShowCloak = 1
 
-# Toggles whether altbots will automatically equip items in their inventory that are sufficient upgrades
+# Randombots and altbots automatically equip any items in their inventory that are sufficient upgrades
 # Default: 1 (enabled)
 AiPlayerbot.AutoEquipUpgradeLoot = 1
 
@@ -536,7 +565,7 @@ AiPlayerbot.AutoGearCommandAltBots = 1
 
 # Equipment quality limitation for autogear command (1 = normal, 2 = uncommon, 3 = rare, 4 = epic, 5 = legendary)
 # Default: 3 (rare)
-AiPlayerbot.AutoGearQualityLimit = 3
+AiPlayerbot.AutoGearQualityLimit = 2
 
 # Equipment item level (not gearscore) limitation for autogear command (0 = no limit)
 # Classic
@@ -561,7 +590,7 @@ AiPlayerbot.AutoGearScoreLimit = 0
 # "raid" (bots use cheats implemented into raid strategies (currently only for Ulduar))
 # To use multiple cheats, separate them by commas below (e.g., to enable all, use "gold,health,mana,power,raid,taxi")
 # Default: food, taxi, and raid are enabled
-AiPlayerbot.BotCheats = "food,taxi,raid"
+AiPlayerbot.BotCheats = ""
 
 #
 #
@@ -633,7 +662,7 @@ AiPlayerbot.RandomBotAccountPrefix = "rndbot"
 
 # Minimum and maximum levels for randombots
 AiPlayerbot.RandomBotMinLevel = 1
-AiPlayerbot.RandomBotMaxLevel = 80
+AiPlayerbot.RandomBotMaxLevel = 19
 
 # Sync max randombot level with max level of online players
 # Default: 0 (disabled)
@@ -662,7 +691,7 @@ AiPlayerbot.RandomBotAllianceRatio = 50
 AiPlayerbot.RandomBotHordeRatio = 50
 
 # Disable logging in of death knight bots
-AiPlayerbot.DisableDeathKnightLogin = 0
+AiPlayerbot.DisableDeathKnightLogin = 1
 
 # Enable simulated expansion limitation for talents and glyphs
 # If enabled, limits talent trees to 5 rows plus the middle talent of the 6th row for bots until level 61
@@ -670,7 +699,7 @@ AiPlayerbot.DisableDeathKnightLogin = 0
 # Default: 0 (disabled)
 AiPlayerbot.LimitTalentsExpansion = 0
 
-# Configure randombot trading (0: Disabled, 1: Enabled, 2: Only Buy, 3: Only Sell)
+# Configure randombots and addClass bot trading (0: Disabled, 1: Enabled, 2: Only Buy, 3: Only Sell)
 # Default: 1 (enabled)
 AiPlayerbot.EnableRandomBotTrading = 1
 
@@ -689,14 +718,14 @@ AiPlayerbot.TradeActionExcludedPrefixes = "RPLL_H_,DBMv4,{звезда} Questie,
 
 # Disable randombots being generated with a random level
 # If disabled, every randombot starts on a specified level (but can still level up by killing mobs and questing)
-AiPlayerbot.DisableRandomLevels = 0
+AiPlayerbot.DisableRandomLevels = 1
 
 # Set randombots' starting level here if "AiPlayerbot.DisableRandomLevels" enabled
 AiPlayerbot.RandombotStartingLevel = 1
 
 # Chance randombot has min level on first randomize
 # Default: 0.1 (10%)
-AiPlayerbot.RandomBotMinLevelChance = 0.1
+AiPlayerbot.RandomBotMinLevelChance = 0.2
 
 # Chance randombot has max level on first randomize
 # Default 0.1 (10%)
@@ -712,7 +741,7 @@ AiPlayerbot.DowngradeMaxLevelBot = 0
 
 # Set XP rate for random bots (Default: 1.0)
 # Server XP Rate * AiPlayerbot.RandomBotXPRate
-AiPlayerbot.RandomBotXPRate = 1.0
+AiPlayerbot.RandomBotXPRate = 0.5
 
 #
 #
@@ -944,12 +973,12 @@ AiPlayerbot.EnableNewRpgStrategy = 1
 # DoQuest       (Default: 60  Select quest from the quest log and head to the location to attempt completion​)
 # TravelFlight  (Default: 15  Go to the nearest flightmaster and fly to a level-appropriate area)
 # Rest          (Default: 5   Take a break for a while and do nothing)
-AiPlayerbot.RpgStatusProbWeight.WanderRandom = 15
-AiPlayerbot.RpgStatusProbWeight.WanderNpc = 20
+AiPlayerbot.RpgStatusProbWeight.WanderRandom = 10
+AiPlayerbot.RpgStatusProbWeight.WanderNpc = 15
 AiPlayerbot.RpgStatusProbWeight.GoGrind = 15
 AiPlayerbot.RpgStatusProbWeight.GoCamp = 10
-AiPlayerbot.RpgStatusProbWeight.DoQuest = 60
-AiPlayerbot.RpgStatusProbWeight.TravelFlight = 15
+AiPlayerbot.RpgStatusProbWeight.DoQuest = 80
+AiPlayerbot.RpgStatusProbWeight.TravelFlight = 10
 AiPlayerbot.RpgStatusProbWeight.Rest = 5
 
 # Bots' minimum and maximum level when teleporting in and out of a zone, according to the new RPG strategy
@@ -1103,11 +1132,11 @@ AiPlayerbot.RandomBotMaps = 0,1,530,571
 
 # Probabilty bots teleport to banker (city)
 # Default: 0.25
-AiPlayerbot.ProbTeleToBankers = 0.25
+AiPlayerbot.ProbTeleToBankers = 0
 
 # Control probability weights for bots teleporting to Capital city bankers
 # Sum of weights need not be 100. Set to 0 to disable teleporting to the city.
-AiPlayerbot.EnableWeightTeleToCityBankers = 1
+AiPlayerbot.EnableWeightTeleToCityBankers = 0
 AiPlayerbot.TeleToStormwindWeight = 2
 AiPlayerbot.TeleToIronforgeWeight = 1
 AiPlayerbot.TeleToDarnassusWeight = 1
@@ -1120,7 +1149,7 @@ AiPlayerbot.TeleToShattrathCityWeight = 1
 AiPlayerbot.TeleToDalaranWeight = 1
 
 # How far randombots are teleported after death
-AiPlayerbot.RandomBotTeleportDistance = 100
+AiPlayerbot.RandomBotTeleportDistance = 10
 
 # How many levels below the lowest-level creature in a zone, can a bot be
 # This will have no effect if AiPlayerbot.EnableNewRpgStrategy is enabled
@@ -1134,7 +1163,7 @@ AiPlayerbot.RandomBotTeleHigherLevel = 3
 
 # Bots automatically teleport to another place for leveling on levelup
 # Default: 1 (enabled)
-AiPlayerbot.AutoTeleportForLevel = 1
+AiPlayerbot.AutoTeleportForLevel = 0
 
 #
 #
@@ -1150,7 +1179,7 @@ AiPlayerbot.AutoTeleportForLevel = 1
 AiPlayerbot.RandomBotJoinBG = 1
 
 # Enable auto-joining of battlegrounds - have bots start battlegrounds and arenas on their own
-AiPlayerbot.RandomBotAutoJoinBG = 0
+AiPlayerbot.RandomBotAutoJoinBG = 1
 
 # Required Configuration for RandomBotAutoJoinBG
 #
@@ -1185,19 +1214,19 @@ AiPlayerbot.RandomBotAutoJoinICBrackets = 1
 AiPlayerbot.RandomBotAutoJoinEYBrackets = 2
 AiPlayerbot.RandomBotAutoJoinAVBrackets = 3
 AiPlayerbot.RandomBotAutoJoinABBrackets = 6
-AiPlayerbot.RandomBotAutoJoinWSBrackets = 7
+AiPlayerbot.RandomBotAutoJoinWSBrackets = 0
 
 # Battlegrounds count (per bracket!):
 AiPlayerbot.RandomBotAutoJoinBGICCount = 0
-AiPlayerbot.RandomBotAutoJoinBGEYCount = 1
+AiPlayerbot.RandomBotAutoJoinBGEYCount = 0
 AiPlayerbot.RandomBotAutoJoinBGAVCount = 0
-AiPlayerbot.RandomBotAutoJoinBGABCount = 1
+AiPlayerbot.RandomBotAutoJoinBGABCount = 0
 AiPlayerbot.RandomBotAutoJoinBGWSCount = 1
 
 # Arena configuration:
-AiPlayerbot.RandomBotAutoJoinArenaBracket = 14
+AiPlayerbot.RandomBotAutoJoinArenaBracket = 1
 
-AiPlayerbot.RandomBotAutoJoinBGRatedArena2v2Count = 0
+AiPlayerbot.RandomBotAutoJoinBGRatedArena2v2Count = 4
 AiPlayerbot.RandomBotAutoJoinBGRatedArena3v3Count = 0
 AiPlayerbot.RandomBotAutoJoinBGRatedArena5v5Count = 0
 
@@ -1207,14 +1236,14 @@ AiPlayerbot.RandomBotAutoJoinBGRatedArena5v5Count = 0
 # Warning: Reinitializing bots completely resets them (command in game: .playerbots rndbot init)
 # Bots only join one arena team to avoid queueing issues. Take that into account when increasing count.
 # Default: 2v2: 10 (20 Bots), 3v3: 10 (30 bots), 5v5: 5 (25 bots)
-AiPlayerbot.RandomBotArenaTeam2v2Count = 10
-AiPlayerbot.RandomBotArenaTeam3v3Count = 10
-AiPlayerbot.RandomBotArenaTeam5v5Count = 5
+AiPlayerbot.RandomBotArenaTeam2v2Count = 4
+AiPlayerbot.RandomBotArenaTeam3v3Count = 0
+AiPlayerbot.RandomBotArenaTeam5v5Count = 0
 
 # Arena rating is randomized on team creation.
 # Default: Max: 2000, Min: 1000
-AiPlayerbot.RandomBotArenaTeamMaxRating = 2000
-AiPlayerbot.RandomBotArenaTeamMinRating = 1000
+AiPlayerbot.RandomBotArenaTeamMaxRating = 1500
+AiPlayerbot.RandomBotArenaTeamMinRating = 0
 
 # Delete all randombot arena teams
 AiPlayerbot.DeleteRandomBotArenaTeams = 0
@@ -1964,7 +1993,7 @@ AiPlayerbot.CommandServerPort = 8888
 #
 
 AiPlayerbot.SpellDump = 0
-AiPlayerbot.LogInGroupOnly = 1
+AiPlayerbot.LogInGroupOnly = 0
 AiPlayerbot.LogValuesPerTick = 0
 AiPlayerbot.RandomChangeMultiplier = 1
 
@@ -1996,7 +2025,7 @@ AiPlayerbot.RandomBotTalk = 1
 # Enable bots emoting
 AiPlayerbot.RandomBotEmote = 0
 # Enable randombots suggesting dungeons in chat
-AiPlayerbot.RandomBotSuggestDungeons = 1
+AiPlayerbot.RandomBotSuggestDungeons = 0
 # Bots greet players when invited
 AiPlayerbot.EnableGreet = 0
 # Chance to reply to toxic links with toxic links (0-100)
@@ -2176,7 +2205,7 @@ AiPlayerbot.GuildTaskKillTaskDistance = 200
 AiPlayerbot.TargetPosRecalcDistance = 0.1
 
 # Allow bots to be summoned near innkeepers
-AiPlayerbot.SummonAtInnkeepersEnabled = 1
+AiPlayerbot.SummonAtInnkeepersEnabled = 0
 
 # Enable buffs in ICC to make Heroic easier and more casual.
 # 30% more damage, 40% damage reduction (tank bots), increased all resistances, reduced threat for non tank bots, increased threat for tank bots.
