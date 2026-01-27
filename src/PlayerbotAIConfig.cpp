@@ -16,6 +16,7 @@
 #include "RandomPlayerbotMgr.h"
 #include "Talentspec.h"
 
+
 template <class T>
 void LoadList(std::string const value, T& list)
 {

@@ -6,7 +6,7 @@
 #include "RandomPlayerbotMgr.h"
 
 #include <WorldSessionMgr.h>
-
+#include "ObjectAccessor.h"
 #include <algorithm>
 #include <thread>
 #include <shared_mutex>
@@ -15,6 +15,7 @@
 #include <ctime>
 #include <iomanip>
 #include <random>
+#include <shared_mutex>
 
 #include "AccountMgr.h"
 #include "AiFactory.h"
@@ -247,6 +248,45 @@ RandomPlayerbotMgr::RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
 }
 
 RandomPlayerbotMgr::~RandomPlayerbotMgr() {}
+
+uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
+{
+    uint32 count = 0;
+
+    for (auto const& sessionPair : sWorldSessionMgr->GetAllSessions())
+    {
+        WorldSession* session = sessionPair.second;
+        if (!session)
+            continue;
+
+        Player* player = session->GetPlayer();
+        if (!player || !player->IsInWorld())
+            continue;
+
+        // Exclude all bot accounts
+        if (IsRandomBot(player) || IsAddclassBot(player))
+            continue;
+
+        ++count;
+    }
+
+    return count;
+}
+
+void RandomPlayerbotMgr::SaveBotsPerPlayerToDB(float ratio) const
+{
+    PlayerbotsDatabase.Execute(
+        "UPDATE playerbots_server_settings SET bots_per_player = {} WHERE id = 1",
+        ratio);
+}
+
+void RandomPlayerbotMgr::ForceBotCountRecheck()
+{
+    // Forces population logic to reevaluate immediately
+    DelayLoginBotsTimer = 0;
+    PlayersCheckTimer = 0;
+}
+
 
 uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
 {
