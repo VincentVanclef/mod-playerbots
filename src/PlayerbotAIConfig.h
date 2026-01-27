@@ -25,8 +25,6 @@ enum class BotCheatMask : uint32
     raid = 32,
     food = 64,
     maxMask = 128
-    bool debugRatioScaling;
-    bool debugCommunityLevelCap;
 };
 
 enum class HealingManaEfficiency : uint8
@@ -37,8 +35,6 @@ enum class HealingManaEfficiency : uint8
     HIGH = 8,
     VERY_HIGH = 16,
     SUPERIOR = 32
-    bool debugRatioScaling;
-    bool debugCommunityLevelCap;
 };
 
 enum NewRpgStatus : int
@@ -59,8 +55,6 @@ enum NewRpgStatus : int
     // Initial status
     RPG_IDLE = 7,
     RPG_STATUS_END = 8
-    bool debugRatioScaling;
-    bool debugCommunityLevelCap;
 };
 
 #define MAX_SPECNO 20
@@ -68,9 +62,7 @@ enum NewRpgStatus : int
 class PlayerbotAIConfig
 {
 public:
-    PlayerbotAIConfig(){    bool debugRatioScaling;
-    bool debugCommunityLevelCap;
-};
+    PlayerbotAIConfig(){};
     static PlayerbotAIConfig* instance()
     {
         static PlayerbotAIConfig instance;
@@ -134,6 +126,7 @@ public:
     float randomBotMinLevelChance, randomBotMaxLevelChance;
     float randomBotRpgChance;
     uint32 minRandomBots, maxRandomBots;
+
     bool communityLevelCapEnabled;
     uint32 communityLevelCapTopN;
     int32 communityLevelCapBuffer;
