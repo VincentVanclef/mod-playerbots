@@ -264,8 +264,9 @@ uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
             continue;
 
         // Exclude all bot accounts
-        if (IsRandomBot(player) || IsAddclassBot(player))
-            continue;
+        if (sRandomPlayerbotMgr->IsRandomBot(player) || sRandomPlayerbotMgr->IsAddclassBot(player))
+		continue;
+
 
         ++count;
     }
