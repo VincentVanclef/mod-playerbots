@@ -281,6 +281,26 @@ void RandomPlayerbotMgr::SaveBotsPerPlayerToDB(float ratio) const
         ratio);
 }
 
+float RandomPlayerbotMgr::LoadBotsPerPlayerFromDB() const
+{
+    QueryResult result = PlayerbotsDatabase.Query(
+        "SELECT bots_per_player FROM playerbots_server_settings WHERE id = 1");
+
+    if (!result)
+        return 0.0f; // default: no scaling
+
+    Field* fields = result->Fetch();
+    float ratio = fields[0].Get<float>();
+
+    // Hard safety clamp (policy-level, not gameplay-level)
+    if (ratio < 0.0f)
+        ratio = 0.0f;
+    if (ratio > 10.0f)
+        ratio = 10.0f;
+
+    return ratio;
+}
+
 void RandomPlayerbotMgr::ForceBotCountRecheck()
 {
     // Forces population logic to reevaluate immediately
