@@ -281,7 +281,7 @@ void RandomPlayerbotMgr::SaveBotsPerPlayerToDB(float ratio) const
         ratio);
 }
 
-float RandomPlayerbotMgr::LoadBotsPerPlayerFromDB() const
+float RandomPlayerbotMgr::LoadSavedBotsPerPlayerFromDB() const
 {
     QueryResult result = PlayerbotsDatabase.Query(
         "SELECT bots_per_player FROM playerbots_server_settings WHERE id = 1");
