@@ -303,11 +303,13 @@ float RandomPlayerbotMgr::LoadSavedBotsPerPlayerFromDB() const
 
 void RandomPlayerbotMgr::ForceBotCountRecheck()
 {
-    // Forces population logic to reevaluate immediately
+    // These timers gate population changes
     DelayLoginBotsTimer = 0;
     PlayersCheckTimer = 0;
-}
 
+    // Optional but recommended: invalidate cached target
+    SetEventValue(0, "bot_count", 0, 1);
+}
 
 uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
 {
@@ -3096,13 +3098,16 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
             return false;
         }
 
-        sRandomPlayerbotMgr->SaveBotsPerPlayerToDB(ratio);
+        sRandomPlayerbotMgr->SaveBotsPerPlayerToDB(newRatio);
         sPlayerbotAIConfig->botsPerPlayer = ratio;
         sRandomPlayerbotMgr->ForceBotCountRecheck();
+		sRandomPlayerbotMgr->UpdateAIInternal(0, false);
 
-        handler->PSendSysMessage("Randombot ratio set to {} (stored in DB). Ratio mode is currently {}.",
-            ratio,
-            sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED");
+        handler->PSendSysMessage("Randombot ratio set to {}. Population recalculation triggered.",
+            ratio;
+			
+		LOG_INFO("playerbots",
+		"[RatioCmd] botsPerPlayer={} – forced population recheck", newRatio);	
         return true;
     }
 
