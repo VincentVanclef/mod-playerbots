@@ -511,14 +511,44 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     }*/
 
     uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
-    if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig->minRandomBots ||
-                                maxAllowedBotCount > sPlayerbotAIConfig->maxRandomBots))
-    {
-        maxAllowedBotCount = urand(sPlayerbotAIConfig->minRandomBots, sPlayerbotAIConfig->maxRandomBots);
-        SetEventValue(0, "bot_count", maxAllowedBotCount,
-                      urand(sPlayerbotAIConfig->randomBotCountChangeMinInterval,
-                            sPlayerbotAIConfig->randomBotCountChangeMaxInterval));
-    }
+	
+	uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
+
+	// If ratio scaling is enabled, override target bot count dynamically
+	if (sPlayerbotAIConfig->usePlayerCountRatio)
+	{
+		uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
+		float botsPerPlayer = LoadBotsPerPlayerFromDB(); // your DB getter (or cached value)
+
+		uint32 desired = uint32(std::ceil(realPlayers * botsPerPlayer));
+		desired = std::max<uint32>(desired, sPlayerbotAIConfig->minRandomBots);
+		desired = std::min<uint32>(desired, sPlayerbotAIConfig->maxRandomBots);
+
+		maxAllowedBotCount = desired;
+
+		// Optional: store into event cache so .playerbots rndbot stats can show it
+		// Keep TTL short so it tracks changes
+		SetEventValue(0, "bot_count", maxAllowedBotCount, 30);
+
+		if (sPlayerbotAIConfig->debugRatioScaling)
+		{
+			LOG_INFO("playerbots",
+				"[RatioScaling] realPlayers={} botsPerPlayer={} desired={} target={}",
+				realPlayers, botsPerPlayer, desired, maxAllowedBotCount);
+		}
+	}
+	else
+	{
+		// Stock behavior: randomize target bot_count over time if invalid/out of range
+		if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig->minRandomBots ||
+									maxAllowedBotCount > sPlayerbotAIConfig->maxRandomBots))
+		{
+			maxAllowedBotCount = urand(sPlayerbotAIConfig->minRandomBots, sPlayerbotAIConfig->maxRandomBots);
+			SetEventValue(0, "bot_count", maxAllowedBotCount,
+						urand(sPlayerbotAIConfig->randomBotCountChangeMinInterval,
+								sPlayerbotAIConfig->randomBotCountChangeMaxInterval));
+		}
+	}
 
     GetBots();
     std::list<uint32> availableBots = currentBots;
@@ -3020,7 +3050,7 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
         if (arg.empty() || arg == "show")
         {
             handler->PSendSysMessage(
-                "Ratio mode: %s | botsPerPlayer (cached) = %.2f | min=%u max=%u",
+                "Ratio mode: {} | botsPerPlayer (cached) = {} | min={} max={}",
                 sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED",
                 sPlayerbotAIConfig->botsPerPlayer,
                 sPlayerbotAIConfig->minRandomBots,
@@ -3036,7 +3066,7 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
         }
         catch (...)
         {
-            handler->PSendSysMessage("Invalid ratio '%s'. Usage: .playerbots rndbot ratio <value>", arg.c_str());
+            handler->PSendSysMessage("Invalid ratio '{}'. Usage: .playerbots rndbot ratio <value>", arg.c_str());
             return false;
         }
 
@@ -3050,7 +3080,7 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
         sPlayerbotAIConfig->botsPerPlayer = ratio;
         sRandomPlayerbotMgr->ForceBotCountRecheck();
 
-        handler->PSendSysMessage("Randombot ratio set to %.2f (stored in DB). Ratio mode is currently %s.",
+        handler->PSendSysMessage("Randombot ratio set to {} (stored in DB). Ratio mode is currently {}.",
             ratio,
             sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED");
         return true;
