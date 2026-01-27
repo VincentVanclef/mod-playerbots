@@ -531,14 +531,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     }*/
 
     uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
-	
-	uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
 
 	// If ratio scaling is enabled, override target bot count dynamically
 	if (sPlayerbotAIConfig->usePlayerCountRatio)
 	{
 		uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
-		float botsPerPlayer = LoadBotsPerPlayerFromDB(); // your DB getter (or cached value)
+		float botsPerPlayer = LoadSavedBotsPerPlayerFromDB(); // your DB getter (or cached value)
 
 		uint32 desired = uint32(std::ceil(realPlayers * botsPerPlayer));
 		desired = std::max<uint32>(desired, sPlayerbotAIConfig->minRandomBots);
@@ -560,6 +558,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 	else
 	{
 		// Stock behavior: randomize target bot_count over time if invalid/out of range
+		maxAllowedBotCount = GetEventValue(0, "bot_count");
+		
 		if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig->minRandomBots ||
 									maxAllowedBotCount > sPlayerbotAIConfig->maxRandomBots))
 		{
