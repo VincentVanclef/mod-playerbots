@@ -437,8 +437,6 @@ public:
     bool hasLog(std::string const fileName)
     {
         return std::find(allowedLogFiles.begin(), allowedLogFiles.end(), fileName) != allowedLogFiles.end();
-        bool debugRatioScaling;
-    bool debugCommunityLevelCap;
 };
     bool openLog(std::string const fileName, char const* mode = "a");
     bool isLogOpen(std::string const fileName)
@@ -458,8 +456,14 @@ public:
     bool IsRestrictedHealerDPSMap(uint32 mapId) const;
 
     std::vector<uint32> excludedHunterPetFamilies;
-    bool debugRatioScaling;
-    bool debugCommunityLevelCap;
+// --- Random bot population scaling (ratio-based) ---
+	bool usePlayerCountRatio;   // config toggle
+	float botsPerPlayer;        // cached DB value (loaded by RandomPlayerbotMgr)
+
+// Debug toggles
+	bool debugRatioScaling;
+	bool debugCommunityLevelCap;
+
 };
 
 #define sPlayerbotAIConfig PlayerbotAIConfig::instance()
