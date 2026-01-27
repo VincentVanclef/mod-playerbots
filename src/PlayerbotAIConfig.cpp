@@ -7,7 +7,7 @@
 #include <iostream>
 #include "Config.h"
 #include "NewRpgInfo.h"
-#include "PlayerbotDungeonSuggestionMgr.h"
+#include "PlayerbotDungeonRepository.h"
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
 #include "PlayerbotGuildMgr.h"
@@ -15,61 +15,6 @@
 #include "RandomPlayerbotFactory.h"
 #include "RandomPlayerbotMgr.h"
 #include "Talentspec.h"
-
-#include <algorithm>
-#include <cctype>
-
-namespace
-{
-    static bool ParsePlayerCountRatio(std::string ratioStr, float& outBotsPerPlayer)
-    {
-        // trim
-        ratioStr.erase(ratioStr.begin(),
-                       std::find_if(ratioStr.begin(), ratioStr.end(), [](unsigned char ch) { return !std::isspace(ch); }));
-        ratioStr.erase(
-            std::find_if(ratioStr.rbegin(), ratioStr.rend(), [](unsigned char ch) { return !std::isspace(ch); }).base(),
-            ratioStr.end());
-
-        if (ratioStr.empty())
-            return false;
-
-        // Shorthand: "2" => 2.0 bots per 1 player
-        if (ratioStr.find(':') == std::string::npos)
-        {
-            try
-            {
-                float v = std::stof(ratioStr);
-                if (v < 0.0f)
-                    return false;
-                outBotsPerPlayer = v;
-                return true;
-            }
-            catch (...)
-            {
-                return false;
-            }
-        }
-
-        // "A:B" => A/B
-        size_t colon = ratioStr.find(':');
-        std::string left = ratioStr.substr(0, colon);
-        std::string right = ratioStr.substr(colon + 1);
-
-        try
-        {
-            float a = std::stof(left);
-            float b = std::stof(right);
-            if (a < 0.0f || b <= 0.0f)
-                return false;
-            outBotsPerPlayer = a / b;
-            return true;
-        }
-        catch (...)
-        {
-            return false;
-        }
-    }
-}
 
 template <class T>
 void LoadList(std::string const value, T& list)
@@ -238,19 +183,6 @@ bool PlayerbotAIConfig::Initialize()
     randomBotAutologin = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotAutologin", true);
     minRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MinRandomBots", 500);
     maxRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBots", 500);
-
-    // Community-level pacing cap (optional)
-    communityLevelCapEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.CommunityLevelCap.Enable", false);
-    communityLevelCapTopN = sConfigMgr->GetOption<uint32>("AiPlayerbot.CommunityLevelCap.TopN", 20);
-    communityLevelCapBuffer = sConfigMgr->GetOption<int32>("AiPlayerbot.CommunityLevelCap.Buffer", 0);
-    communityLevelCapCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.CommunityLevelCap.CacheSeconds", 60);
-
-    // Dynamic target bot count derived from online real players.
-    // When enabled, MinRandomBots/MaxRandomBots still act as hard clamps.
-    // The actual ratio value is loaded from the playerbots DB (see RandomPlayerbotMgr).
-    usePlayerCountRatio = sConfigMgr->GetOption<bool>("AiPlayerbot.UsePlayerCountRatio", false);
-    botsPerPlayer = 0.0f;
-
     randomBotUpdateInterval = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotUpdateInterval", 20);
     randomBotCountChangeMinInterval =
         sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotCountChangeMinInterval", 30 * MINUTE);
@@ -746,7 +678,7 @@ bool PlayerbotAIConfig::Initialize()
 
     if (sPlayerbotAIConfig->randomBotSuggestDungeons)
     {
-        sPlayerbotDungeonSuggestionMgr->LoadDungeonSuggestions();
+        sPlayerbotDungeonRepository->LoadDungeonSuggestions();
     }
 
     excludedHunterPetFamilies.clear();
