@@ -3061,55 +3061,68 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
     std::string const cmd = args;
 
     // Ratio tuning: .playerbots rndbot ratio [show|<value>]
-    if (cmd.rfind("ratio", 0) == 0) // starts with "ratio"
+if (cmd.rfind("ratio", 0) == 0) // starts with "ratio"
+{
+    std::string arg;
+
+    // Extract argument if present: "ratio <value>"
+    if (cmd.size() > 6)
+        arg = cmd.substr(6);
+
+    if (arg.empty() || arg == "show")
     {
-        std::string arg;
+        handler->PSendSysMessage(
+            "Ratio mode: {} | botsPerPlayer (cached) = {} | min={} max={}",
+            sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED",
+            sPlayerbotAIConfig->botsPerPlayer,
+            sPlayerbotAIConfig->minRandomBots,
+            sPlayerbotAIConfig->maxRandomBots);
 
-        // Extract argument if present: "ratio <value>"
-        if (cmd.size() > 6)
-            arg = cmd.substr(6);
-
-        if (arg.empty() || arg == "show")
-        {
-            handler->PSendSysMessage(
-                "Ratio mode: {} | botsPerPlayer (cached) = {} | min={} max={}",
-                sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED",
-                sPlayerbotAIConfig->botsPerPlayer,
-                sPlayerbotAIConfig->minRandomBots,
-                sPlayerbotAIConfig->maxRandomBots);
-            handler->PSendSysMessage("Usage: .playerbots rndbot ratio <value>  (example: 1.5)");
-            return true;
-        }
-
-        float ratio = 0.0f;
-        try
-        {
-            ratio = std::stof(arg);
-        }
-        catch (...)
-        {
-            handler->PSendSysMessage("Invalid ratio '{}'. Usage: .playerbots rndbot ratio <value>", arg.c_str());
-            return false;
-        }
-
-        if (ratio <= 0.0f)
-        {
-            handler->PSendSysMessage("Ratio must be > 0. Usage: .playerbots rndbot ratio <value>");
-            return false;
-        }
-
-        sRandomPlayerbotMgr->SaveBotsPerPlayerToDB(newRatio);
-        sPlayerbotAIConfig->botsPerPlayer = ratio;
-        sRandomPlayerbotMgr->ForceBotCountRecheck();
-		sRandomPlayerbotMgr->UpdateAIInternal(0, false);
-
-        handler->PSendSysMessage("Randombot ratio set to {}. Population recalculation triggered.",
-            ratio;
-			
-		LOG_INFO("playerbots",
-		"[RatioCmd] botsPerPlayer={} – forced population recheck", newRatio);	
+        handler->PSendSysMessage(
+            "Usage: .playerbots rndbot ratio <value>  (example: 1.5)");
         return true;
     }
+
+    float ratio = 0.0f;
+    try
+    {
+        ratio = std::stof(arg);
+    }
+    catch (...)
+    {
+        handler->PSendSysMessage(
+            "Invalid ratio '{}'. Usage: .playerbots rndbot ratio <value>", arg);
+        return false;
+    }
+
+    if (ratio <= 0.0f)
+    {
+        handler->PSendSysMessage(
+            "Ratio must be > 0. Usage: .playerbots rndbot ratio <value>");
+        return false;
+    }
+
+    // 1) Save to DB
+    sRandomPlayerbotMgr->SaveBotsPerPlayerToDB(ratio);
+
+    // 2) Update cached value (used by UpdateAIInternal)
+    sPlayerbotAIConfig->botsPerPlayer = ratio;
+
+    // 3) Force grow/shrink recalculation
+    sRandomPlayerbotMgr->ForceBotCountRecheck();
+
+    // 4) Optional immediate tick (safe, but not strictly required)
+    sRandomPlayerbotMgr->UpdateAIInternal(0, false);
+
+    handler->PSendSysMessage(
+        "Randombot ratio set to {}. Population recalculation triggered.", ratio);
+
+    LOG_INFO("playerbots",
+        "[RatioCmd] botsPerPlayer={} – forced population recheck", ratio);
+
+    return true;
+}
+
 
     if (cmd == "reset")
     {
