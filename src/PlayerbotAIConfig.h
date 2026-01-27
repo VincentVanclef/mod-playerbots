@@ -25,6 +25,8 @@ enum class BotCheatMask : uint32
     raid = 32,
     food = 64,
     maxMask = 128
+    bool debugRatioScaling;
+    bool debugCommunityLevelCap;
 };
 
 enum class HealingManaEfficiency : uint8
@@ -35,6 +37,8 @@ enum class HealingManaEfficiency : uint8
     HIGH = 8,
     VERY_HIGH = 16,
     SUPERIOR = 32
+    bool debugRatioScaling;
+    bool debugCommunityLevelCap;
 };
 
 enum NewRpgStatus : int
@@ -55,6 +59,8 @@ enum NewRpgStatus : int
     // Initial status
     RPG_IDLE = 7,
     RPG_STATUS_END = 8
+    bool debugRatioScaling;
+    bool debugCommunityLevelCap;
 };
 
 #define MAX_SPECNO 20
@@ -62,7 +68,9 @@ enum NewRpgStatus : int
 class PlayerbotAIConfig
 {
 public:
-    PlayerbotAIConfig(){};
+    PlayerbotAIConfig(){    bool debugRatioScaling;
+    bool debugCommunityLevelCap;
+};
     static PlayerbotAIConfig* instance()
     {
         static PlayerbotAIConfig instance;
@@ -126,6 +134,10 @@ public:
     float randomBotMinLevelChance, randomBotMaxLevelChance;
     float randomBotRpgChance;
     uint32 minRandomBots, maxRandomBots;
+    bool communityLevelCapEnabled;
+    uint32 communityLevelCapTopN;
+    int32 communityLevelCapBuffer;
+    uint32 communityLevelCapCacheSeconds;
     uint32 randomBotUpdateInterval, randomBotCountChangeMinInterval, randomBotCountChangeMaxInterval;
     uint32 minRandomBotInWorldTime, maxRandomBotInWorldTime;
     uint32 minRandomBotRandomizeTime, maxRandomBotRandomizeTime;
@@ -313,7 +325,9 @@ public:
         uint32 specId;
         uint32 minLevel;
         uint32 maxLevel;
-    };
+        bool debugRatioScaling;
+    bool debugCommunityLevelCap;
+};
 
     std::vector<worldBuff> worldBuffs;
 
@@ -430,7 +444,9 @@ public:
     bool hasLog(std::string const fileName)
     {
         return std::find(allowedLogFiles.begin(), allowedLogFiles.end(), fileName) != allowedLogFiles.end();
-    };
+        bool debugRatioScaling;
+    bool debugCommunityLevelCap;
+};
     bool openLog(std::string const fileName, char const* mode = "a");
     bool isLogOpen(std::string const fileName)
     {
@@ -449,6 +465,8 @@ public:
     bool IsRestrictedHealerDPSMap(uint32 mapId) const;
 
     std::vector<uint32> excludedHunterPetFamilies;
+    bool debugRatioScaling;
+    bool debugCommunityLevelCap;
 };
 
 #define sPlayerbotAIConfig PlayerbotAIConfig::instance()

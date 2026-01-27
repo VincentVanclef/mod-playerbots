@@ -9,7 +9,9 @@
 
 #include <algorithm>
 #include <thread>
+#include <shared_mutex>
 #include <cstdlib>
+#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <random>
@@ -36,6 +38,7 @@
 #include "NewRpgInfo.h"
 #include "NewRpgStrategy.h"
 #include "ObjectGuid.h"
+#include "ObjectAccessor.h"
 #include "PerfMonitor.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
@@ -245,7 +248,100 @@ RandomPlayerbotMgr::RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
 
 RandomPlayerbotMgr::~RandomPlayerbotMgr() {}
 
-uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount() { return GetEventValue(0, "bot_count"); }
+uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
+{
+    if (sPlayerbotAIConfig->usePlayerCountRatio && sPlayerbotAIConfig->botsPerPlayer > 0.0f)
+    {
+        uint32 realPlayers = GetOnlineRealPlayerCount();
+        uint32 target = static_cast<uint32>(std::ceil(
+            static_cast<double>(realPlayers) * static_cast<double>(sPlayerbotAIConfig->botsPerPlayer)));
+
+        if (target < sPlayerbotAIConfig->minRandomBots) target = sPlayerbotAIConfig->minRandomBots;
+        if (target > sPlayerbotAIConfig->maxRandomBots) target = sPlayerbotAIConfig->maxRandomBots;
+
+        if (sPlayerbotAIConfig->debugRatioScaling)
+        {
+            LOG_DEBUG("playerbots", "[Ratio] realPlayers={} botsPerPlayer={} => target={} (clamped {}–{})",
+                realPlayers,
+                sPlayerbotAIConfig->botsPerPlayer,
+                target,
+                sPlayerbotAIConfig->minRandomBots,
+                sPlayerbotAIConfig->maxRandomBots);
+        }
+
+        return target;
+    }
+
+    return GetEventValue(0, "bot_count");
+}
+uint32 RandomPlayerbotMgr::GetCommunityLevelCap()
+{
+    if (!sPlayerbotAIConfig->communityLevelCapEnabled)
+        return 0;
+
+    uint32 cacheSeconds = sPlayerbotAIConfig->communityLevelCapCacheSeconds ? sPlayerbotAIConfig->communityLevelCapCacheSeconds : 60;
+    time_t now = time(nullptr);
+
+    if (communityLevelCapCachedAt && (now - communityLevelCapCachedAt) < static_cast<time_t>(cacheSeconds))
+        return communityLevelCapCachedValue;
+
+    std::vector<uint32> levels;
+    levels.reserve(64);
+
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    HashMapHolder<Player>::MapType const& m = ObjectAccessor::GetPlayers();
+
+    for (auto const& it : m)
+    {
+        Player* p = it.second;
+        if (!p || !p->IsInWorld())
+            continue;
+
+        // Exclude bots (random bots / addclass bots)
+        if (IsRandomBot(p) || IsAddclassBot(p))
+            continue;
+
+        // Exclude any AI-controlled non-real players just in case
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(p))
+        {
+            if (!ai->IsRealPlayer())
+                continue;
+        }
+
+        levels.push_back(p->GetLevel());
+    }
+
+    if (levels.empty())
+    {
+        communityLevelCapCachedAt = now;
+        communityLevelCapCachedValue = 0;
+        return 0;
+    }
+
+    std::sort(levels.begin(), levels.end(), std::greater<uint32>());
+
+    uint32 topN = sPlayerbotAIConfig->communityLevelCapTopN ? sPlayerbotAIConfig->communityLevelCapTopN : 20;
+    if (topN > levels.size())
+        topN = static_cast<uint32>(levels.size());
+
+    uint64 sum = 0;
+    for (uint32 i = 0; i < topN; ++i)
+        sum += levels[i];
+
+    double avg = static_cast<double>(sum) / static_cast<double>(topN);
+    int32 cap = static_cast<int32>(std::llround(avg)) + sPlayerbotAIConfig->communityLevelCapBuffer;
+
+    int32 minLvl = std::max<int32>(sWorld->getIntConfig(CONFIG_START_PLAYER_LEVEL), sPlayerbotAIConfig->randomBotMinLevel);
+    int32 maxLvl = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+
+    if (cap < minLvl) cap = minLvl;
+    if (cap > maxLvl) cap = maxLvl;
+
+    communityLevelCapCachedAt = now;
+    communityLevelCapCachedValue = static_cast<uint32>(cap);
+    return communityLevelCapCachedValue;
+}
+
 
 void RandomPlayerbotMgr::LogPlayerLocation()
 {
@@ -373,7 +469,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         ScaleBotActivity();
     }*/
 
-    uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
+    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
     if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig->minRandomBots ||
                                 maxAllowedBotCount > sPlayerbotAIConfig->maxRandomBots))
     {
@@ -712,7 +808,7 @@ bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
 // Phase 4 is reached if and only if the value of RandomBotAccountCount is lower than it should.
 uint32 RandomPlayerbotMgr::AddRandomBots()
 {
-    uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
+    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
     static time_t missingBotsTimer = 0;
 
     if (currentBots.size() < maxAllowedBotCount)
@@ -2400,6 +2496,12 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
         minLevel = std::max(minLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
     }
 
+    if (uint32 cap = GetCommunityLevelCap())
+        maxLevel = std::min(maxLevel, cap);
+
+    if (maxLevel < minLevel)
+        maxLevel = minLevel;
+
     PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomizeFirst");
 
     uint32 level;
@@ -2675,7 +2777,7 @@ void RandomPlayerbotMgr::GetBots()
         PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_SEL_RANDOM_BOTS_BY_OWNER_AND_EVENT);
     stmt->SetData(0, 0);
     stmt->SetData(1, "add");
-    uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
+    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
     if (PreparedQueryResult result = PlayerbotsDatabase.Query(stmt))
     {
         do
@@ -2864,6 +2966,54 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
     }
 
     std::string const cmd = args;
+
+    // Ratio tuning: .playerbots rndbot ratio [show|<value>]
+    if (cmd.rfind("ratio", 0) == 0) // starts with "ratio"
+    {
+        std::string arg;
+
+        // Extract argument if present: "ratio <value>"
+        if (cmd.size() > 6)
+            arg = cmd.substr(6);
+
+        if (arg.empty() || arg == "show")
+        {
+            handler->PSendSysMessage(
+                "Ratio mode: %s | botsPerPlayer (cached) = %.2f | min=%u max=%u",
+                sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED",
+                sPlayerbotAIConfig->botsPerPlayer,
+                sPlayerbotAIConfig->minRandomBots,
+                sPlayerbotAIConfig->maxRandomBots);
+            handler->PSendSysMessage("Usage: .playerbots rndbot ratio <value>  (example: 1.5)");
+            return true;
+        }
+
+        float ratio = 0.0f;
+        try
+        {
+            ratio = std::stof(arg);
+        }
+        catch (...)
+        {
+            handler->PSendSysMessage("Invalid ratio '%s'. Usage: .playerbots rndbot ratio <value>", arg.c_str());
+            return false;
+        }
+
+        if (ratio <= 0.0f)
+        {
+            handler->PSendSysMessage("Ratio must be > 0. Usage: .playerbots rndbot ratio <value>");
+            return false;
+        }
+
+        sRandomPlayerbotMgr->SaveBotsPerPlayerToDB(ratio);
+        sPlayerbotAIConfig->botsPerPlayer = ratio;
+        sRandomPlayerbotMgr->ForceBotCountRecheck();
+
+        handler->PSendSysMessage("Randombot ratio set to %.2f (stored in DB). Ratio mode is currently %s.",
+            ratio,
+            sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED");
+        return true;
+    }
 
     if (cmd == "reset")
     {

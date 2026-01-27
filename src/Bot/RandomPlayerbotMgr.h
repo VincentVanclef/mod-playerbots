@@ -40,6 +40,10 @@ struct BattlegroundInfo
     // Players (Battleground)
     uint32 bgHordePlayerCount = 0;
     uint32 bgAlliancePlayerCount = 0;
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
+
 };
 
 class ChatHandler;
@@ -54,12 +58,20 @@ struct CachedEvent
     std::string data;
 
     bool IsEmpty() const { return !lastChangeTime; }
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
+
 };
 
 struct BotEventCache
 {
     bool loaded = false;
     std::unordered_map<std::string, CachedEvent> events;
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
+
 };
 
 // https://gist.github.com/bradley219/5373998
@@ -83,6 +95,10 @@ public:
 
 private:
     botPIDImpl* pimpl;
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
+
 };
 
 class RandomPlayerbotMgr : public PlayerbotHolder
@@ -131,6 +147,11 @@ public:
     void RandomTeleportGrindForLevel(Player* bot);
     void RandomTeleportForRpg(Player* bot);
     uint32 GetMaxAllowedBotCount();
+    uint32 GetCommunityLevelCap();
+    uint32 GetOnlineRealPlayerCount() const;
+    float LoadSavedBotsPerPlayerFromDB() const;
+    void SaveBotsPerPlayerToDB(float ratio) const;
+    void ForceBotCountRecheck();
     bool ProcessBot(Player* player);
     void Revive(Player* player);
     void ChangeStrategy(Player* player);
@@ -235,6 +256,10 @@ private:
 
     //void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
+
 };
 
 #define sRandomPlayerbotMgr RandomPlayerbotMgr::instance()
