@@ -600,6 +600,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         onlineBotCount < maxAllowedBotCount ? "RandomPlayerbotMgr::Login" : "RandomPlayerbotMgr::UpdateAIInternal");
 
     bool realPlayerIsLogged = false;
+    bool allowLoginBotsNow = true;
+
     if (sPlayerbotAIConfig->disabledWithoutRealPlayer)
     {
         if (sWorldSessionMgr->GetActiveAndQueuedSessionCount() > 0)
@@ -627,7 +629,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
         }
 
-        bool allowLoginBotsNow = (sPlayerbotAIConfig->disabledWithoutRealPlayer == false);
+        allowLoginBotsNow = (sPlayerbotAIConfig->disabledWithoutRealPlayer == false);
 
         // If bots are disabled until a real player is online, normally we wait for the configured delay.
         // However, when ratio scaling is enabled and we're under target, we bypass the delay so population can grow promptly.
