@@ -578,9 +578,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     uint32 onlineBotCount = playerBots.size();
 
     uint32 onlineBotFocus = 75;
-    if (onlineBotCount < (uint32)(sPlayerbotAIConfig->minRandomBots * 90 / 100))
+    // When we need to *grow* the bot population, prioritize logins over updates.
+    // Shrink remains slower / more conservative by keeping a higher focus on updates.
+    if (onlineBotCount < maxAllowedBotCount)
         onlineBotFocus = 25;
-
+    // If we're far below target (e.g. server start), grow even faster.
+    if (onlineBotCount + sPlayerbotAIConfig->randomBotsPerInterval < maxAllowedBotCount)
+        onlineBotFocus = 10;
     // only keep updating till initializing time has completed,
     // which prevents unneeded expensive GameTime calls.
     if (_isBotInitializing)
@@ -623,9 +627,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
         }
 
-        if (availableBotCount < maxAllowedBotCount &&
-            (sPlayerbotAIConfig->disabledWithoutRealPlayer == false ||
-             (realPlayerIsLogged && DelayLoginBotsTimer != 0 && time(nullptr) >= DelayLoginBotsTimer)))
+        bool allowLoginBotsNow = (sPlayerbotAIConfig->disabledWithoutRealPlayer == false);
+
+        // If bots are disabled until a real player is online, normally we wait for the configured delay.
+        // However, when ratio scaling is enabled and we're under target, we bypass the delay so population can grow promptly.
+        if (!allowLoginBotsNow)
+        {
+            allowLoginBotsNow = realPlayerIsLogged &&
+                (DelayLoginBotsTimer == 0 || time(nullptr) >= DelayLoginBotsTimer ||
+                 (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount < maxAllowedBotCount));
+        }
+
+        if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow)
         {
             AddRandomBots();
         }
@@ -667,10 +680,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     }
     uint32 updateBots = sPlayerbotAIConfig->randomBotsPerInterval * onlineBotFocus / 100;
     uint32 maxNewBots =
-        onlineBotCount < maxAllowedBotCount &&
-                (sPlayerbotAIConfig->disabledWithoutRealPlayer == false ||
-                 (realPlayerIsLogged && DelayLoginBotsTimer != 0 && time(nullptr) >= DelayLoginBotsTimer))
-            ? maxAllowedBotCount - onlineBotCount
+        (onlineBotCount < maxAllowedBotCount && allowLoginBotsNow)
+            ? (maxAllowedBotCount - onlineBotCount)
             : 0;
     uint32 loginBots = std::min(sPlayerbotAIConfig->randomBotsPerInterval - updateBots, maxNewBots);
 
