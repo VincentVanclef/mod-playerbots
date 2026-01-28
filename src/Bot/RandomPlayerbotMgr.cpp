@@ -791,7 +791,19 @@ for (auto const& c : candidates)
     if (loggedOut >= toLogout)
         break;
 
-	    LogoutPlayerBot(c.first);
+	    // IMPORTANT: The stock randombot system uses per-bot event values ("add")
+	    // plus the currentBots list to decide whether a bot should stay online.
+	    // If we only call LogoutPlayerBot() here, the bot may immediately be re-added
+	    // on the next tick because its "add" event is still valid and its id is still
+	    // present in currentBots.
+	    //
+	    // To ensure shrinking actually sticks, invalidate the bot's "add" event and
+	    // remove it from currentBots before logging it out.
+	    ObjectGuid botGuid = c.first;
+	    uint32 botId = botGuid.GetCounter();
+	    SetEventValue(botId, "add", 0, 0);
+	    currentBots.remove(botId);
+	    LogoutPlayerBot(botGuid);
     ++loggedOut;
 }
 	
