@@ -762,25 +762,28 @@ auto getLogoutPriority = [&](Player* bot) -> int
     return 20;
 };
 
-std::vector<std::pair<uint32, int>> candidates;
+	// Choose logout candidates by priority (lowest priority goes first).
+	uint32 toLogout = toMark;
+	uint32 loggedOut = 0;
+	std::vector<std::pair<ObjectGuid, int>> candidates;
 candidates.reserve(playerBots.size());
 
 for (auto const& kv : playerBots)
 {
-    uint32 botId = kv.first;
-    Player* bot = kv.second;
+	    ObjectGuid botGuid = kv.first;
+	    Player* bot = kv.second;
 
     if (isProtectedFromLogout(bot))
         continue;
 
-    candidates.emplace_back(botId, getLogoutPriority(bot));
+	    candidates.emplace_back(botGuid, getLogoutPriority(bot));
 }
 
 std::sort(candidates.begin(), candidates.end(), [](auto const& a, auto const& b)
 {
     if (a.second != b.second)
         return a.second < b.second;
-    return a.first < b.first;
+	    return a.first.GetCounter() < b.first.GetCounter();
 });
 
 for (auto const& c : candidates)
@@ -788,12 +791,12 @@ for (auto const& c : candidates)
     if (loggedOut >= toLogout)
         break;
 
-    LogoutPlayerBot(c.first);
+	    LogoutPlayerBot(c.first);
     ++loggedOut;
 }
-
-        if (marked > 0)
-            SetEventValue(0, "ratio_shrink_cd", 1, RATIO_SHRINK_CHECK_SECONDS);
+	
+	    if (loggedOut > 0)
+	        SetEventValue(0, "ratio_shrink_cd", 1, RATIO_SHRINK_CHECK_SECONDS);
     }
 
     // Allow faster grow when ratio scaling is enabled and we're below target.
