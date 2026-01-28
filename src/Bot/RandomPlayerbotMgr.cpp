@@ -8,6 +8,7 @@
 #include <WorldSessionMgr.h>
 #include "ObjectAccessor.h"
 #include <algorithm>
+#include <vector>
 #include <thread>
 #include <shared_mutex>
 #include <cstdlib>
@@ -602,6 +603,20 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     bool realPlayerIsLogged = false;
     bool allowLoginBotsNow = true;
 
+    // Ratio scaling uses a lightweight cooldown (event cache) so growth can react faster than shrink,
+    // without introducing new persistent state.
+    bool ratioGrowOk = true;
+    bool ratioShrinkOk = true;
+    static constexpr uint32 RATIO_GROW_CHECK_SECONDS = 5;    // re-evaluate growth quickly
+    static constexpr uint32 RATIO_SHRINK_CHECK_SECONDS = 30; // shrink more conservatively
+    static constexpr uint32 RATIO_MAX_SHRINK_PER_CHECK = 5;  // avoid mass disconnect spikes
+
+    if (sPlayerbotAIConfig->usePlayerCountRatio)
+    {
+        ratioGrowOk = (GetEventValue(0, "ratio_grow_cd") == 0);
+        ratioShrinkOk = (GetEventValue(0, "ratio_shrink_cd") == 0);
+    }
+
     if (sPlayerbotAIConfig->disabledWithoutRealPlayer)
     {
         if (sWorldSessionMgr->GetActiveAndQueuedSessionCount() > 0)
@@ -640,7 +655,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                  (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount < maxAllowedBotCount));
         }
 
-        if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow)
+        if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
         {
             AddRandomBots();
         }
@@ -680,12 +695,122 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // activatePrintStatsThread();
         }
     }
-    uint32 updateBots = sPlayerbotAIConfig->randomBotsPerInterval * onlineBotFocus / 100;
+    // Ratio-based shrink: mark a few bots for logout when we're above target.
+    // This keeps the stock "in-world time" mechanism but allows the population to converge.
+    if (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount > maxAllowedBotCount && ratioShrinkOk)
+    {
+        uint32 over = onlineBotCount - maxAllowedBotCount;
+        uint32 toMark = std::min<uint32>(over, RATIO_MAX_SHRINK_PER_CHECK);
+        uint32 marked = 0;
+
+// Build a prioritized logout list:
+//  - NEVER logout bots that are: in BG/arena, in BG queue, in dungeons/raids, or grouped with real players.
+//  - For the rest, prefer logging out "least disruptive" bots first.
+auto isGroupWithRealPlayer = [this](Player* bot) -> bool
+{
+    Group* group = bot ? bot->GetGroup() : nullptr;
+    if (!group)
+        return false;
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member)
+            continue;
+
+        // Any non-randombot member protects the whole group from shrink-logout.
+        if (!IsRandomBot(member))
+            return true;
+    }
+
+    return false;
+};
+
+auto isProtectedFromLogout = [&](Player* bot) -> bool
+{
+    if (!bot)
+        return true;
+
+    if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+        return true;
+
+    Map* map = bot->GetMap();
+    if (map && (map->IsDungeon() || map->IsRaid()))
+        return true;
+
+    if (isGroupWithRealPlayer(bot))
+        return true;
+
+    return false;
+};
+
+auto getLogoutPriority = [&](Player* bot) -> int
+{
+    // Lower number = logout sooner.
+    if (!bot || !bot->IsInWorld())
+        return 0;
+
+    if (bot->IsBeingTeleported() || bot->IsInFlight())
+        return 10;
+
+    if (bot->IsInCombat())
+        return 80;
+
+    if (bot->GetGroup())
+        return 60;
+
+    return 20;
+};
+
+std::vector<std::pair<uint32, int>> candidates;
+candidates.reserve(playerBots.size());
+
+for (auto const& kv : playerBots)
+{
+    uint32 botId = kv.first;
+    Player* bot = kv.second;
+
+    if (isProtectedFromLogout(bot))
+        continue;
+
+    candidates.emplace_back(botId, getLogoutPriority(bot));
+}
+
+std::sort(candidates.begin(), candidates.end(), [](auto const& a, auto const& b)
+{
+    if (a.second != b.second)
+        return a.second < b.second;
+    return a.first < b.first;
+});
+
+for (auto const& c : candidates)
+{
+    if (loggedOut >= toLogout)
+        break;
+
+    LogoutPlayerBot(c.first);
+    ++loggedOut;
+}
+
+        if (marked > 0)
+            SetEventValue(0, "ratio_shrink_cd", 1, RATIO_SHRINK_CHECK_SECONDS);
+    }
+
+    // Allow faster grow when ratio scaling is enabled and we're below target.
+    uint32 intervalCap = sPlayerbotAIConfig->randomBotsPerInterval;
+    if (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount < maxAllowedBotCount)
+        intervalCap *= (onlineBotCount == 0 ? 5 : 2);
+
+    uint32 updateBots = intervalCap * onlineBotFocus / 100;
     uint32 maxNewBots =
-        (onlineBotCount < maxAllowedBotCount && allowLoginBotsNow)
-            ? (maxAllowedBotCount - onlineBotCount)
+        (onlineBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
+            ? std::min<uint32>(maxAllowedBotCount - onlineBotCount, intervalCap)
             : 0;
-    uint32 loginBots = std::min(sPlayerbotAIConfig->randomBotsPerInterval - updateBots, maxNewBots);
+    uint32 loginBots = std::min(intervalCap > updateBots ? intervalCap - updateBots : 0u, maxNewBots);
+
+    // Rate-limit target growth checks (shrink is already rate-limited above).
+    if (sPlayerbotAIConfig->usePlayerCountRatio && maxNewBots > 0)
+        SetEventValue(0, "ratio_grow_cd", 1, RATIO_GROW_CHECK_SECONDS);
 
     if (!availableBots.empty())
     {
