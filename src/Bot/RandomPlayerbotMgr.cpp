@@ -321,8 +321,7 @@ uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
     // ---------------------------------------------------------
     if (sPlayerbotAIConfig->usePlayerCountRatio)
     {
-        // Cache ratio reads so we don't hammer DB each tick.
-        // (Keep this local-static so it doesn't require header changes.)
+        // Cache DB reads so we don't hammer the DB
         static time_t s_lastRatioRead = 0;
         static float  s_cachedRatio   = 0.0f;
 
@@ -333,16 +332,24 @@ uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
         {
             s_cachedRatio = LoadSavedBotsPerPlayerFromDB();
             s_lastRatioRead = now;
+
+            // Optional: mirror into config for visibility / consistency
+            sPlayerbotAIConfig->botsPerPlayer = s_cachedRatio;
         }
 
-        uint32 realPlayers = GetOnlineRealPlayerCount();
-        uint32 target = static_cast<uint32>(std::ceil(static_cast<double>(realPlayers) *
-                                                     static_cast<double>(std::max(0.0f, s_cachedRatio))));
+        uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
 
-        target = std::max<uint32>(target, sPlayerbotAIConfig->minRandomBots);
-        target = std::min<uint32>(target, sPlayerbotAIConfig->maxRandomBots);
+        double ratio = static_cast<double>(s_cachedRatio);
+        if (ratio < 0.0)
+            ratio = 0.0;
 
-        // Keep an event value for visibility/debug (short TTL is fine).
+        uint32 target = static_cast<uint32>(std::ceil(static_cast<double>(realPlayers) * ratio));
+
+        // Clamp to configured hard bounds
+        if (target < sPlayerbotAIConfig->minRandomBots) target = sPlayerbotAIConfig->minRandomBots;
+        if (target > sPlayerbotAIConfig->maxRandomBots) target = sPlayerbotAIConfig->maxRandomBots;
+
+        // Keep an event value for visibility/consistency (short TTL)
         SetEventValue(0, "bot_count", target, 30);
 
         return target;
