@@ -6,7 +6,7 @@
 #include "RandomPlayerbotMgr.h"
 
 #include <WorldSessionMgr.h>
-#include "ObjectAccessor.h"
+#include "unordered_set"
 #include <algorithm>
 #include <vector>
 #include <thread>
@@ -16,7 +16,9 @@
 #include <ctime>
 #include <iomanip>
 #include <random>
-#include <shared_mutex>
+#include <unordered_map>
+#include <chrono>
+#include <sstream>
 
 #include "AccountMgr.h"
 #include "AiFactory.h"
@@ -314,31 +316,69 @@ void RandomPlayerbotMgr::ForceBotCountRecheck()
 
 uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
 {
-    if (sPlayerbotAIConfig->usePlayerCountRatio && sPlayerbotAIConfig->botsPerPlayer > 0.0f)
+    // ---------------------------------------------------------
+    // 1) Ratio-driven target (DB-driven ratio value)
+    // ---------------------------------------------------------
+    if (sPlayerbotAIConfig->usePlayerCountRatio)
     {
-        uint32 realPlayers = GetOnlineRealPlayerCount();
-        uint32 target = static_cast<uint32>(std::ceil(
-            static_cast<double>(realPlayers) * static_cast<double>(sPlayerbotAIConfig->botsPerPlayer)));
+        // Cache ratio reads so we don't hammer DB each tick.
+        // (Keep this local-static so it doesn't require header changes.)
+        static time_t s_lastRatioRead = 0;
+        static float  s_cachedRatio   = 0.0f;
 
-        if (target < sPlayerbotAIConfig->minRandomBots) target = sPlayerbotAIConfig->minRandomBots;
-        if (target > sPlayerbotAIConfig->maxRandomBots) target = sPlayerbotAIConfig->maxRandomBots;
+        time_t now = time(nullptr);
+        constexpr uint32 RATIO_DB_CACHE_SECONDS = 10;
+
+        if (!s_lastRatioRead || (now - s_lastRatioRead) >= RATIO_DB_CACHE_SECONDS)
+        {
+            s_cachedRatio = LoadSavedBotsPerPlayerFromDB();
+            s_lastRatioRead = now;
+
+            // Optional: mirror into config so debug output / .conf expectations match
+            sPlayerbotAIConfig->botsPerPlayer = s_cachedRatio;
+        }
+
+        uint32 realPlayers = GetOnlineRealPlayerCount();
+        uint32 target = static_cast<uint32>(std::ceil(static_cast<double>(realPlayers) *
+                                                     static_cast<double>(std::max(0.0f, s_cachedRatio))));
+
+        target = std::max<uint32>(target, sPlayerbotAIConfig->minRandomBots);
+        target = std::min<uint32>(target, sPlayerbotAIConfig->maxRandomBots);
+
+        // Keep an event value for visibility/debug (short TTL is fine).
+        SetEventValue(0, "bot_count", target, 30);
 
         if (sPlayerbotAIConfig->debugRatioScaling)
         {
-            LOG_DEBUG("playerbots", "[Ratio] realPlayers={} botsPerPlayer={} => target={} (clamped {}–{})",
-                realPlayers,
-                sPlayerbotAIConfig->botsPerPlayer,
-                target,
-                sPlayerbotAIConfig->minRandomBots,
-                sPlayerbotAIConfig->maxRandomBots);
+            LOG_DEBUG("playerbots",
+                "[Ratio] realPlayers={} botsPerPlayer={} => target={} (clamped {}–{})",
+                realPlayers, s_cachedRatio, target,
+                sPlayerbotAIConfig->minRandomBots, sPlayerbotAIConfig->maxRandomBots);
         }
 
         return target;
     }
 
-    return GetEventValue(0, "bot_count");
+    // ---------------------------------------------------------
+    // 2) Stock behavior: randomize "bot_count" over time if missing/out of range
+    // ---------------------------------------------------------
+    uint32 target = GetEventValue(0, "bot_count");
+
+    if (!target ||
+        target < sPlayerbotAIConfig->minRandomBots ||
+        target > sPlayerbotAIConfig->maxRandomBots)
+    {
+        target = urand(sPlayerbotAIConfig->minRandomBots, sPlayerbotAIConfig->maxRandomBots);
+
+        SetEventValue(0, "bot_count", target,
+            urand(sPlayerbotAIConfig->randomBotCountChangeMinInterval,
+                  sPlayerbotAIConfig->randomBotCountChangeMaxInterval));
+    }
+
+    return target;
 }
-uint32 RandomPlayerbotMgr::GetCommunityLevelCap()
+
+uint32 RandomPlayerbotMgr::GetCommunityLevelCap()  // NOTE: GetCommunityLevelCap is called from the world update thread only.
 {
     if (!sPlayerbotAIConfig->communityLevelCapEnabled)
         return 0;
@@ -538,18 +578,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 	// If ratio scaling is enabled, override target bot count dynamically
 	if (sPlayerbotAIConfig->usePlayerCountRatio)
 	{
-		uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
-		float botsPerPlayer = LoadSavedBotsPerPlayerFromDB(); // your DB getter (or cached value)
-
-		uint32 desired = uint32(std::ceil(realPlayers * botsPerPlayer));
-		desired = std::max<uint32>(desired, sPlayerbotAIConfig->minRandomBots);
-		desired = std::min<uint32>(desired, sPlayerbotAIConfig->maxRandomBots);
-
-		maxAllowedBotCount = desired;
+		uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
 
 		// Optional: store into event cache so .playerbots rndbot stats can show it
 		// Keep TTL short so it tracks changes
-		SetEventValue(0, "bot_count", maxAllowedBotCount, 30);
+		SetEventValue(0, "bot_count_ratio_target", maxAllowedBotCount, 30);
 
 		if (sPlayerbotAIConfig->debugRatioScaling)
 		{
@@ -577,6 +610,57 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     std::list<uint32> availableBots = currentBots;
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
+
+// ---------------------------------------------------------
+// Seed replacement: keep open-world population steady even when
+// bots are "away" in BG/Arena or dungeon/raid instances.
+// These extra bots are temporary: when away-bots return, the
+// normal shrink logic will bring totals back down.
+// ---------------------------------------------------------
+if (sPlayerbotAIConfig->enabled) // sanity
+{
+    uint32 openWorldBotCount = 0;
+    uint32 awayBotCount = 0;
+
+    for (auto const& kv : playerBots)
+    {
+        Player* bot = kv.second;
+        if (!bot || !bot->IsInWorld())
+            continue;
+
+        Map* map = bot->GetMap();
+        if (map && (map->IsBattlegroundOrArena() || map->IsDungeon() || map->IsRaid()))
+        {
+            ++awayBotCount;
+            continue;
+        }
+
+        ++openWorldBotCount;
+    }
+
+    // We aim for at least `maxAllowedBotCount` bots in the open world.
+    // If some bots are away, temporarily raise the overall target so the
+    // world still feels populated.
+    if (openWorldBotCount < maxAllowedBotCount)
+    {
+        uint32 deficit = maxAllowedBotCount - openWorldBotCount;
+
+        // Hard safety cap to prevent runaway growth if something goes wrong.
+        // This is intentionally conservative and can be tuned later.
+        uint32 const maxExtraSeed = 50;
+        if (deficit > maxExtraSeed)
+            deficit = maxExtraSeed;
+
+        maxAllowedBotCount += deficit;
+
+        if (sPlayerbotAIConfig->debugRatioScaling)
+        {
+            LOG_INFO("playerbots",
+                "[SeedReplacement] openWorld={} away={} baseTarget={} extraSeed={} newTarget={}",
+                openWorldBotCount, awayBotCount, (maxAllowedBotCount - deficit), deficit, maxAllowedBotCount);
+        }
+    }
+}
 
     uint32 onlineBotFocus = 75;
     // When we need to *grow* the bot population, prioritize logins over updates.
@@ -701,7 +785,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     {
         uint32 over = onlineBotCount - maxAllowedBotCount;
         uint32 toMark = std::min<uint32>(over, RATIO_MAX_SHRINK_PER_CHECK);
-        uint32 marked = 0;
 
 // Build a prioritized logout list:
 //  - NEVER logout bots that are: in BG/arena, in BG queue, in dungeons/raids, or grouped with real players.
@@ -3214,65 +3297,46 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
     std::string const cmd = args;
 
     // Ratio tuning: .playerbots rndbot ratio [show|<value>]
-if (cmd.rfind("ratio", 0) == 0) // starts with "ratio"
+if (cmd.rfind("ratio", 0) == 0)
 {
     std::string arg;
-
-    // Extract argument if present: "ratio <value>"
     if (cmd.size() > 6)
         arg = cmd.substr(6);
 
     if (arg.empty() || arg == "show")
     {
+        float dbRatio = sRandomPlayerbotMgr->LoadSavedBotsPerPlayerFromDB();
+
         handler->PSendSysMessage(
-            "Ratio mode: {} | botsPerPlayer (cached) = {} | min={} max={}",
+            "Ratio mode: {} | botsPerPlayer (DB) = {} | min={} max={}",
             sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED",
-            sPlayerbotAIConfig->botsPerPlayer,
+            dbRatio,
             sPlayerbotAIConfig->minRandomBots,
             sPlayerbotAIConfig->maxRandomBots);
 
-        handler->PSendSysMessage(
-            "Usage: .playerbots rndbot ratio <value>  (example: 1.5)");
+        handler->PSendSysMessage("Usage: .playerbots rndbot ratio <value>  (example: 1.5)");
         return true;
     }
 
     float ratio = 0.0f;
-    try
-    {
-        ratio = std::stof(arg);
-    }
+    try { ratio = std::stof(arg); }
     catch (...)
     {
-        handler->PSendSysMessage(
-            "Invalid ratio '{}'. Usage: .playerbots rndbot ratio <value>", arg);
+        handler->PSendSysMessage("Invalid ratio '{}'. Usage: .playerbots rndbot ratio <value>", arg);
         return false;
     }
 
     if (ratio <= 0.0f)
     {
-        handler->PSendSysMessage(
-            "Ratio must be > 0. Usage: .playerbots rndbot ratio <value>");
+        handler->PSendSysMessage("Ratio must be > 0. Usage: .playerbots rndbot ratio <value>");
         return false;
     }
 
-    // 1) Save to DB
     sRandomPlayerbotMgr->SaveBotsPerPlayerToDB(ratio);
-
-    // 2) Update cached value (used by UpdateAIInternal)
-    sPlayerbotAIConfig->botsPerPlayer = ratio;
-
-    // 3) Force grow/shrink recalculation
     sRandomPlayerbotMgr->ForceBotCountRecheck();
 
-    // 4) Optional immediate tick (safe, but not strictly required)
-    sRandomPlayerbotMgr->UpdateAIInternal(0, false);
-
-    handler->PSendSysMessage(
-        "Randombot ratio set to {}. Population recalculation triggered.", ratio);
-
-    LOG_INFO("playerbots",
-        "[RatioCmd] botsPerPlayer={} – forced population recheck", ratio);
-
+    handler->PSendSysMessage("Randombot ratio set to {}. Population recalculation triggered.", ratio);
+    LOG_INFO("playerbots", "[RatioCmd] botsPerPlayer={} – forced population recheck", ratio);
     return true;
 }
 
