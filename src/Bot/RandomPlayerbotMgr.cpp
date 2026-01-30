@@ -333,9 +333,6 @@ uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
         {
             s_cachedRatio = LoadSavedBotsPerPlayerFromDB();
             s_lastRatioRead = now;
-
-            // Optional: mirror into config so debug output / .conf expectations match
-            sPlayerbotAIConfig->botsPerPlayer = s_cachedRatio;
         }
 
         uint32 realPlayers = GetOnlineRealPlayerCount();
@@ -347,14 +344,6 @@ uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
 
         // Keep an event value for visibility/debug (short TTL is fine).
         SetEventValue(0, "bot_count", target, 30);
-
-        if (sPlayerbotAIConfig->debugRatioScaling)
-        {
-            LOG_DEBUG("playerbots",
-                "[Ratio] realPlayers={} botsPerPlayer={} => target={} (clamped {}–{})",
-                realPlayers, s_cachedRatio, target,
-                sPlayerbotAIConfig->minRandomBots, sPlayerbotAIConfig->maxRandomBots);
-        }
 
         return target;
     }
