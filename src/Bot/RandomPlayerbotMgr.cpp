@@ -572,13 +572,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		// Optional: store into event cache so .playerbots rndbot stats can show it
 		// Keep TTL short so it tracks changes
 		SetEventValue(0, "bot_count_ratio_target", maxAllowedBotCount, 30);
-
-		if (sPlayerbotAIConfig->debugRatioScaling)
-		{
-			LOG_INFO("playerbots",
-				"[RatioScaling] realPlayers={} botsPerPlayer={} desired={} target={}",
-				realPlayers, botsPerPlayer, desired, maxAllowedBotCount);
-		}
 	}
 	else
 	{
