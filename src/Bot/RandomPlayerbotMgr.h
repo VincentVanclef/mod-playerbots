@@ -40,6 +40,9 @@ struct BattlegroundInfo
     // Players (Battleground)
     uint32 bgHordePlayerCount = 0;
     uint32 bgAlliancePlayerCount = 0;
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
 
 };
 
@@ -55,6 +58,9 @@ struct CachedEvent
     std::string data;
 
     bool IsEmpty() const { return !lastChangeTime; }
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
 
 };
 
@@ -62,6 +68,9 @@ struct BotEventCache
 {
     bool loaded = false;
     std::unordered_map<std::string, CachedEvent> events;
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
 
 };
 
@@ -86,6 +95,9 @@ public:
 
 private:
     botPIDImpl* pimpl;
+    // Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
 
 };
 
@@ -195,6 +207,8 @@ public:
 
     // Account type management
     void AssignAccountTypes();
+    void EnsureRandomBotAccounts(uint32 desiredAccountCount);
+
     bool IsAccountType(uint32 accountId, uint8 accountType);
 
 protected:
@@ -212,7 +226,6 @@ private:
     std::string GetEventData(uint32 bot, std::string const& event);
     uint32 SetEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn,
                          std::string const& data = "");
-    uint32 GetTuningOrDefault(std::string const& key, uint32 def) const;
     void GetBots();
     std::vector<uint32> GetBgBots(uint32 bracket);
     time_t BgCheckTimer;
@@ -245,14 +258,9 @@ private:
 
     //void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }
-
     // Community level cap cache
     time_t communityLevelCapCachedAt = 0;
     uint32 communityLevelCapCachedValue = 0;
-
-    // Ratio cache (DB-driven bots-per-player)
-    time_t _ratioCachedAt = 0;
-    float  _ratioCachedValue = 0.0f;
 
 };
 
