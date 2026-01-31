@@ -192,6 +192,12 @@ bool PlayerbotAIConfig::Initialize()
     communityLevelCapCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.CommunityLevelCap.CacheSeconds", 60);
     usePlayerCountRatio = sConfigMgr->GetOption<bool>("AiPlayerbot.UsePlayerCountRatio", false);
     botsPerPlayer = 0.0f;
+
+    ratioGrowCheckSeconds   = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.GrowCheckSeconds", 5);
+    ratioShrinkCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.ShrinkCheckSeconds", 30);
+    ratioMaxShrinkPerCheck  = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.MaxShrinkPerCheck", 5);
+    ratioDbCacheSeconds     = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSeconds", 10);
+
     debugRatioScaling = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.RatioScaling", false);
     debugCommunityLevelCap = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.CommunityLevelCap", false);
     randomBotUpdateInterval = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotUpdateInterval", 20);

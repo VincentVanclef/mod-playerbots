@@ -310,8 +310,14 @@ void RandomPlayerbotMgr::ForceBotCountRecheck()
     DelayLoginBotsTimer = 0;
     PlayersCheckTimer = 0;
 
-    // Optional but recommended: invalidate cached target
+    // IMPORTANT: allow GetBots() to refill/resize immediately
+    currentBots.clear();
+
+    // Invalidate cached target
     SetEventValue(0, "bot_count", 0, 1);
+
+    // Optional: invalidate ratio cache too (if you convert it to members later)
+    _ratioCachedAt = 0;
 }
 
 uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
@@ -322,24 +328,21 @@ uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
     if (sPlayerbotAIConfig->usePlayerCountRatio)
     {
         // Cache DB reads so we don't hammer the DB
-        static time_t s_lastRatioRead = 0;
-        static float  s_cachedRatio   = 0.0f;
-
         time_t now = time(nullptr);
-        constexpr uint32 RATIO_DB_CACHE_SECONDS = 10;
+        uint32 cacheSeconds = sPlayerbotAIConfig->ratioDbCacheSeconds ? sPlayerbotAIConfig->ratioDbCacheSeconds : 10;
 
-        if (!s_lastRatioRead || (now - s_lastRatioRead) >= RATIO_DB_CACHE_SECONDS)
+        if (!_ratioCachedAt || (now - _ratioCachedAt) >= cacheSeconds)
         {
-            s_cachedRatio = LoadSavedBotsPerPlayerFromDB();
-            s_lastRatioRead = now;
+            _ratioCachedValue = LoadSavedBotsPerPlayerFromDB();
+            _ratioCachedAt = now;
 
-            // Optional: mirror into config for visibility / consistency
-            sPlayerbotAIConfig->botsPerPlayer = s_cachedRatio;
+            // Mirror into config for visibility / consistency
+            sPlayerbotAIConfig->botsPerPlayer = _ratioCachedValue;
         }
 
         uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
 
-        double ratio = static_cast<double>(s_cachedRatio);
+        double ratio = static_cast<double>(_ratioCachedValue);
         if (ratio < 0.0)
             ratio = 0.0;
 
@@ -571,17 +574,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
     uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
 
-	// If ratio scaling is enabled, override target bot count dynamically
-	if (sPlayerbotAIConfig->usePlayerCountRatio)
-	{
-		uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
-
-		// Optional: store into event cache so .playerbots rndbot stats can show it
-		// Keep TTL short so it tracks changes
-		SetEventValue(0, "bot_count_ratio_target", maxAllowedBotCount, 30);
-	}
-	else
-	{
+    // If ratio scaling is enabled, keep an event value for visibility / GM stats
+    if (sPlayerbotAIConfig->usePlayerCountRatio)
+        SetEventValue(0, "bot_count_ratio_target", maxAllowedBotCount, 30);
+    else
+    {
 		// Stock behavior: randomize target bot_count over time if invalid/out of range
 		maxAllowedBotCount = GetEventValue(0, "bot_count");
 		
@@ -599,6 +596,21 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     std::list<uint32> availableBots = currentBots;
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
+
+    if (sPlayerbotAIConfig->debugRatioScaling)
+    {
+        LOG_INFO("playerbots",
+            "[RatioDebug] ratioMode={} target={} onlineBots={} candidates={} autologin={} enabled={} min={} max={} dbRatio={}",
+            sPlayerbotAIConfig->usePlayerCountRatio ? 1 : 0,
+            maxAllowedBotCount,
+            onlineBotCount,
+            static_cast<uint32>(currentBots.size()),
+            sPlayerbotAIConfig->randomBotAutologin ? 1 : 0,
+            sPlayerbotAIConfig->enabled ? 1 : 0,
+            sPlayerbotAIConfig->minRandomBots,
+            sPlayerbotAIConfig->maxRandomBots,
+            sPlayerbotAIConfig->botsPerPlayer);
+    }
 
 // ---------------------------------------------------------
 // Seed replacement: keep open-world population steady even when
@@ -680,9 +692,10 @@ if (sPlayerbotAIConfig->enabled) // sanity
     // without introducing new persistent state.
     bool ratioGrowOk = true;
     bool ratioShrinkOk = true;
-    static constexpr uint32 RATIO_GROW_CHECK_SECONDS = 5;    // re-evaluate growth quickly
-    static constexpr uint32 RATIO_SHRINK_CHECK_SECONDS = 30; // shrink more conservatively
-    static constexpr uint32 RATIO_MAX_SHRINK_PER_CHECK = 5;  // avoid mass disconnect spikes
+    uint32 ratioGrowSeconds   = GetTuningOrDefault("ratio_grow_s",   sPlayerbotAIConfig->ratioGrowCheckSeconds);
+	uint32 ratioShrinkSeconds = GetTuningOrDefault("ratio_shrink_s", sPlayerbotAIConfig->ratioShrinkCheckSeconds);
+	uint32 ratioMaxShrink     = GetTuningOrDefault("ratio_max_shrink", sPlayerbotAIConfig->ratioMaxShrinkPerCheck);
+
 
     if (sPlayerbotAIConfig->usePlayerCountRatio)
     {
@@ -730,6 +743,9 @@ if (sPlayerbotAIConfig->enabled) // sanity
 
         if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
         {
+            if (sPlayerbotAIConfig->debugRatioScaling)
+                LOG_INFO("playerbots", "[RatioDebug] grow: available={} target={} (cd={}s)", availableBotCount, maxAllowedBotCount, ratioGrowSeconds);
+
             AddRandomBots();
         }
     }
@@ -773,7 +789,10 @@ if (sPlayerbotAIConfig->enabled) // sanity
     if (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount > maxAllowedBotCount && ratioShrinkOk)
     {
         uint32 over = onlineBotCount - maxAllowedBotCount;
-        uint32 toMark = std::min<uint32>(over, RATIO_MAX_SHRINK_PER_CHECK);
+        uint32 toMark = std::min<uint32>(over, ratioMaxShrink);
+
+        if (sPlayerbotAIConfig->debugRatioScaling)
+            LOG_INFO("playerbots", "[RatioDebug] shrink: over={} toMark={} (cd={}s)", over, toMark, ratioShrinkSeconds);
 
 // Build a prioritized logout list:
 //  - NEVER logout bots that are: in BG/arena, in BG queue, in dungeons/raids, or grouped with real players.
@@ -880,7 +899,7 @@ for (auto const& c : candidates)
 }
 	
 	    if (loggedOut > 0)
-	        SetEventValue(0, "ratio_shrink_cd", 1, RATIO_SHRINK_CHECK_SECONDS);
+	        SetEventValue(0, "ratio_shrink_cd", 1, ratioShrinkSeconds);
     }
 
     // Allow faster grow when ratio scaling is enabled and we're below target.
@@ -897,7 +916,7 @@ for (auto const& c : candidates)
 
     // Rate-limit target growth checks (shrink is already rate-limited above).
     if (sPlayerbotAIConfig->usePlayerCountRatio && maxNewBots > 0)
-        SetEventValue(0, "ratio_grow_cd", 1, RATIO_GROW_CHECK_SECONDS);
+        SetEventValue(0, "ratio_grow_cd", 1, ratioGrowSeconds);
 
     if (!availableBots.empty())
     {
@@ -3086,30 +3105,57 @@ bool RandomPlayerbotMgr::IsAddclassBot(ObjectGuid::LowType bot)
     return false;
 }
 
+uint32 RandomPlayerbotMgr::GetTuningOrDefault(std::string const& key, uint32 def) const
+{
+    uint32 v = const_cast<RandomPlayerbotMgr*>(this)->GetEventValue(0, key);
+    return v ? v : def;
+}
+
 void RandomPlayerbotMgr::GetBots()
 {
-    if (!currentBots.empty())
+    uint32 target = GetMaxAllowedBotCount();
+
+    // Prune stale entries (no "add" event anymore)
+    for (auto it = currentBots.begin(); it != currentBots.end();)
+    {
+        if (!GetEventValue(*it, "add"))
+            it = currentBots.erase(it);
+        else
+            ++it;
+    }
+
+    // If we already have enough candidates, stop
+    if (currentBots.size() >= target)
         return;
 
+    // Fill up to target
     PlayerbotsDatabasePreparedStatement* stmt =
         PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_SEL_RANDOM_BOTS_BY_OWNER_AND_EVENT);
     stmt->SetData(0, 0);
     stmt->SetData(1, "add");
-    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+
+    std::unordered_set<uint32> already(currentBots.begin(), currentBots.end());
+
     if (PreparedQueryResult result = PlayerbotsDatabase.Query(stmt))
     {
         do
         {
             Field* fields = result->Fetch();
             uint32 bot = fields[0].Get<uint32>();
-            if (GetEventValue(bot, "add"))
+
+            if (!GetEventValue(bot, "add"))
+                continue;
+
+            if (already.insert(bot).second)
                 currentBots.push_back(bot);
 
-            if (currentBots.size() >= maxAllowedBotCount)
+            if (currentBots.size() >= target)
                 break;
+
         } while (result->NextRow());
     }
 }
+
 
 std::vector<uint32> RandomPlayerbotMgr::GetBgBots(uint32 bracket)
 {
