@@ -54,6 +54,8 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
     Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
     bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
+	
+	bool isRanged = !shouldMelee;
 
     bool sameTarget = oldTarget == target && bot->GetVictim() == target;
     bool inCombat = botAI->GetState() == BOT_STATE_COMBAT;
@@ -112,12 +114,29 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
         return false;
     }
 
+    // If we can't see the target, try to move to LOS instead of failing and re-thinking forever.
     if (!bot->IsWithinLOSInMap(target))
     {
-        if (verbose)
-            botAI->TellError(std::string(target->GetName()) + " is not in my sight.");
-
+        if (botAI->CanMove())
+            MoveToLOS(target, isRanged);
         return false;
+    }
+
+    // If we're ranged and not in effective range, step in before trying to start the attack.
+    // Without this, ranged bots in BGs often "stall" until the enemy closes the distance.
+    if (isRanged && botAI->CanMove())
+    {
+        // Use the configured spell distance as a generic "ranged engagement" distance.
+        // ReachCombatTo() accounts for combat reach internally.
+        float engageDist = sPlayerbotAIConfig->spellDistance;
+        if (engageDist < 10.0f)
+            engageDist = 10.0f; // safety floor
+
+        if (bot->GetExactDist2d(target) > engageDist)
+        {
+            ReachCombatTo(target, engageDist);
+            return false;
+        }
     }
 
     if (sameTarget && inCombat && sameAttackMode)
