@@ -460,6 +460,12 @@ public:
 	bool usePlayerCountRatio;   // config toggle
 	float botsPerPlayer;        // cached DB value (loaded by RandomPlayerbotMgr)
 
+	// Ratio tuning defaults (can be overridden live via event values)
+	uint32 ratioGrowCheckSeconds;
+	uint32 ratioShrinkCheckSeconds;
+	uint32 ratioMaxShrinkPerCheck;
+	uint32 ratioDbCacheSeconds;
+
 // Debug toggles
 	bool debugRatioScaling;
 	bool debugCommunityLevelCap;

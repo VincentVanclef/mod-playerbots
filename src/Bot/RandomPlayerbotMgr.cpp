@@ -317,7 +317,8 @@ void RandomPlayerbotMgr::ForceBotCountRecheck()
     SetEventValue(0, "bot_count", 0, 1);
 
     // Optional: invalidate ratio cache too (if you convert it to members later)
-    _ratioCachedAt = 0;
+    ratioCachedAt = 0;
+    ratioCachedValue = 0.0f;
 }
 
 uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
@@ -328,25 +329,23 @@ uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
     if (sPlayerbotAIConfig->usePlayerCountRatio)
     {
         // Cache DB reads so we don't hammer the DB
-        static time_t s_lastRatioRead = 0;
-        static float  s_cachedRatio   = 0.0f;
+        
+time_t now = time(nullptr);
+uint32 ttl = sPlayerbotAIConfig->ratioDbCacheSeconds ? sPlayerbotAIConfig->ratioDbCacheSeconds : 10;
 
-        time_t now = time(nullptr);
-        constexpr uint32 RATIO_DB_CACHE_SECONDS = 10;
+if (!ratioCachedAt || (now - ratioCachedAt) >= static_cast<time_t>(ttl))
+{
+    ratioCachedValue = LoadSavedBotsPerPlayerFromDB();
+    ratioCachedAt = now;
 
-        if (!s_lastRatioRead || (now - s_lastRatioRead) >= RATIO_DB_CACHE_SECONDS)
-        {
-            s_cachedRatio = LoadSavedBotsPerPlayerFromDB();
-            s_lastRatioRead = now;
+    // Optional: mirror into config for visibility / consistency
+    sPlayerbotAIConfig->botsPerPlayer = ratioCachedValue;
+}
 
-            // Optional: mirror into config for visibility / consistency
-            sPlayerbotAIConfig->botsPerPlayer = s_cachedRatio;
-        }
+uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
 
-        uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
-
-        double ratio = static_cast<double>(s_cachedRatio);
-        if (ratio < 0.0)
+double ratio = static_cast<double>(ratioCachedValue);
+if (ratio < 0.0)
             ratio = 0.0;
 
         uint32 target = static_cast<uint32>(std::ceil(static_cast<double>(realPlayers) * ratio));
@@ -780,7 +779,7 @@ if (sPlayerbotAIConfig->enabled) // sanity
     if (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount > maxAllowedBotCount && ratioShrinkOk)
     {
         uint32 over = onlineBotCount - maxAllowedBotCount;
-        uint32 toMark = std::min<uint32>(over, RATIO_MAX_SHRINK_PER_CHECK);
+        uint32 toMark = std::min<uint32>(over, ratioMaxShrink);
 
 // Build a prioritized logout list:
 //  - NEVER logout bots that are: in BG/arena, in BG queue, in dungeons/raids, or grouped with real players.
@@ -887,7 +886,7 @@ for (auto const& c : candidates)
 }
 	
 	    if (loggedOut > 0)
-	        SetEventValue(0, "ratio_shrink_cd", 1, sPlayerbotAIConfig->ratioShrinkSeconds);
+	        SetEventValue(0, "ratio_shrink_cd", 1, ratioShrinkSeconds);
     }
 
     // Allow faster grow when ratio scaling is enabled and we're below target.
@@ -904,7 +903,7 @@ for (auto const& c : candidates)
 
     // Rate-limit target growth checks (shrink is already rate-limited above).
     if (sPlayerbotAIConfig->usePlayerCountRatio && maxNewBots > 0)
-        SetEventValue(0, "ratio_grow_cd", 1, sPlayerbotAIConfig->ratioGrowSeconds);
+        SetEventValue(0, "ratio_grow_cd", 1, ratioGrowSeconds);
 
     if (!availableBots.empty())
     {
@@ -982,73 +981,6 @@ for (auto const& c : candidates)
 // and assigns accounts as AddClass accounts (type 2) based AddClassAccountPoolSize. Type 1 and 2 assignments are
 // permenant, unless MaxRandomBots or AddClassAccountPoolSize are set to 0. If so, their associated accounts will
 // be unassigned (type 0)
-
-void RandomPlayerbotMgr::EnsureRandomBotAccounts(uint32 desiredAccountCount)
-{
-    if (desiredAccountCount == 0)
-        return;
-
-    // Count existing accounts with prefix
-    QueryResult r = LoginDatabase.Query(
-        "SELECT COUNT(*) FROM account WHERE username LIKE '{}%%'",
-        sPlayerbotAIConfig->randomBotAccountPrefix.c_str());
-
-    uint32 existing = 0;
-    if (r)
-        existing = (*r)[0].Get<uint32>();
-
-    if (existing >= desiredAccountCount)
-        return;
-
-    uint32 toCreate = desiredAccountCount - existing;
-
-    LOG_INFO("playerbots",
-        "Only {} randombot accounts found for prefix '{}'. Creating {} accounts to reach {}...",
-        existing, sPlayerbotAIConfig->randomBotAccountPrefix, toCreate, desiredAccountCount);
-
-    // Create sequential usernames: <prefix><00001>, <prefix><00002>, ...
-    // We intentionally over-scan to avoid collisions if some accounts already exist.
-    uint32 created = 0;
-    uint32 attempts = 0;
-
-    for (uint32 i = 1; created < toCreate && attempts < desiredAccountCount + 500; ++i, ++attempts)
-    {
-        std::ostringstream uname;
-        uname << sPlayerbotAIConfig->randomBotAccountPrefix << std::setfill('0') << std::setw(5) << i;
-
-        std::string username = uname.str();
-
-        // If random passwords are enabled, generate a simple random password (not used by humans).
-        std::string password = username;
-        if (sPlayerbotAIConfig->randomBotRandomPassword)
-        {
-            static char const* chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-            std::string pw;
-            pw.reserve(16);
-            for (int j = 0; j < 16; ++j)
-                pw.push_back(chars[urand(0, 61)]);
-            password = pw;
-        }
-
-        AccountOpResult res = AccountMgr::CreateAccount(username, password, "");
-        if (res == AccountOpResult::AOR_OK)
-        {
-            ++created;
-        }
-        else if (res == AccountOpResult::AOR_NAME_ALREADY_EXIST)
-        {
-            // Keep searching for the next free number.
-            continue;
-        }
-        else
-        {
-            LOG_WARN("playerbots", "Failed to create randombot account '{}' (result={})", username, uint32(res));
-        }
-    }
-
-    LOG_INFO("playerbots", "Created {} randombot accounts.", created);
-}
-
 void RandomPlayerbotMgr::AssignAccountTypes()
 {
     LOG_INFO("playerbots", "Assigning account types for random bot accounts...");
@@ -1073,47 +1005,59 @@ void RandomPlayerbotMgr::AssignAccountTypes()
         } while (allAccounts->NextRow());
     }
 
-    
-// If the auth DB has fewer randombot accounts than we need, auto-provision them.
-// This supports wiping bot accounts for a fresh community without requiring manual SQL.
-uint32 desiredAccountCount = sPlayerbotAIConfig->randomBotAccountCount;
+    LOG_INFO("playerbots", "Found {} total randombot accounts in database", allRandomBotAccounts.size());
 
-// If RandomBotAccountCount is 0, derive a sane minimum from MaxRandomBots + AddClass pool.
-if (desiredAccountCount == 0)
+// If the pool is empty or below desired count (e.g. after an admin wipe), auto-provision missing accounts.
+// This prevents the server from getting stuck unable to log bots in.
+uint32 desiredTotalAccounts = sPlayerbotAIConfig->randomBotAccountCount;
+
+if (desiredTotalAccounts == 0)
 {
-    uint32 derived = 0;
-    if (sPlayerbotAIConfig->maxRandomBots > 0)
-    {
-        int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-        if (divisor <= 0)
-            divisor = 1;
+    // Derive a sensible minimum if not configured
+    int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
+    int maxBots = static_cast<int>(sPlayerbotAIConfig->maxRandomBots);
+    if (sPlayerbotAIConfig->enablePeriodicOnlineOffline)
+        maxBots = static_cast<int>(maxBots * sPlayerbotAIConfig->periodicOnlineOfflineRatio);
 
-        uint32 maxBots = uint32(sPlayerbotAIConfig->maxRandomBots);
-        derived = (maxBots + uint32(divisor) - 1) / uint32(divisor);
+    uint32 neededRnd = (maxBots > 0) ? static_cast<uint32>((maxBots + divisor - 1) / divisor) : 0;
+    uint32 neededAdd = sPlayerbotAIConfig->addClassAccountPoolSize;
+    desiredTotalAccounts = std::max<uint32>(neededRnd + neededAdd, 1);
+}
+
+if (allRandomBotAccounts.size() < desiredTotalAccounts)
+{
+    uint32 toCreate = desiredTotalAccounts - static_cast<uint32>(allRandomBotAccounts.size());
+    LOG_INFO("playerbots", "Auto-creating {} randombot accounts to reach {} total...", toCreate, desiredTotalAccounts);
+
+    // Create sequential usernames (prefix + 5 digits). Password defaults to username.
+    for (uint32 i = 0; i < toCreate; ++i)
+    {
+        uint32 num = static_cast<uint32>(allRandomBotAccounts.size()) + 1 + i;
+        std::ostringstream uname;
+        uname << sPlayerbotAIConfig->randomBotAccountPrefix << std::setfill('0') << std::setw(5) << num;
+
+        std::string username = uname.str();
+        std::string password = username;
+
+        AccountOpResult res = AccountMgr::CreateAccount(username, password, "");
+        if (res == AccountOpResult::AOR_OK)
+        {
+            QueryResult r = LoginDatabase.Query("SELECT id FROM account WHERE username = '{}'", username);
+            if (r)
+            {
+                Field* f = r->Fetch();
+                allRandomBotAccounts.push_back(f[0].Get<uint32>());
+            }
+        }
+        else
+        {
+            LOG_WARN("playerbots", "Failed to create randombot account {} (result={})", username, uint32(res));
+        }
     }
 
-    desiredAccountCount = derived + uint32(sPlayerbotAIConfig->addClassAccountPoolSize);
+    LOG_INFO("playerbots", "Randombot accounts after auto-create: {}", allRandomBotAccounts.size());
 }
 
-EnsureRandomBotAccounts(desiredAccountCount);
-
-// Re-fetch ALL randombot accounts after provisioning.
-allRandomBotAccounts.clear();
-allAccounts = LoginDatabase.Query(
-    "SELECT id FROM account WHERE username LIKE '{}%%' ORDER BY id",
-    sPlayerbotAIConfig->randomBotAccountPrefix.c_str());
-
-if (allAccounts)
-{
-    do
-    {
-        Field* fields = allAccounts->Fetch();
-        uint32 accountId = fields[0].Get<uint32>();
-        allRandomBotAccounts.push_back(accountId);
-    } while (allAccounts->NextRow());
-}
-
-LOG_INFO("playerbots", "Found {} total randombot accounts in database", allRandomBotAccounts.size());
 
     // Check existing assignments
     QueryResult existingAssignments = PlayerbotsDatabase.Query("SELECT account_id, account_type FROM playerbots_account_type");

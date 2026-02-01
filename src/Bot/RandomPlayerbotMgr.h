@@ -207,8 +207,6 @@ public:
 
     // Account type management
     void AssignAccountTypes();
-    void EnsureRandomBotAccounts(uint32 desiredAccountCount);
-
     bool IsAccountType(uint32 accountId, uint8 accountType);
 
 protected:
@@ -258,7 +256,13 @@ private:
 
     //void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }
-    // Community level cap cache
+    
+    // Ratio DB cache (bots-per-player)
+    time_t ratioCachedAt = 0;
+    float ratioCachedValue = 0.0f;
+
+    uint32 GetTuningOrDefault(std::string const& key, uint32 def) const;
+// Community level cap cache
     time_t communityLevelCapCachedAt = 0;
     uint32 communityLevelCapCachedValue = 0;
 
