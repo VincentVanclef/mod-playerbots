@@ -295,11 +295,11 @@ float RandomPlayerbotMgr::LoadSavedBotsPerPlayerFromDB() const
     Field* fields = result->Fetch();
     float ratio = fields[0].Get<float>();
 
-    // Hard safety clamp (policy-level, not gameplay-level)
+    // Basic sanitation only.
+    // The *effective* upper cap should be driven by AiPlayerbot.MaxRandomBots,
+    // so server owners can raise the ratio without hitting hidden ceilings.
     if (ratio < 0.0f)
         ratio = 0.0f;
-    if (ratio > 10.0f)
-        ratio = 10.0f;
 
     return ratio;
 }
@@ -348,7 +348,16 @@ double ratio = static_cast<double>(ratioCachedValue);
 if (ratio < 0.0)
             ratio = 0.0;
 
-        uint32 target = static_cast<uint32>(std::ceil(static_cast<double>(realPlayers) * ratio));
+        // Compute desired count with overflow-safe clamping.
+        // We do NOT impose a hidden "max bots per player" ceiling here.
+        // The only gameplay cap is AiPlayerbot.MaxRandomBots.
+        double desiredD = static_cast<double>(realPlayers) * ratio;
+        if (!std::isfinite(desiredD))
+            desiredD = static_cast<double>(sPlayerbotAIConfig->maxRandomBots);
+        uint32 hardMax = sPlayerbotAIConfig->maxRandomBots;
+        uint32 target = (desiredD >= static_cast<double>(hardMax))
+            ? hardMax
+            : static_cast<uint32>(std::ceil(desiredD));
 
         // Clamp to configured hard bounds
         if (target < sPlayerbotAIConfig->minRandomBots) target = sPlayerbotAIConfig->minRandomBots;
