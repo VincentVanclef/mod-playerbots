@@ -2255,24 +2255,32 @@ bool BGTactics::selectObjective(bool reset)
             uint8 defendersProhab = 3;  // Default balanced
 
             switch (strategy)
-            {
-                case 0:
-                case 1:
-                case 2:
-                case 3:  // Balanced
-                    defendersProhab = 3;
-                    break;
-                case 4:
-                case 5:
-                case 6:
-                case 7:  // Heavy Offense
-                    defendersProhab = 1;
-                    break;
-                case 8:
-                case 9:  // Heavy Defense
-                    defendersProhab = 6;
-                    break;
-            }
+			{
+				case static_cast<WSBotStrategy>(0):
+				case static_cast<WSBotStrategy>(1):
+    			case static_cast<WSBotStrategy>(2):
+    			case static_cast<WSBotStrategy>(3):  // Balanced
+        			defendersProhab = 3;
+        			break;
+
+    			case static_cast<WSBotStrategy>(4):
+    			case static_cast<WSBotStrategy>(5):
+    			case static_cast<WSBotStrategy>(6):
+    			case static_cast<WSBotStrategy>(7):  // Heavy Offense
+        			defendersProhab = 1;
+        			break;
+
+    			case static_cast<WSBotStrategy>(8):
+    			case static_cast<WSBotStrategy>(9):  // Heavy Defense
+        			defendersProhab = 6;
+        			break;
+
+    			default:
+        			// Keep a sane fallback if strategy is out of expected range
+        			defendersProhab = 3;
+        			break;
+			}
+
 
             if (enemyStrategy == WS_STRATEGY_DEFENSIVE)
                 defendersProhab = 2;
