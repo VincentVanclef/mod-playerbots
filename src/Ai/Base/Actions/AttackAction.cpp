@@ -54,6 +54,21 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
     Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
     bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
+
+    // --- Combat commit window to prevent distance thrashing ---
+    static uint32 lastCommitTime = 0;
+    uint32 now = getMSTime();
+    bool isRanged = !shouldMelee;
+
+    if (now - lastCommitTime < 3000 && botAI->CanMove())
+    {
+        ReachCombatTo(target, sPlayerbotAIConfig->spellDistance);
+    }
+    else
+    {
+        lastCommitTime = now;
+    }
+
 	
 	bool isRanged = !shouldMelee;
 

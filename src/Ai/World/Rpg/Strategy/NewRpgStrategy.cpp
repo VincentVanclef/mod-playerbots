@@ -11,6 +11,9 @@ NewRpgStrategy::NewRpgStrategy(PlayerbotAI* botAI) : Strategy(botAI) {}
 
 std::vector<NextAction> NewRpgStrategy::getDefaultActions()
 {
+    if (botAI->GetState() == BOT_STATE_COMBAT)
+        return {};
+
     // IMPORTANT:
     // If this relevance is higher than grind's "attack anything" (4.0),
     // random bots will keep re-steering (wander/npc/quest travel) and never
