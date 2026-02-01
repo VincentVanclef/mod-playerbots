@@ -41,8 +41,6 @@ struct BattlegroundInfo
     uint32 bgHordePlayerCount = 0;
     uint32 bgAlliancePlayerCount = 0;
     // Community level cap cache
-    time_t communityLevelCapCachedAt = 0;
-    uint32 communityLevelCapCachedValue = 0;
 
 };
 
@@ -59,8 +57,6 @@ struct CachedEvent
 
     bool IsEmpty() const { return !lastChangeTime; }
     // Community level cap cache
-    time_t communityLevelCapCachedAt = 0;
-    uint32 communityLevelCapCachedValue = 0;
 
 };
 
@@ -69,8 +65,6 @@ struct BotEventCache
     bool loaded = false;
     std::unordered_map<std::string, CachedEvent> events;
     // Community level cap cache
-    time_t communityLevelCapCachedAt = 0;
-    uint32 communityLevelCapCachedValue = 0;
 
 };
 
@@ -96,8 +90,6 @@ public:
 private:
     botPIDImpl* pimpl;
     // Community level cap cache
-    time_t communityLevelCapCachedAt = 0;
-    uint32 communityLevelCapCachedValue = 0;
 
 };
 

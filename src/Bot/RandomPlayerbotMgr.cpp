@@ -574,6 +574,28 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     if (!sPlayerbotAIConfig->randomBotAutologin || !sPlayerbotAIConfig->enabled)
         return;
 
+    // Enforce community level cap as a hard XP ceiling for randombots.
+    // This prevents bots from leveling past the current community cap even if they gain XP in the world.
+    if (sPlayerbotAIConfig->communityLevelCapEnabled)
+    {
+        uint32 cap = GetCommunityLevelCap();
+        if (cap > 0)
+        {
+            for (auto const& it : playerBots)
+            {
+                Player* bot = it.second;
+                if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+                    continue;
+
+                if (bot->GetLevel() >= cap)
+                    bot->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+                else
+                    bot->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+            }
+        }
+    }
+
+
     /*if (sPlayerbotAIConfig->enablePrototypePerformanceDiff)
     {
         LOG_INFO("playerbots", "---------------------------------------");
