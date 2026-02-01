@@ -2249,8 +2249,6 @@ bool BGTactics::selectObjective(bool reset)
             uint8 role = context->GetValue<uint32>("bg role")->Get();
             WSBotStrategy strategyHorde = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_HORDE));
             WSBotStrategy strategyAlliance = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_ALLIANCE));
-            WSBotStrategy strategyHorde = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_HORDE));
-            WSBotStrategy strategyAlliance = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_ALLIANCE));
 
             uint8 strategyIdHorde = GetBotStrategyForTeam(bg, TEAM_HORDE);
             uint8 strategyIdAlliance = GetBotStrategyForTeam(bg, TEAM_ALLIANCE);
