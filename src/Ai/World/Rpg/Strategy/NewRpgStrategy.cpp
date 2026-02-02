@@ -11,15 +11,12 @@ NewRpgStrategy::NewRpgStrategy(PlayerbotAI* botAI) : Strategy(botAI) {}
 
 std::vector<NextAction> NewRpgStrategy::getDefaultActions()
 {
-    if (botAI->GetState() == BOT_STATE_COMBAT)
+        if (botAI->GetState() == BOT_STATE_COMBAT)
         return {};
 
-    // IMPORTANT:
-    // If this relevance is higher than grind's "attack anything" (4.0),
-    // random bots will keep re-steering (wander/npc/quest travel) and never
-    // reliably open combat, causing the "yo-yo" behavior in starter areas.
+// the releavance should be greater than grind
     return {
-        NextAction("new rpg status update", 1.0f)
+        NextAction("new rpg status update", 11.0f)
     };
 }
 

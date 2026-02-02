@@ -98,7 +98,13 @@ bool MovementAction::MoveNear(WorldObject* target, float distance, MovementPrior
     if (!target)
         return false;
 
-    distance += target->GetCombatReach();
+    
+    // For melee, just try to move into combat reach.
+    // PathGenerator can return PATHFIND_SHORTCUT/other types near terrain/water edges even when movement is valid.
+    if (!ranged)
+        return MoveTo((Unit*)target, target->GetCombatReach());
+
+distance += target->GetCombatReach();
 
     float x = target->GetPositionX();
     float y = target->GetPositionY();
@@ -131,9 +137,6 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
 
     // std::ostringstream out; out << "Moving to LOS!";
     // bot->Say(out.str(), LANG_UNIVERSAL);
-	
-	if (!ranged)
-        return MoveTo((Unit*)target, target->GetCombatReach());
 
     float x = target->GetPositionX();
     float y = target->GetPositionY();
@@ -143,7 +146,7 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
     PathGenerator path(bot);
     path.CalculatePath(x, y, z, false);
     PathType type = path.GetPathType();
-    if (type != PATHFIND_NORMAL && type != PATHFIND_INCOMPLETE)
+    if (!(type & (PATHFIND_NORMAL | PATHFIND_INCOMPLETE | PATHFIND_SHORTCUT)))
         return false;
 
     if (!ranged)
