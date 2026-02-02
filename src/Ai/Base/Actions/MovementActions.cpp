@@ -131,6 +131,9 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
 
     // std::ostringstream out; out << "Moving to LOS!";
     // bot->Say(out.str(), LANG_UNIVERSAL);
+	
+	if (!ranged)
+        return MoveTo((Unit*)target, target->GetCombatReach());
 
     float x = target->GetPositionX();
     float y = target->GetPositionY();
