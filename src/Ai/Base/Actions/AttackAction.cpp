@@ -54,7 +54,7 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
     Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
     bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
-
+    
     // Range close (melee/ranged): ensure we actually step into engagement distance instead of stalling
     bool isRanged = !shouldMelee;
 

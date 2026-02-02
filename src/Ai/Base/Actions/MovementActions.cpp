@@ -98,13 +98,7 @@ bool MovementAction::MoveNear(WorldObject* target, float distance, MovementPrior
     if (!target)
         return false;
 
-    
-    // For melee, just try to move into combat reach.
-    // PathGenerator can return PATHFIND_SHORTCUT/other types near terrain/water edges even when movement is valid.
-    if (!ranged)
-        return MoveTo((Unit*)target, target->GetCombatReach());
-
-distance += target->GetCombatReach();
+    distance += target->GetCombatReach();
 
     float x = target->GetPositionX();
     float y = target->GetPositionY();
@@ -135,7 +129,14 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
     if (!target)
         return false;
 
-    // std::ostringstream out; out << "Moving to LOS!";
+    
+
+    // For melee, just try to move into combat reach.
+    // PathGenerator can return PATHFIND_SHORTCUT/other types near terrain/water edges even when movement is valid.
+    if (!ranged)
+        return MoveTo((Unit*)target, target->GetCombatReach());
+
+// std::ostringstream out; out << "Moving to LOS!";
     // bot->Say(out.str(), LANG_UNIVERSAL);
 
     float x = target->GetPositionX();
