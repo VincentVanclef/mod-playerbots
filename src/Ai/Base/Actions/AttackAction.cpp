@@ -54,6 +54,10 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
     Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
     bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
+    
+    // Range close (melee/ranged): ensure we actually step into engagement distance instead of stalling
+    bool isRanged = !shouldMelee;
+
 
     bool sameTarget = oldTarget == target && bot->GetVictim() == target;
     bool inCombat = botAI->GetState() == BOT_STATE_COMBAT;
@@ -120,7 +124,31 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
         return false;
     }
 
-    if (sameTarget && inCombat && sameAttackMode)
+    
+    // Ensure we close to appropriate distance for engagement.
+    // Without this, bots can target something indefinitely while staying just out of range.
+    if (botAI->CanMove())
+    {
+        if (!isRanged)
+        {
+            if (!bot->IsWithinMeleeRange(target))
+            {
+                ReachCombatTo(target, target->GetCombatReach());
+                return false;
+            }
+        }
+        else
+        {
+            float engageDist = sPlayerbotAIConfig->spellDistance;
+            if (engageDist < 10.0f) engageDist = 10.0f;
+            if (bot->GetExactDist2d(target) > engageDist)
+            {
+                ReachCombatTo(target, engageDist);
+                return false;
+            }
+        }
+    }
+if (sameTarget && inCombat && sameAttackMode)
     {
         if (verbose)
             botAI->TellError("I am already attacking " + std::string(target->GetName()) + ".");

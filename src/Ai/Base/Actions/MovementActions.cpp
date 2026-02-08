@@ -129,7 +129,14 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
     if (!target)
         return false;
 
-    // std::ostringstream out; out << "Moving to LOS!";
+    
+
+    // For melee, just try to move into combat reach.
+    // PathGenerator can return PATHFIND_SHORTCUT/other types near terrain/water edges even when movement is valid.
+    if (!ranged)
+        return MoveTo((Unit*)target, target->GetCombatReach());
+
+// std::ostringstream out; out << "Moving to LOS!";
     // bot->Say(out.str(), LANG_UNIVERSAL);
 
     float x = target->GetPositionX();
@@ -140,7 +147,7 @@ bool MovementAction::MoveToLOS(WorldObject* target, bool ranged)
     PathGenerator path(bot);
     path.CalculatePath(x, y, z, false);
     PathType type = path.GetPathType();
-    if (type != PATHFIND_NORMAL && type != PATHFIND_INCOMPLETE)
+    if (!(type & (PATHFIND_NORMAL | PATHFIND_INCOMPLETE | PATHFIND_SHORTCUT)))
         return false;
 
     if (!ranged)

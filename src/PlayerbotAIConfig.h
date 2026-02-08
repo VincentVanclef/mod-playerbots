@@ -8,14 +8,11 @@
 
 #include <mutex>
 #include <unordered_map>
-#include <set>
-#include <vector>
-#include <map>
-#include <algorithm>
-#include <string>
 
+#include "Common.h"
 #include "DBCEnums.h"
 #include "SharedDefines.h"
+#include "Talentspec.h"
 
 enum class BotCheatMask : uint32
 {
@@ -65,11 +62,11 @@ enum NewRpgStatus : int
 class PlayerbotAIConfig
 {
 public:
-    static PlayerbotAIConfig& instance()
+    PlayerbotAIConfig(){};
+    static PlayerbotAIConfig* instance()
     {
         static PlayerbotAIConfig instance;
-
-        return instance;
+        return &instance;
     }
 
     bool Initialize();
@@ -129,6 +126,11 @@ public:
     float randomBotMinLevelChance, randomBotMaxLevelChance;
     float randomBotRpgChance;
     uint32 minRandomBots, maxRandomBots;
+
+    bool communityLevelCapEnabled;
+    uint32 communityLevelCapTopN;
+    int32 communityLevelCapBuffer;
+    uint32 communityLevelCapCacheSeconds;
     uint32 randomBotUpdateInterval, randomBotCountChangeMinInterval, randomBotCountChangeMaxInterval;
     uint32 minRandomBotInWorldTime, maxRandomBotInWorldTime;
     uint32 minRandomBotRandomizeTime, maxRandomBotRandomizeTime;
@@ -316,7 +318,9 @@ public:
         uint32 specId;
         uint32 minLevel;
         uint32 maxLevel;
-    };
+        bool debugRatioScaling;
+    bool debugCommunityLevelCap;
+};
 
     std::vector<worldBuff> worldBuffs;
 
@@ -433,7 +437,7 @@ public:
     bool hasLog(std::string const fileName)
     {
         return std::find(allowedLogFiles.begin(), allowedLogFiles.end(), fileName) != allowedLogFiles.end();
-    };
+};
     bool openLog(std::string const fileName, char const* mode = "a");
     bool isLogOpen(std::string const fileName)
     {
@@ -452,16 +456,20 @@ public:
     bool IsRestrictedHealerDPSMap(uint32 mapId) const;
 
     std::vector<uint32> excludedHunterPetFamilies;
+// --- Random bot population scaling (ratio-based) ---
+	bool usePlayerCountRatio;   // config toggle
+	float botsPerPlayer;        // cached DB value (loaded by RandomPlayerbotMgr)
 
-private:
-    PlayerbotAIConfig() = default;
-    ~PlayerbotAIConfig() = default;
+	// Ratio tuning defaults (can be overridden live via event values)
+	uint32 ratioGrowCheckSeconds;
+	uint32 ratioShrinkCheckSeconds;
+	uint32 ratioMaxShrinkPerCheck;
+	uint32 ratioDbCacheSeconds;
 
-    PlayerbotAIConfig(const PlayerbotAIConfig&) = delete;
-    PlayerbotAIConfig& operator=(const PlayerbotAIConfig&) = delete;
+// Debug toggles
+	bool debugRatioScaling;
+	bool debugCommunityLevelCap;
 
-    PlayerbotAIConfig(PlayerbotAIConfig&&) = delete;
-    PlayerbotAIConfig& operator=(PlayerbotAIConfig&&) = delete;
 };
 
 #define sPlayerbotAIConfig PlayerbotAIConfig::instance()

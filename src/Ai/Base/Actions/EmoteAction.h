@@ -10,12 +10,12 @@
 
 #include "Action.h"
 #include "NamedObjectContext.h"
+#include "SharedDefines.h"
+
 
 class Player;
 class PlayerbotAI;
 class Unit;
-
-enum TextEmotes : uint32;
 
 class EmoteActionBase : public Action
 {

@@ -6,17 +6,26 @@
 #include "RandomPlayerbotMgr.h"
 
 #include <WorldSessionMgr.h>
-
+#include "unordered_set"
 #include <algorithm>
+#include <vector>
 #include <thread>
+#include <shared_mutex>
 #include <cstdlib>
+#include <cmath>
 #include <ctime>
 #include <iomanip>
 #include <random>
+#include <unordered_map>
+#include <chrono>
+#include <sstream>
 
+#include "AccountMgr.h"
 #include "AiFactory.h"
+#include "ArenaTeamMgr.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "CellImpl.h"
 #include "ChannelMgr.h"
 #include "DBCStores.h"
 #include "DBCStructure.h"
@@ -25,16 +34,20 @@
 #include "FleeManager.h"
 #include "FlightMasterCache.h"
 #include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
+#include "GuildMgr.h"
 #include "GuildTaskMgr.h"
 #include "LFGMgr.h"
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
 #include "NewRpgStrategy.h"
 #include "ObjectGuid.h"
+#include "ObjectAccessor.h"
 #include "PerfMonitor.h"
 #include "Player.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
+#include "PlayerbotCommandServer.h"
 #include "PlayerbotFactory.h"
 #include "Playerbots.h"
 #include "Position.h"
@@ -44,13 +57,8 @@
 #include "SharedDefines.h"
 #include "TravelMgr.h"
 #include "Unit.h"
+#include "UpdateTime.h"
 #include "World.h"
-#include "Cell.h"
-#include "GridNotifiers.h"
-// Required for Cell because of poor AC implementation
-#include "CellImpl.h"
-// Required for GridNotifiers because of poor AC implementation
-#include "GridNotifiersImpl.h"
 
 struct GuidClassRaceInfo
 {
@@ -101,7 +109,7 @@ static const std::unordered_map<CityId, std::vector<uint16>> cityToBankers = {
 // Quick lookup map: banker entry → location
 static std::unordered_map<uint32, WorldLocation> bankerEntryToLocation;
 
-void PrintStatsThread() { sRandomPlayerbotMgr.PrintStats(); }
+void PrintStatsThread() { sRandomPlayerbotMgr->PrintStats(); }
 
 void activatePrintStatsThread()
 {
@@ -109,7 +117,7 @@ void activatePrintStatsThread()
     t.detach();
 }
 
-void CheckBgQueueThread() { sRandomPlayerbotMgr.CheckBgQueue(); }
+void CheckBgQueueThread() { sRandomPlayerbotMgr->CheckBgQueue(); }
 
 void activateCheckBgQueueThread()
 {
@@ -117,7 +125,7 @@ void activateCheckBgQueueThread()
     t.detach();
 }
 
-void CheckLfgQueueThread() { sRandomPlayerbotMgr.CheckLfgQueue(); }
+void CheckLfgQueueThread() { sRandomPlayerbotMgr->CheckLfgQueue(); }
 
 void activateCheckLfgQueueThread()
 {
@@ -125,7 +133,7 @@ void activateCheckLfgQueueThread()
     t.detach();
 }
 
-void CheckPlayersThread() { sRandomPlayerbotMgr.CheckPlayers(); }
+void CheckPlayersThread() { sRandomPlayerbotMgr->CheckPlayers(); }
 
 void activateCheckPlayersThread()
 {
@@ -214,7 +222,240 @@ double botPIDImpl::calculate(double setpoint, double pv)
 
 botPIDImpl::~botPIDImpl() {}
 
-uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount() { return GetEventValue(0, "bot_count"); }
+RandomPlayerbotMgr::RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
+{
+    playersLevel = sPlayerbotAIConfig->randombotStartingLevel;
+
+    if (sPlayerbotAIConfig->enabled || sPlayerbotAIConfig->randomBotAutologin)
+    {
+        sPlayerbotCommandServer->Start();
+    }
+
+    BattlegroundData.clear();  // Clear here and here only.
+
+    // Cleanup on server start: orphaned pet data that's often left behind by bot pets that no longer exist in the DB
+    CharacterDatabase.Execute("DELETE FROM pet_aura WHERE guid NOT IN (SELECT id FROM character_pet)");
+    CharacterDatabase.Execute("DELETE FROM pet_spell WHERE guid NOT IN (SELECT id FROM character_pet)");
+    CharacterDatabase.Execute("DELETE FROM pet_spell_cooldown WHERE guid NOT IN (SELECT id FROM character_pet)");
+
+    for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
+    {
+        for (int queueType = BATTLEGROUND_QUEUE_AV; queueType < MAX_BATTLEGROUND_QUEUE_TYPES; ++queueType)
+        {
+            BattlegroundData[queueType][bracket] = BattlegroundInfo();
+        }
+    }
+    BgCheckTimer = 0;
+    LfgCheckTimer = 0;
+    PlayersCheckTimer = 0;
+}
+
+RandomPlayerbotMgr::~RandomPlayerbotMgr() {}
+
+uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
+{
+    uint32 count = 0;
+
+    for (auto const& sessionPair : sWorldSessionMgr->GetAllSessions())
+    {
+        WorldSession* session = sessionPair.second;
+        if (!session)
+            continue;
+
+        Player* player = session->GetPlayer();
+        if (!player || !player->IsInWorld())
+            continue;
+
+        // Exclude all bot accounts
+        if (sRandomPlayerbotMgr->IsRandomBot(player) || sRandomPlayerbotMgr->IsAddclassBot(player))
+		continue;
+
+
+        ++count;
+    }
+
+    return count;
+}
+
+void RandomPlayerbotMgr::SaveBotsPerPlayerToDB(float ratio) const
+{
+    PlayerbotsDatabase.Execute(
+        "UPDATE playerbots_server_settings SET bots_per_player = {} WHERE id = 1",
+        ratio);
+}
+
+float RandomPlayerbotMgr::LoadSavedBotsPerPlayerFromDB() const
+{
+    QueryResult result = PlayerbotsDatabase.Query(
+        "SELECT bots_per_player FROM playerbots_server_settings WHERE id = 1");
+
+    if (!result)
+        return 0.0f; // default: no scaling
+
+    Field* fields = result->Fetch();
+    float ratio = fields[0].Get<float>();
+
+    // Basic sanitation only.
+    // The *effective* upper cap should be driven by AiPlayerbot.MaxRandomBots,
+    // so server owners can raise the ratio without hitting hidden ceilings.
+    if (ratio < 0.0f)
+        ratio = 0.0f;
+
+    return ratio;
+}
+
+void RandomPlayerbotMgr::ForceBotCountRecheck()
+{
+    // These timers gate population changes
+    DelayLoginBotsTimer = 0;
+    PlayersCheckTimer = 0;
+
+    // IMPORTANT: allow GetBots() to refill/resize immediately
+    currentBots.clear();
+
+    // Invalidate cached target
+    SetEventValue(0, "bot_count", 0, 1);
+
+    // Optional: invalidate ratio cache too (if you convert it to members later)
+    ratioCachedAt = 0;
+    ratioCachedValue = 0.0f;
+}
+
+uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
+{
+    // ---------------------------------------------------------
+    // 1) Ratio-driven target (DB-driven ratio value)
+    // ---------------------------------------------------------
+    if (sPlayerbotAIConfig->usePlayerCountRatio)
+    {
+        // Cache DB reads so we don't hammer the DB
+        
+time_t now = time(nullptr);
+uint32 ttl = sPlayerbotAIConfig->ratioDbCacheSeconds ? sPlayerbotAIConfig->ratioDbCacheSeconds : 10;
+
+if (!ratioCachedAt || (now - ratioCachedAt) >= static_cast<time_t>(ttl))
+{
+    ratioCachedValue = LoadSavedBotsPerPlayerFromDB();
+    ratioCachedAt = now;
+
+    // Optional: mirror into config for visibility / consistency
+    sPlayerbotAIConfig->botsPerPlayer = ratioCachedValue;
+}
+
+uint32 realPlayers = GetOnlineRealPlayerCount(); // excludes rndbot accounts
+
+double ratio = static_cast<double>(ratioCachedValue);
+if (ratio < 0.0)
+            ratio = 0.0;
+
+        // Compute desired count with overflow-safe clamping.
+        // We do NOT impose a hidden "max bots per player" ceiling here.
+        // The only gameplay cap is AiPlayerbot.MaxRandomBots.
+        double desiredD = static_cast<double>(realPlayers) * ratio;
+        if (!std::isfinite(desiredD))
+            desiredD = static_cast<double>(sPlayerbotAIConfig->maxRandomBots);
+        uint32 hardMax = sPlayerbotAIConfig->maxRandomBots;
+        uint32 target = (desiredD >= static_cast<double>(hardMax))
+            ? hardMax
+            : static_cast<uint32>(std::ceil(desiredD));
+
+        // Clamp to configured hard bounds
+        if (target < sPlayerbotAIConfig->minRandomBots) target = sPlayerbotAIConfig->minRandomBots;
+        if (target > sPlayerbotAIConfig->maxRandomBots) target = sPlayerbotAIConfig->maxRandomBots;
+
+        // Keep an event value for visibility/consistency (short TTL)
+        SetEventValue(0, "bot_count", target, 30);
+
+        return target;
+    }
+
+    // ---------------------------------------------------------
+    // 2) Stock behavior: randomize "bot_count" over time if missing/out of range
+    // ---------------------------------------------------------
+    uint32 target = GetEventValue(0, "bot_count");
+
+    if (!target ||
+        target < sPlayerbotAIConfig->minRandomBots ||
+        target > sPlayerbotAIConfig->maxRandomBots)
+    {
+        target = urand(sPlayerbotAIConfig->minRandomBots, sPlayerbotAIConfig->maxRandomBots);
+
+        SetEventValue(0, "bot_count", target,
+            urand(sPlayerbotAIConfig->randomBotCountChangeMinInterval,
+                  sPlayerbotAIConfig->randomBotCountChangeMaxInterval));
+    }
+
+    return target;
+}
+
+uint32 RandomPlayerbotMgr::GetCommunityLevelCap()  // NOTE: GetCommunityLevelCap is called from the world update thread only.
+{
+    if (!sPlayerbotAIConfig->communityLevelCapEnabled)
+        return 0;
+
+    uint32 cacheSeconds = sPlayerbotAIConfig->communityLevelCapCacheSeconds ? sPlayerbotAIConfig->communityLevelCapCacheSeconds : 60;
+    time_t now = time(nullptr);
+
+    if (communityLevelCapCachedAt && (now - communityLevelCapCachedAt) < static_cast<time_t>(cacheSeconds))
+        return communityLevelCapCachedValue;
+
+    std::vector<uint32> levels;
+    levels.reserve(64);
+
+    std::shared_lock<std::shared_mutex> lock(*HashMapHolder<Player>::GetLock());
+    HashMapHolder<Player>::MapType const& m = ObjectAccessor::GetPlayers();
+
+    for (auto const& it : m)
+    {
+        Player* p = it.second;
+        if (!p || !p->IsInWorld())
+            continue;
+
+        // Exclude bots (random bots / addclass bots)
+        if (IsRandomBot(p) || IsAddclassBot(p))
+            continue;
+
+        // Exclude any AI-controlled non-real players just in case
+        if (PlayerbotAI* ai = GET_PLAYERBOT_AI(p))
+        {
+            if (!ai->IsRealPlayer())
+                continue;
+        }
+
+        levels.push_back(p->GetLevel());
+    }
+
+    if (levels.empty())
+    {
+        communityLevelCapCachedAt = now;
+        communityLevelCapCachedValue = 0;
+        return 0;
+    }
+
+    std::sort(levels.begin(), levels.end(), std::greater<uint32>());
+
+    uint32 topN = sPlayerbotAIConfig->communityLevelCapTopN ? sPlayerbotAIConfig->communityLevelCapTopN : 20;
+    if (topN > levels.size())
+        topN = static_cast<uint32>(levels.size());
+
+    uint64 sum = 0;
+    for (uint32 i = 0; i < topN; ++i)
+        sum += levels[i];
+
+    double avg = static_cast<double>(sum) / static_cast<double>(topN);
+    int32 cap = static_cast<int32>(std::llround(avg)) + sPlayerbotAIConfig->communityLevelCapBuffer;
+
+    int32 minLvl = std::max<int32>(sWorld->getIntConfig(CONFIG_START_PLAYER_LEVEL), sPlayerbotAIConfig->randomBotMinLevel);
+    int32 maxLvl = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+
+    if (cap < minLvl) cap = minLvl;
+    if (cap > maxLvl) cap = maxLvl;
+
+    communityLevelCapCachedAt = now;
+    communityLevelCapCachedValue = static_cast<uint32>(cap);
+    return communityLevelCapCachedValue;
+}
+
 
 void RandomPlayerbotMgr::LogPlayerLocation()
 {
@@ -222,9 +463,9 @@ void RandomPlayerbotMgr::LogPlayerLocation()
 
     try
     {
-        sPlayerbotAIConfig.openLog("player_location.csv", "w");
+        sPlayerbotAIConfig->openLog("player_location.csv", "w");
 
-        if (sPlayerbotAIConfig.randomBotAutologin)
+        if (sPlayerbotAIConfig->randomBotAutologin)
         {
             for (auto i : GetAllBots())
             {
@@ -233,7 +474,7 @@ void RandomPlayerbotMgr::LogPlayerLocation()
                     continue;
 
                 std::ostringstream out;
-                out << sPlayerbotAIConfig.GetTimestampStr() << "+00,";
+                out << sPlayerbotAIConfig->GetTimestampStr() << "+00,";
                 out << "RND"
                     << ",";
                 out << bot->GetName() << ",";
@@ -267,7 +508,7 @@ void RandomPlayerbotMgr::LogPlayerLocation()
                 out << (bot->IsInCombat() ? "combat" : "safe") << ",";
                 out << (bot->isDead() ? (bot->GetCorpse() ? "ghost" : "dead") : "alive");
 
-                sPlayerbotAIConfig.log("player_location.csv", out.str().c_str());
+                sPlayerbotAIConfig->log("player_location.csv", out.str().c_str());
             }
 
             for (auto i : GetPlayers())
@@ -277,7 +518,7 @@ void RandomPlayerbotMgr::LogPlayerLocation()
                     continue;
 
                 std::ostringstream out;
-                out << sPlayerbotAIConfig.GetTimestampStr() << "+00,";
+                out << sPlayerbotAIConfig->GetTimestampStr() << "+00,";
                 out << "PLR"
                     << ",";
                 out << bot->GetName() << ",";
@@ -311,7 +552,7 @@ void RandomPlayerbotMgr::LogPlayerLocation()
                 out << (bot->IsInCombat() ? "combat" : "safe") << ",";
                 out << (bot->isDead() ? (bot->GetCorpse() ? "ghost" : "dead") : "alive");
 
-                sPlayerbotAIConfig.log("player_location.csv", out.str().c_str());
+                sPlayerbotAIConfig->log("player_location.csv", out.str().c_str());
             }
         }
     }
@@ -328,12 +569,34 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     if (totalPmo)
         totalPmo->finish();
 
-    totalPmo = sPerfMonitor.start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
+    totalPmo = sPerfMonitor->start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
 
-    if (!sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
+    if (!sPlayerbotAIConfig->randomBotAutologin || !sPlayerbotAIConfig->enabled)
         return;
 
-    /*if (sPlayerbotAIConfig.enablePrototypePerformanceDiff)
+    // Enforce community level cap as a hard XP ceiling for randombots.
+    // This prevents bots from leveling past the current community cap even if they gain XP in the world.
+    if (sPlayerbotAIConfig->communityLevelCapEnabled)
+    {
+        uint32 cap = GetCommunityLevelCap();
+        if (cap > 0)
+        {
+            for (auto const& it : playerBots)
+            {
+                Player* bot = it.second;
+                if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+                    continue;
+
+                if (bot->GetLevel() >= cap)
+                    bot->SetFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+                else
+                    bot->RemoveFlag(PLAYER_FLAGS, PLAYER_FLAGS_NO_XP_GAIN);
+            }
+        }
+    }
+
+
+    /*if (sPlayerbotAIConfig->enablePrototypePerformanceDiff)
     {
         LOG_INFO("playerbots", "---------------------------------------");
         LOG_INFO("playerbots",
@@ -342,41 +605,129 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         ScaleBotActivity();
     }*/
 
-    uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
-    if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig.minRandomBots ||
-                                maxAllowedBotCount > sPlayerbotAIConfig.maxRandomBots))
-    {
-        maxAllowedBotCount = urand(sPlayerbotAIConfig.minRandomBots, sPlayerbotAIConfig.maxRandomBots);
-        SetEventValue(0, "bot_count", maxAllowedBotCount,
-                      urand(sPlayerbotAIConfig.randomBotCountChangeMinInterval,
-                            sPlayerbotAIConfig.randomBotCountChangeMaxInterval));
-    }
+    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+
+	// If ratio scaling is enabled, override target bot count dynamically
+	if (sPlayerbotAIConfig->usePlayerCountRatio)
+	{
+		uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+
+		// Optional: store into event cache so .playerbots rndbot stats can show it
+		// Keep TTL short so it tracks changes
+		SetEventValue(0, "bot_count_ratio_target", maxAllowedBotCount, 30);
+	}
+	else
+	{
+		// Stock behavior: randomize target bot_count over time if invalid/out of range
+		maxAllowedBotCount = GetEventValue(0, "bot_count");
+		
+		if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig->minRandomBots ||
+									maxAllowedBotCount > sPlayerbotAIConfig->maxRandomBots))
+		{
+			maxAllowedBotCount = urand(sPlayerbotAIConfig->minRandomBots, sPlayerbotAIConfig->maxRandomBots);
+			SetEventValue(0, "bot_count", maxAllowedBotCount,
+						urand(sPlayerbotAIConfig->randomBotCountChangeMinInterval,
+								sPlayerbotAIConfig->randomBotCountChangeMaxInterval));
+		}
+	}
 
     GetBots();
     std::list<uint32> availableBots = currentBots;
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
 
-    uint32 onlineBotFocus = 75;
-    if (onlineBotCount < (uint32)(sPlayerbotAIConfig.minRandomBots * 90 / 100))
-        onlineBotFocus = 25;
+// ---------------------------------------------------------
+// Seed replacement: keep open-world population steady even when
+// bots are "away" in BG/Arena or dungeon/raid instances.
+// These extra bots are temporary: when away-bots return, the
+// normal shrink logic will bring totals back down.
+// ---------------------------------------------------------
+if (sPlayerbotAIConfig->enabled) // sanity
+{
+    uint32 openWorldBotCount = 0;
+    uint32 awayBotCount = 0;
 
+    for (auto const& kv : playerBots)
+    {
+        Player* bot = kv.second;
+        if (!bot || !bot->IsInWorld())
+            continue;
+
+        Map* map = bot->GetMap();
+        if (map && (map->IsBattlegroundOrArena() || map->IsDungeon() || map->IsRaid()))
+        {
+            ++awayBotCount;
+            continue;
+        }
+
+        ++openWorldBotCount;
+    }
+
+    // We aim for at least `maxAllowedBotCount` bots in the open world.
+    // If some bots are away, temporarily raise the overall target so the
+    // world still feels populated.
+    if (openWorldBotCount < maxAllowedBotCount)
+    {
+        uint32 deficit = maxAllowedBotCount - openWorldBotCount;
+
+        // Hard safety cap to prevent runaway growth if something goes wrong.
+        // This is intentionally conservative and can be tuned later.
+        uint32 const maxExtraSeed = 50;
+        if (deficit > maxExtraSeed)
+            deficit = maxExtraSeed;
+
+        maxAllowedBotCount += deficit;
+
+        if (sPlayerbotAIConfig->debugRatioScaling)
+        {
+            LOG_INFO("playerbots",
+                "[SeedReplacement] openWorld={} away={} baseTarget={} extraSeed={} newTarget={}",
+                openWorldBotCount, awayBotCount, (maxAllowedBotCount - deficit), deficit, maxAllowedBotCount);
+        }
+    }
+}
+
+    uint32 onlineBotFocus = 75;
+    // When we need to *grow* the bot population, prioritize logins over updates.
+    // Shrink remains slower / more conservative by keeping a higher focus on updates.
+    if (onlineBotCount < maxAllowedBotCount)
+        onlineBotFocus = 25;
+    // If we're far below target (e.g. server start), grow even faster.
+    if (onlineBotCount + sPlayerbotAIConfig->randomBotsPerInterval < maxAllowedBotCount)
+        onlineBotFocus = 10;
     // only keep updating till initializing time has completed,
     // which prevents unneeded expensive GameTime calls.
     if (_isBotInitializing)
     {
-        _isBotInitializing = GameTime::GetUptime().count() < sPlayerbotAIConfig.maxRandomBots * (0.11 + 0.4);
+        _isBotInitializing = GameTime::GetUptime().count() < sPlayerbotAIConfig->maxRandomBots * (0.11 + 0.4);
     }
 
-    uint32 updateIntervalTurboBoost = _isBotInitializing ? 1 : sPlayerbotAIConfig.randomBotUpdateInterval;
+    uint32 updateIntervalTurboBoost = _isBotInitializing ? 1 : sPlayerbotAIConfig->randomBotUpdateInterval;
     SetNextCheckDelay(updateIntervalTurboBoost * (onlineBotFocus + 25) * 10);
 
-    PerfMonitorOperation* pmo = sPerfMonitor.start(
+    PerfMonitorOperation* pmo = sPerfMonitor->start(
         PERF_MON_TOTAL,
         onlineBotCount < maxAllowedBotCount ? "RandomPlayerbotMgr::Login" : "RandomPlayerbotMgr::UpdateAIInternal");
 
     bool realPlayerIsLogged = false;
-    if (sPlayerbotAIConfig.disabledWithoutRealPlayer)
+    bool allowLoginBotsNow = true;
+
+    // Ratio scaling uses a lightweight cooldown (event cache) so growth can react faster than shrink,
+    // without introducing new persistent state.
+    bool ratioGrowOk = true;
+    bool ratioShrinkOk = true;
+    uint32 ratioGrowSeconds   = GetTuningOrDefault("ratio_grow_s",   sPlayerbotAIConfig->ratioGrowCheckSeconds);
+	uint32 ratioShrinkSeconds = GetTuningOrDefault("ratio_shrink_s", sPlayerbotAIConfig->ratioShrinkCheckSeconds);
+	uint32 ratioMaxShrink     = GetTuningOrDefault("ratio_max_shrink", sPlayerbotAIConfig->ratioMaxShrinkPerCheck);
+
+
+    if (sPlayerbotAIConfig->usePlayerCountRatio)
+    {
+        ratioGrowOk = (GetEventValue(0, "ratio_grow_cd") == 0);
+        ratioShrinkOk = (GetEventValue(0, "ratio_shrink_cd") == 0);
+    }
+
+    if (sPlayerbotAIConfig->disabledWithoutRealPlayer)
     {
         if (sWorldSessionMgr->GetActiveAndQueuedSessionCount() > 0)
         {
@@ -385,7 +736,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (DelayLoginBotsTimer == 0)
             {
-                DelayLoginBotsTimer = time(nullptr) + sPlayerbotAIConfig.disabledWithoutRealPlayerLoginDelay;
+                DelayLoginBotsTimer = time(nullptr) + sPlayerbotAIConfig->disabledWithoutRealPlayerLoginDelay;
             }
         }
         else
@@ -396,16 +747,25 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
 
             if (RealPlayerLastTimeSeen != 0 && onlineBotCount > 0 &&
-                time(nullptr) > RealPlayerLastTimeSeen + sPlayerbotAIConfig.disabledWithoutRealPlayerLogoutDelay)
+                time(nullptr) > RealPlayerLastTimeSeen + sPlayerbotAIConfig->disabledWithoutRealPlayerLogoutDelay)
             {
                 LogoutAllBots();
                 LOG_INFO("playerbots", "Logout all bots due no real player session.");
             }
         }
 
-        if (availableBotCount < maxAllowedBotCount &&
-            (sPlayerbotAIConfig.disabledWithoutRealPlayer == false ||
-             (realPlayerIsLogged && DelayLoginBotsTimer != 0 && time(nullptr) >= DelayLoginBotsTimer)))
+        allowLoginBotsNow = (sPlayerbotAIConfig->disabledWithoutRealPlayer == false);
+
+        // If bots are disabled until a real player is online, normally we wait for the configured delay.
+        // However, when ratio scaling is enabled and we're under target, we bypass the delay so population can grow promptly.
+        if (!allowLoginBotsNow)
+        {
+            allowLoginBotsNow = realPlayerIsLogged &&
+                (DelayLoginBotsTimer == 0 || time(nullptr) >= DelayLoginBotsTimer ||
+                 (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount < maxAllowedBotCount));
+        }
+
+        if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
         {
             AddRandomBots();
         }
@@ -415,25 +775,25 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         AddRandomBots();
     }
 
-    if (sPlayerbotAIConfig.syncLevelWithPlayers && !players.empty())
+    if (sPlayerbotAIConfig->syncLevelWithPlayers && !players.empty())
     {
         if (time(nullptr) > (PlayersCheckTimer + 60))
-            sRandomPlayerbotMgr.CheckPlayers();
+            sRandomPlayerbotMgr->CheckPlayers();
     }
 
-    if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
+    if (sPlayerbotAIConfig->randomBotJoinBG /* && !players.empty()*/)
     {
         if (time(nullptr) > (BgCheckTimer + 35))
-            sRandomPlayerbotMgr.CheckBgQueue();
+            sRandomPlayerbotMgr->CheckBgQueue();
     }
 
-    if (sPlayerbotAIConfig.randomBotJoinLfg /* && !players.empty()*/)
+    if (sPlayerbotAIConfig->randomBotJoinLfg /* && !players.empty()*/)
     {
         if (time(nullptr) > (LfgCheckTimer + 30))
-            sRandomPlayerbotMgr.CheckLfgQueue();
+            sRandomPlayerbotMgr->CheckLfgQueue();
     }
 
-    if (sPlayerbotAIConfig.randomBotAutologin && time(nullptr) > (printStatsTimer + 300))
+    if (sPlayerbotAIConfig->randomBotAutologin && time(nullptr) > (printStatsTimer + 300))
     {
         if (!printStatsTimer)
         {
@@ -441,18 +801,140 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         }
         else
         {
-            sRandomPlayerbotMgr.PrintStats();
+            sRandomPlayerbotMgr->PrintStats();
             // activatePrintStatsThread();
         }
     }
-    uint32 updateBots = sPlayerbotAIConfig.randomBotsPerInterval * onlineBotFocus / 100;
+    // Ratio-based shrink: mark a few bots for logout when we're above target.
+    // This keeps the stock "in-world time" mechanism but allows the population to converge.
+    if (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount > maxAllowedBotCount && ratioShrinkOk)
+    {
+        uint32 over = onlineBotCount - maxAllowedBotCount;
+        uint32 toMark = std::min<uint32>(over, ratioMaxShrink);
+
+// Build a prioritized logout list:
+//  - NEVER logout bots that are: in BG/arena, in BG queue, in dungeons/raids, or grouped with real players.
+//  - For the rest, prefer logging out "least disruptive" bots first.
+auto isGroupWithRealPlayer = [this](Player* bot) -> bool
+{
+    Group* group = bot ? bot->GetGroup() : nullptr;
+    if (!group)
+        return false;
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member)
+            continue;
+
+        // Any non-randombot member protects the whole group from shrink-logout.
+        if (!IsRandomBot(member))
+            return true;
+    }
+
+    return false;
+};
+
+auto isProtectedFromLogout = [&](Player* bot) -> bool
+{
+    if (!bot)
+        return true;
+
+    if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+        return true;
+
+    Map* map = bot->GetMap();
+    if (map && (map->IsDungeon() || map->IsRaid()))
+        return true;
+
+    if (isGroupWithRealPlayer(bot))
+        return true;
+
+    return false;
+};
+
+auto getLogoutPriority = [&](Player* bot) -> int
+{
+    // Lower number = logout sooner.
+    if (!bot || !bot->IsInWorld())
+        return 0;
+
+    if (bot->IsBeingTeleported() || bot->IsInFlight())
+        return 10;
+
+    if (bot->IsInCombat())
+        return 80;
+
+    if (bot->GetGroup())
+        return 60;
+
+    return 20;
+};
+
+	// Choose logout candidates by priority (lowest priority goes first).
+	uint32 toLogout = toMark;
+	uint32 loggedOut = 0;
+	std::vector<std::pair<ObjectGuid, int>> candidates;
+candidates.reserve(playerBots.size());
+
+for (auto const& kv : playerBots)
+{
+	    ObjectGuid botGuid = kv.first;
+	    Player* bot = kv.second;
+
+    if (isProtectedFromLogout(bot))
+        continue;
+
+	    candidates.emplace_back(botGuid, getLogoutPriority(bot));
+}
+
+std::sort(candidates.begin(), candidates.end(), [](auto const& a, auto const& b)
+{
+    if (a.second != b.second)
+        return a.second < b.second;
+	    return a.first.GetCounter() < b.first.GetCounter();
+});
+
+for (auto const& c : candidates)
+{
+    if (loggedOut >= toLogout)
+        break;
+
+	    // IMPORTANT: The stock randombot system uses per-bot event values ("add")
+	    // plus the currentBots list to decide whether a bot should stay online.
+	    // If we only call LogoutPlayerBot() here, the bot may immediately be re-added
+	    // on the next tick because its "add" event is still valid and its id is still
+	    // present in currentBots.
+	    //
+	    // To ensure shrinking actually sticks, invalidate the bot's "add" event and
+	    // remove it from currentBots before logging it out.
+	    ObjectGuid botGuid = c.first;
+	    uint32 botId = botGuid.GetCounter();
+	    SetEventValue(botId, "add", 0, 0);
+	    currentBots.remove(botId);
+	    LogoutPlayerBot(botGuid);
+    ++loggedOut;
+}
+	
+	    if (loggedOut > 0)
+	        SetEventValue(0, "ratio_shrink_cd", 1, ratioShrinkSeconds);
+    }
+
+    // Allow faster grow when ratio scaling is enabled and we're below target.
+    uint32 intervalCap = sPlayerbotAIConfig->randomBotsPerInterval;
+    if (sPlayerbotAIConfig->usePlayerCountRatio && onlineBotCount < maxAllowedBotCount)
+        intervalCap *= (onlineBotCount == 0 ? 5 : 2);
+
+    uint32 updateBots = intervalCap * onlineBotFocus / 100;
     uint32 maxNewBots =
-        onlineBotCount < maxAllowedBotCount &&
-                (sPlayerbotAIConfig.disabledWithoutRealPlayer == false ||
-                 (realPlayerIsLogged && DelayLoginBotsTimer != 0 && time(nullptr) >= DelayLoginBotsTimer))
-            ? maxAllowedBotCount - onlineBotCount
+        (onlineBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
+            ? std::min<uint32>(maxAllowedBotCount - onlineBotCount, intervalCap)
             : 0;
-    uint32 loginBots = std::min(sPlayerbotAIConfig.randomBotsPerInterval - updateBots, maxNewBots);
+    uint32 loginBots = std::min(intervalCap > updateBots ? intervalCap - updateBots : 0u, maxNewBots);
+
+    // Rate-limit target growth checks (shrink is already rate-limited above).
+    if (sPlayerbotAIConfig->usePlayerCountRatio && maxNewBots > 0)
+        SetEventValue(0, "ratio_grow_cd", 1, ratioGrowSeconds);
 
     if (!availableBots.empty())
     {
@@ -500,7 +982,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     if (pmo)
         pmo->finish();
 
-    if (sPlayerbotAIConfig.hasLog("player_location.csv"))
+    if (sPlayerbotAIConfig->hasLog("player_location.csv"))
     {
         LogPlayerLocation();
     }
@@ -515,8 +997,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 //
 //     //    % increase/decrease                   wanted diff                                         , avg diff
 //     float activityPercentageMod = pid.calculate(
-//         sRandomPlayerbotMgr.GetPlayers().empty() ? sPlayerbotAIConfig.diffEmpty :
-//         sPlayerbotAIConfig.diffWithPlayer, sWorldUpdateTime.GetAverageUpdateTime());
+//         sRandomPlayerbotMgr->GetPlayers().empty() ? sPlayerbotAIConfig->diffEmpty :
+//         sPlayerbotAIConfig->diffWithPlayer, sWorldUpdateTime.GetAverageUpdateTime());
 //
 //     activityPercentage = activityPercentageMod + 50;
 //
@@ -542,7 +1024,7 @@ void RandomPlayerbotMgr::AssignAccountTypes()
     std::vector<uint32> allRandomBotAccounts;
     QueryResult allAccounts = LoginDatabase.Query(
         "SELECT id FROM account WHERE username LIKE '{}%%' ORDER BY id",
-        sPlayerbotAIConfig.randomBotAccountPrefix.c_str());
+        sPlayerbotAIConfig->randomBotAccountPrefix.c_str());
 
     if (allAccounts)
     {
@@ -555,6 +1037,58 @@ void RandomPlayerbotMgr::AssignAccountTypes()
     }
 
     LOG_INFO("playerbots", "Found {} total randombot accounts in database", allRandomBotAccounts.size());
+
+// If the pool is empty or below desired count (e.g. after an admin wipe), auto-provision missing accounts.
+// This prevents the server from getting stuck unable to log bots in.
+uint32 desiredTotalAccounts = sPlayerbotAIConfig->randomBotAccountCount;
+
+if (desiredTotalAccounts == 0)
+{
+    // Derive a sensible minimum if not configured
+    int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
+    int maxBots = static_cast<int>(sPlayerbotAIConfig->maxRandomBots);
+    if (sPlayerbotAIConfig->enablePeriodicOnlineOffline)
+        maxBots = static_cast<int>(maxBots * sPlayerbotAIConfig->periodicOnlineOfflineRatio);
+
+    uint32 neededRnd = (maxBots > 0) ? static_cast<uint32>((maxBots + divisor - 1) / divisor) : 0;
+    uint32 neededAdd = sPlayerbotAIConfig->addClassAccountPoolSize;
+    desiredTotalAccounts = std::max<uint32>(neededRnd + neededAdd, 1);
+}
+
+if (allRandomBotAccounts.size() < desiredTotalAccounts)
+{
+    uint32 toCreate = desiredTotalAccounts - static_cast<uint32>(allRandomBotAccounts.size());
+    LOG_INFO("playerbots", "Auto-creating {} randombot accounts to reach {} total...", toCreate, desiredTotalAccounts);
+
+    // Create sequential usernames (prefix + 5 digits). Password defaults to username.
+    for (uint32 i = 0; i < toCreate; ++i)
+    {
+        uint32 num = static_cast<uint32>(allRandomBotAccounts.size()) + 1 + i;
+        std::ostringstream uname;
+        uname << sPlayerbotAIConfig->randomBotAccountPrefix << std::setfill('0') << std::setw(5) << num;
+
+        std::string username = uname.str();
+        std::string password = username;
+
+        AccountOpResult res = AccountMgr::CreateAccount(username, password, "");
+        if (res == AccountOpResult::AOR_OK)
+        {
+            QueryResult r = LoginDatabase.Query("SELECT id FROM account WHERE username = '{}'", username);
+            if (r)
+            {
+                Field* f = r->Fetch();
+                allRandomBotAccounts.push_back(f[0].Get<uint32>());
+            }
+        }
+        else
+        {
+            LOG_WARN("playerbots", "Failed to create randombot account {} (result={})", username, uint32(res));
+        }
+    }
+
+    LOG_INFO("playerbots", "Randombot accounts after auto-create: {}", allRandomBotAccounts.size());
+}
+
 
     // Check existing assignments
     QueryResult existingAssignments = PlayerbotsDatabase.Query("SELECT account_id, account_type FROM playerbots_account_type");
@@ -583,15 +1117,15 @@ void RandomPlayerbotMgr::AssignAccountTypes()
 
     // Calculate needed RNDbot accounts
     uint32 neededRndBotAccounts = 0;
-    if (sPlayerbotAIConfig.maxRandomBots > 0)
+    if (sPlayerbotAIConfig->maxRandomBots > 0)
     {
         int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-        int maxBots = sPlayerbotAIConfig.maxRandomBots;
+        int maxBots = sPlayerbotAIConfig->maxRandomBots;
 
         // Take periodic online-offline into account
-        if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+        if (sPlayerbotAIConfig->enablePeriodicOnlineOffline)
         {
-            maxBots *= sPlayerbotAIConfig.periodicOnlineOfflineRatio;
+            maxBots *= sPlayerbotAIConfig->periodicOnlineOfflineRatio;
         }
 
         // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
@@ -632,7 +1166,7 @@ void RandomPlayerbotMgr::AssignAccountTypes()
     }
 
     // Assign AddClass accounts from highest position if needed
-    uint32 neededAddClassAccounts = sPlayerbotAIConfig.addClassAccountPoolSize;
+    uint32 neededAddClassAccounts = sPlayerbotAIConfig->addClassAccountPoolSize;
 
     if (existingAddClassAccounts < neededAddClassAccounts)
     {
@@ -681,23 +1215,23 @@ bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
 // Phase 4 is reached if and only if the value of RandomBotAccountCount is lower than it should.
 uint32 RandomPlayerbotMgr::AddRandomBots()
 {
-    uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
+    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
     static time_t missingBotsTimer = 0;
 
     if (currentBots.size() < maxAllowedBotCount)
     {
         // Calculate how many bots to add
         maxAllowedBotCount -= currentBots.size();
-        maxAllowedBotCount = std::min(sPlayerbotAIConfig.randomBotsPerInterval, maxAllowedBotCount);
+        maxAllowedBotCount = std::min(sPlayerbotAIConfig->randomBotsPerInterval, maxAllowedBotCount);
 
         // Single RNG instance for all shuffling
         std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
 
         // Only need to track the Alliance count, as it's in Phase 1
-        uint32 totalRatio = sPlayerbotAIConfig.randomBotAllianceRatio + sPlayerbotAIConfig.randomBotHordeRatio;
-        uint32 allowedAllianceCount = maxAllowedBotCount * (sPlayerbotAIConfig.randomBotAllianceRatio) / totalRatio;
+        uint32 totalRatio = sPlayerbotAIConfig->randomBotAllianceRatio + sPlayerbotAIConfig->randomBotHordeRatio;
+        uint32 allowedAllianceCount = maxAllowedBotCount * (sPlayerbotAIConfig->randomBotAllianceRatio) / totalRatio;
 
-        uint32 remainder = maxAllowedBotCount * (sPlayerbotAIConfig.randomBotAllianceRatio) % totalRatio;
+        uint32 remainder = maxAllowedBotCount * (sPlayerbotAIConfig->randomBotAllianceRatio) % totalRatio;
 
         // Fix #1082: Randomly add one based on reminder
         if (remainder && urand(1, totalRatio) <= remainder)
@@ -707,13 +1241,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         // Determine which accounts to use based on EnablePeriodicOnlineOffline
         std::vector<uint32> accountsToUse;
-        if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+        if (sPlayerbotAIConfig->enablePeriodicOnlineOffline)
         {
 
             // Calculate how many accounts can be used
             // With enablePeriodicOnlineOffline, don't use all of rndBotTypeAccounts right away. Fraction results are rounded up
-            uint32 accountsToUseCount = (rndBotTypeAccounts.size() + sPlayerbotAIConfig.periodicOnlineOfflineRatio - 1)
-                                        / sPlayerbotAIConfig.periodicOnlineOfflineRatio;
+            uint32 accountsToUseCount = (rndBotTypeAccounts.size() + sPlayerbotAIConfig->periodicOnlineOfflineRatio - 1)
+                                        / sPlayerbotAIConfig->periodicOnlineOfflineRatio;
 
             // Randomly select accounts
             std::vector<uint32> shuffledAccounts = rndBotTypeAccounts;
@@ -783,15 +1317,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
-                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT))
+                (sPlayerbotAIConfig->disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT))
             {
                 return false;
             }
 
-            uint32 add_time = sPlayerbotAIConfig.enablePeriodicOnlineOffline
-                                ? urand(sPlayerbotAIConfig.minRandomBotInWorldTime,
-                                        sPlayerbotAIConfig.maxRandomBotInWorldTime)
-                                : sPlayerbotAIConfig.permanentlyInWorldTime;
+            uint32 add_time = sPlayerbotAIConfig->enablePeriodicOnlineOffline
+                                ? urand(sPlayerbotAIConfig->minRandomBotInWorldTime,
+                                        sPlayerbotAIConfig->maxRandomBotInWorldTime)
+                                : sPlayerbotAIConfig->permanentlyInWorldTime;
 
             SetEventValue(charInfo.guid, "add", 1, add_time);
             SetEventValue(charInfo.guid, "logout", 0, 0);
@@ -1156,24 +1690,24 @@ void RandomPlayerbotMgr::CheckBgQueue()
     }
 
     // If enabled, wait for all bots to have logged in before queueing for Arena's / BG's
-    if (sPlayerbotAIConfig.randomBotAutoJoinBG && playerBots.size() >= GetMaxAllowedBotCount())
+    if (sPlayerbotAIConfig->randomBotAutoJoinBG && playerBots.size() >= GetMaxAllowedBotCount())
     {
-        uint32 randomBotAutoJoinArenaBracket = sPlayerbotAIConfig.randomBotAutoJoinArenaBracket;
-        uint32 randomBotAutoJoinBGRatedArena2v2Count = sPlayerbotAIConfig.randomBotAutoJoinBGRatedArena2v2Count;
-        uint32 randomBotAutoJoinBGRatedArena3v3Count = sPlayerbotAIConfig.randomBotAutoJoinBGRatedArena3v3Count;
-        uint32 randomBotAutoJoinBGRatedArena5v5Count = sPlayerbotAIConfig.randomBotAutoJoinBGRatedArena5v5Count;
+        uint32 randomBotAutoJoinArenaBracket = sPlayerbotAIConfig->randomBotAutoJoinArenaBracket;
+        uint32 randomBotAutoJoinBGRatedArena2v2Count = sPlayerbotAIConfig->randomBotAutoJoinBGRatedArena2v2Count;
+        uint32 randomBotAutoJoinBGRatedArena3v3Count = sPlayerbotAIConfig->randomBotAutoJoinBGRatedArena3v3Count;
+        uint32 randomBotAutoJoinBGRatedArena5v5Count = sPlayerbotAIConfig->randomBotAutoJoinBGRatedArena5v5Count;
 
-        uint32 randomBotAutoJoinBGICCount = sPlayerbotAIConfig.randomBotAutoJoinBGICCount;
-        uint32 randomBotAutoJoinBGEYCount = sPlayerbotAIConfig.randomBotAutoJoinBGEYCount;
-        uint32 randomBotAutoJoinBGAVCount = sPlayerbotAIConfig.randomBotAutoJoinBGAVCount;
-        uint32 randomBotAutoJoinBGABCount = sPlayerbotAIConfig.randomBotAutoJoinBGABCount;
-        uint32 randomBotAutoJoinBGWSCount = sPlayerbotAIConfig.randomBotAutoJoinBGWSCount;
+        uint32 randomBotAutoJoinBGICCount = sPlayerbotAIConfig->randomBotAutoJoinBGICCount;
+        uint32 randomBotAutoJoinBGEYCount = sPlayerbotAIConfig->randomBotAutoJoinBGEYCount;
+        uint32 randomBotAutoJoinBGAVCount = sPlayerbotAIConfig->randomBotAutoJoinBGAVCount;
+        uint32 randomBotAutoJoinBGABCount = sPlayerbotAIConfig->randomBotAutoJoinBGABCount;
+        uint32 randomBotAutoJoinBGWSCount = sPlayerbotAIConfig->randomBotAutoJoinBGWSCount;
 
-        std::vector<uint32> icBrackets = parseBrackets(sPlayerbotAIConfig.randomBotAutoJoinICBrackets);
-        std::vector<uint32> eyBrackets = parseBrackets(sPlayerbotAIConfig.randomBotAutoJoinEYBrackets);
-        std::vector<uint32> avBrackets = parseBrackets(sPlayerbotAIConfig.randomBotAutoJoinAVBrackets);
-        std::vector<uint32> abBrackets = parseBrackets(sPlayerbotAIConfig.randomBotAutoJoinABBrackets);
-        std::vector<uint32> wsBrackets = parseBrackets(sPlayerbotAIConfig.randomBotAutoJoinWSBrackets);
+        std::vector<uint32> icBrackets = parseBrackets(sPlayerbotAIConfig->randomBotAutoJoinICBrackets);
+        std::vector<uint32> eyBrackets = parseBrackets(sPlayerbotAIConfig->randomBotAutoJoinEYBrackets);
+        std::vector<uint32> avBrackets = parseBrackets(sPlayerbotAIConfig->randomBotAutoJoinAVBrackets);
+        std::vector<uint32> abBrackets = parseBrackets(sPlayerbotAIConfig->randomBotAutoJoinABBrackets);
+        std::vector<uint32> wsBrackets = parseBrackets(sPlayerbotAIConfig->randomBotAutoJoinWSBrackets);
 
         // Check both bgInstanceCount / bgInstances.size
         // to help counter against potentional inconsistencies
@@ -1338,7 +1872,7 @@ void RandomPlayerbotMgr::CheckPlayers()
     LOG_INFO("playerbots", "Checking Players...");
 
     if (!playersLevel)
-        playersLevel = sPlayerbotAIConfig.randombotStartingLevel;
+        playersLevel = sPlayerbotAIConfig->randombotStartingLevel;
 
     for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
     {
@@ -1362,7 +1896,7 @@ void RandomPlayerbotMgr::ScheduleRandomize(uint32 bot, uint32 time) { SetEventVa
 void RandomPlayerbotMgr::ScheduleTeleport(uint32 bot, uint32 time)
 {
     if (!time)
-        time = 60 + urand(sPlayerbotAIConfig.randomBotUpdateInterval, sPlayerbotAIConfig.randomBotUpdateInterval * 3);
+        time = 60 + urand(sPlayerbotAIConfig->randomBotUpdateInterval, sPlayerbotAIConfig->randomBotUpdateInterval * 3);
 
     SetEventValue(bot, "teleport", 1, time);
 }
@@ -1370,8 +1904,8 @@ void RandomPlayerbotMgr::ScheduleTeleport(uint32 bot, uint32 time)
 void RandomPlayerbotMgr::ScheduleChangeStrategy(uint32 bot, uint32 time)
 {
     if (!time)
-        time = urand(sPlayerbotAIConfig.minRandomBotChangeStrategyTime,
-                     sPlayerbotAIConfig.maxRandomBotChangeStrategyTime);
+        time = urand(sPlayerbotAIConfig->minRandomBotChangeStrategyTime,
+                     sPlayerbotAIConfig->maxRandomBotChangeStrategyTime);
 
     SetEventValue(bot, "change_strategy", 1, time);
 }
@@ -1409,7 +1943,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         AddPlayerBot(botGUID, 0);
         randomTime = urand(1, 2);
 
-        uint32 randomBotUpdateInterval = _isBotInitializing ? 1 : sPlayerbotAIConfig.randomBotUpdateInterval;
+        uint32 randomBotUpdateInterval = _isBotInitializing ? 1 : sPlayerbotAIConfig->randomBotUpdateInterval;
         randomTime = urand(std::max(5, static_cast<int>(randomBotUpdateInterval * 0.5)),
                            std::max(12, static_cast<int>(randomBotUpdateInterval * 2)));
         SetEventValue(bot, "update", 1, randomTime);
@@ -1446,7 +1980,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         if (botAI)
         {
             // botAI->GetAiObjectContext()->GetValue<bool>("random bot update")->Set(true);
-            if (!sRandomPlayerbotMgr.IsRandomBot(player))
+            if (!sRandomPlayerbotMgr->IsRandomBot(player))
                 update = false;
 
             if (player->GetGroup() && botAI->GetGroupLeader())
@@ -1458,14 +1992,14 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
                 }
             }
 
-            // if (botAI->HasPlayerNearby(sPlayerbotAIConfig.grindDistance))
+            // if (botAI->HasPlayerNearby(sPlayerbotAIConfig->grindDistance))
             //     update = false;
         }
 
         if (update)
             ProcessBot(player);
 
-        randomTime = urand(sPlayerbotAIConfig.minRandomBotReviveTime, sPlayerbotAIConfig.maxRandomBotReviveTime);
+        randomTime = urand(sPlayerbotAIConfig->minRandomBotReviveTime, sPlayerbotAIConfig->maxRandomBotReviveTime);
         SetEventValue(bot, "update", 1, randomTime);
 
         return true;
@@ -1479,7 +2013,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         LogoutPlayerBot(botGUID);
         currentBots.remove(bot);
         SetEventValue(bot, "logout", 1,
-                      urand(sPlayerbotAIConfig.minRandomBotInWorldTime, sPlayerbotAIConfig.maxRandomBotInWorldTime));
+                      urand(sPlayerbotAIConfig->minRandomBotInWorldTime, sPlayerbotAIConfig->maxRandomBotInWorldTime));
         return true;
     }
 
@@ -1507,10 +2041,10 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         if (!GetEventValue(botId, "dead"))
         {
             uint32 randomTime =
-                urand(sPlayerbotAIConfig.minRandomBotReviveTime, sPlayerbotAIConfig.maxRandomBotReviveTime);
+                urand(sPlayerbotAIConfig->minRandomBotReviveTime, sPlayerbotAIConfig->maxRandomBotReviveTime);
             LOG_DEBUG("playerbots", "Mark bot {} as dead, will be revived in {}s.", bot->GetName().c_str(),
                       randomTime);
-            SetEventValue(botId, "dead", 1, sPlayerbotAIConfig.maxRandomBotInWorldTime);
+            SetEventValue(botId, "dead", 1, sPlayerbotAIConfig->maxRandomBotInWorldTime);
             SetEventValue(botId, "revive", 1, randomTime);
             return false;
         }
@@ -1560,11 +2094,11 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             //         if (guild->GetLeaderGUID() == player->GetGUID())
             //         {
             //             for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
-            //                 GuildTaskMgr::instance().Update(*i, player);
+            //                 sGuildTaskMgr->Update(*i, player);
             //         }
 
             //         uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(guild->GetLeaderGUID());
-            //         if (!sPlayerbotAIConfig.IsInRandomAccountList(accountId))
+            //         if (!sPlayerbotAIConfig->IsInRandomAccountList(accountId))
             //         {
             //             uint8 rank = player->GetRank();
             //             randomiser = rank < 4 ? false : true;
@@ -1577,7 +2111,7 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             LOG_DEBUG("playerbots", "Bot #{} {}:{} <{}>: randomized", botId,
                       bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName());
             uint32 randomTime =
-                urand(sPlayerbotAIConfig.minRandomBotRandomizeTime, sPlayerbotAIConfig.maxRandomBotRandomizeTime);
+                urand(sPlayerbotAIConfig->minRandomBotRandomizeTime, sPlayerbotAIConfig->maxRandomBotRandomizeTime);
             ScheduleRandomize(botId, randomTime);
             return true;
         }
@@ -1596,8 +2130,8 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             LOG_DEBUG("playerbots", "Bot #{} <{}>: teleport for level and refresh", botId, bot->GetName());
             Refresh(bot);
             RandomTeleportForLevel(bot);
-            uint32 time = urand(sPlayerbotAIConfig.minRandomBotTeleportInterval,
-                                sPlayerbotAIConfig.maxRandomBotTeleportInterval);
+            uint32 time = urand(sPlayerbotAIConfig->minRandomBotTeleportInterval,
+                                sPlayerbotAIConfig->maxRandomBotTeleportInterval);
             ScheduleTeleport(botId, time);
             return true;
         }
@@ -1649,7 +2183,7 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
             return;
     }
 
-    // if (sPlayerbotAIConfig.randomBotRpgChance < 0)
+    // if (sPlayerbotAIConfig->randomBotRpgChance < 0)
     //     return;
 
     if (locs.empty())
@@ -1666,9 +2200,9 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
                                [bot](WorldPosition l)
                                {
                                    std::vector<uint32>::iterator i =
-                                       find(sPlayerbotAIConfig.randomBotMaps.begin(),
-                                            sPlayerbotAIConfig.randomBotMaps.end(), l.getMapId());
-                                   return i == sPlayerbotAIConfig.randomBotMaps.end();
+                                       find(sPlayerbotAIConfig->randomBotMaps.begin(),
+                                            sPlayerbotAIConfig->randomBotMaps.end(), l.getMapId());
+                                   return i == sPlayerbotAIConfig->randomBotMaps.end();
                                }),
                 tlocs.end());
     if (tlocs.empty())
@@ -1677,17 +2211,17 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
         return;
     }
 
-    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomTeleportByLocations");
+    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomTeleportByLocations");
 
     std::shuffle(std::begin(tlocs), std::end(tlocs), RandomEngine::Instance());
     for (uint32 i = 0; i < tlocs.size(); i++)
     {
         WorldLocation loc = tlocs[i];
 
-        float x = loc.GetPositionX();  // + (attemtps > 0 ? urand(0, sPlayerbotAIConfig.grindDistance) -
-                                       // sPlayerbotAIConfig.grindDistance / 2 : 0);
-        float y = loc.GetPositionY();  // + (attemtps > 0 ? urand(0, sPlayerbotAIConfig.grindDistance) -
-                                       // sPlayerbotAIConfig.grindDistance / 2 : 0);
+        float x = loc.GetPositionX();  // + (attemtps > 0 ? urand(0, sPlayerbotAIConfig->grindDistance) -
+                                       // sPlayerbotAIConfig->grindDistance / 2 : 0);
+        float y = loc.GetPositionY();  // + (attemtps > 0 ? urand(0, sPlayerbotAIConfig->grindDistance) -
+                                       // sPlayerbotAIConfig->grindDistance / 2 : 0);
         float z = loc.GetPositionZ();
 
         Map* map = sMapMgr->FindMap(loc.GetMapId(), 0);
@@ -1784,7 +2318,7 @@ void RandomPlayerbotMgr::PrepareZone2LevelBracket()
     zone2LevelBracket[3525] = {10, 21};  // Bloodmyst Isle
 
     // Classic WoW - High - level zones
-    zone2LevelBracket[10] = {19, 33};   // Duskwood
+    zone2LevelBracket[10] = {19, 33};   // Deadwind Pass
     zone2LevelBracket[11] = {21, 30};   // Wetlands
     zone2LevelBracket[44] = {16, 28};   // Redridge Mountains
     zone2LevelBracket[267] = {20, 34};  // Hillsbrad Foothills
@@ -1838,7 +2372,7 @@ void RandomPlayerbotMgr::PrepareZone2LevelBracket()
     zone2LevelBracket[4197] = {79, 80};  // Wintergrasp
 
     // Override with values from config
-    for (auto const& [zoneId, bracketPair] : sPlayerbotAIConfig.zoneBrackets)
+    for (auto const& [zoneId, bracketPair] : sPlayerbotAIConfig->zoneBrackets)
     {
         zone2LevelBracket[zoneId] = {bracketPair.first, bracketPair.second};
     }
@@ -1889,7 +2423,7 @@ void RandomPlayerbotMgr::PrepareTeleportCache()
         "INNER JOIN creature_template t on c.id1 = t.entry "
         "ORDER BY "
         "t.minlevel;",
-        sPlayerbotAIConfig.randomBotMapsAsString.c_str());
+        sPlayerbotAIConfig->randomBotMapsAsString.c_str());
     uint32 collected_locs = 0;
     if (results)
     {
@@ -1905,8 +2439,8 @@ void RandomPlayerbotMgr::PrepareTeleportCache()
             uint32 level = (min_level + max_level + 1) / 2;
             WorldLocation loc(mapId, x, y, z, 0);
             collected_locs++;
-            for (int32 l = (int32)level - (int32)sPlayerbotAIConfig.randomBotTeleLowerLevel;
-                 l <= (int32)level + (int32)sPlayerbotAIConfig.randomBotTeleHigherLevel; l++)
+            for (int32 l = (int32)level - (int32)sPlayerbotAIConfig->randomBotTeleLowerLevel;
+                 l <= (int32)level + (int32)sPlayerbotAIConfig->randomBotTeleHigherLevel; l++)
             {
                 if (l < 1 || l > maxLevel)
                 {
@@ -1918,7 +2452,7 @@ void RandomPlayerbotMgr::PrepareTeleportCache()
     }
     LOG_INFO("playerbots", ">> {} locations for level collected.", collected_locs);
 
-    if (sPlayerbotAIConfig.enableNewRpgStrategy)
+    if (sPlayerbotAIConfig->enableNewRpgStrategy)
     {
         PrepareZone2LevelBracket();
         LOG_INFO("playerbots", "Preparing innkeepers / flightmasters locations for level...");
@@ -1941,7 +2475,7 @@ void RandomPlayerbotMgr::PrepareTeleportCache()
             "AND map IN ({}) "
             "ORDER BY "
             "t.minlevel;",
-            sPlayerbotAIConfig.randomBotMapsAsString.c_str());
+            sPlayerbotAIConfig->randomBotMapsAsString.c_str());
         collected_locs = 0;
         if (results)
         {
@@ -1974,10 +2508,10 @@ void RandomPlayerbotMgr::PrepareTeleportCache()
                 {
                     WorldPosition pos(mapId, x, y, z, orient);
                     if (forHorde)
-                        FlightMasterCache::Instance().AddHordeFlightMaster(guid, pos);
+                        sFlightMasterCache->AddHordeFlightMaster(guid, pos);
 
                     if (forAlliance)
-                        FlightMasterCache::Instance().AddAllianceFlightMaster(guid, pos);
+                        sFlightMasterCache->AddAllianceFlightMaster(guid, pos);
                 }
                 const AreaTableEntry* area = sAreaTableStore.LookupEntry(map->GetAreaId(PHASEMASK_NORMAL, x, y, z));
                 uint32 zoneId = area->zone ? area->zone : area->ID;
@@ -2046,7 +2580,7 @@ void RandomPlayerbotMgr::PrepareTeleportCache()
         "AND map IN ({}) "
         "ORDER BY "
         "t.minlevel;",
-        sPlayerbotAIConfig.randomBotMapsAsString.c_str());
+        sPlayerbotAIConfig->randomBotMapsAsString.c_str());
     collected_locs = 0;
     if (results)
     {
@@ -2126,16 +2660,16 @@ void RandomPlayerbotMgr::PrepareAddclassCache()
 
 void RandomPlayerbotMgr::Init()
 {
-    if (sPlayerbotAIConfig.addClassCommand)
-        sRandomPlayerbotMgr.PrepareAddclassCache();
+    if (sPlayerbotAIConfig->addClassCommand)
+        sRandomPlayerbotMgr->PrepareAddclassCache();
 
-    if (sPlayerbotAIConfig.enabled)
+    if (sPlayerbotAIConfig->enabled)
     {
-        sRandomPlayerbotMgr.PrepareTeleportCache();
+        sRandomPlayerbotMgr->PrepareTeleportCache();
     }
 
-    if (sPlayerbotAIConfig.randomBotJoinBG)
-        sRandomPlayerbotMgr.LoadBattleMastersCache();
+    if (sPlayerbotAIConfig->randomBotJoinBG)
+        sRandomPlayerbotMgr->LoadBattleMastersCache();
 
     PlayerbotsDatabase.Execute("DELETE FROM playerbots_random_bots WHERE event = 'add'");
 }
@@ -2148,17 +2682,17 @@ void RandomPlayerbotMgr::RandomTeleportForLevel(Player* bot)
     uint32 level = bot->GetLevel();
     uint8 race = bot->getRace();
     std::vector<WorldLocation>* locs = nullptr;
-    if (sPlayerbotAIConfig.enableNewRpgStrategy)
+    if (sPlayerbotAIConfig->enableNewRpgStrategy)
         locs = IsAlliance(race) ? &allianceStarterPerLevelCache[level] : &hordeStarterPerLevelCache[level];
     else
         locs = &locsPerLevelCache[level];
-    if (level >= 10 && urand(0, 100) < sPlayerbotAIConfig.probTeleToBankers * 100)
+    if (level >= 10 && urand(0, 100) < sPlayerbotAIConfig->probTeleToBankers * 100)
     {
         std::vector<WorldLocation> fallbackLocs;
         for (auto& bLoc : bankerLocsPerLevelCache[level])
             fallbackLocs.push_back(bLoc.loc);
 
-        if (!sPlayerbotAIConfig.enableWeightTeleToCityBankers)
+        if (!sPlayerbotAIConfig->enableWeightTeleToCityBankers)
         {
             RandomTeleport(bot, fallbackLocs, true);
             return;
@@ -2196,16 +2730,16 @@ void RandomPlayerbotMgr::RandomTeleportForLevel(Player* bot)
             int weight = 0;
             switch (city)
             {
-                case CityId::STORMWIND:       weight = sPlayerbotAIConfig.weightTeleToStormwind; break;
-                case CityId::IRONFORGE:       weight = sPlayerbotAIConfig.weightTeleToIronforge; break;
-                case CityId::DARNASSUS:       weight = sPlayerbotAIConfig.weightTeleToDarnassus; break;
-                case CityId::EXODAR:          weight = sPlayerbotAIConfig.weightTeleToExodar; break;
-                case CityId::ORGRIMMAR:       weight = sPlayerbotAIConfig.weightTeleToOrgrimmar; break;
-                case CityId::UNDERCITY:       weight = sPlayerbotAIConfig.weightTeleToUndercity; break;
-                case CityId::THUNDER_BLUFF:   weight = sPlayerbotAIConfig.weightTeleToThunderBluff; break;
-                case CityId::SILVERMOON_CITY: weight = sPlayerbotAIConfig.weightTeleToSilvermoonCity; break;
-                case CityId::SHATTRATH_CITY:  weight = sPlayerbotAIConfig.weightTeleToShattrathCity; break;
-                case CityId::DALARAN:         weight = sPlayerbotAIConfig.weightTeleToDalaran; break;
+                case CityId::STORMWIND:       weight = sPlayerbotAIConfig->weightTeleToStormwind; break;
+                case CityId::IRONFORGE:       weight = sPlayerbotAIConfig->weightTeleToIronforge; break;
+                case CityId::DARNASSUS:       weight = sPlayerbotAIConfig->weightTeleToDarnassus; break;
+                case CityId::EXODAR:          weight = sPlayerbotAIConfig->weightTeleToExodar; break;
+                case CityId::ORGRIMMAR:       weight = sPlayerbotAIConfig->weightTeleToOrgrimmar; break;
+                case CityId::UNDERCITY:       weight = sPlayerbotAIConfig->weightTeleToUndercity; break;
+                case CityId::THUNDER_BLUFF:   weight = sPlayerbotAIConfig->weightTeleToThunderBluff; break;
+                case CityId::SILVERMOON_CITY: weight = sPlayerbotAIConfig->weightTeleToSilvermoonCity; break;
+                case CityId::SHATTRATH_CITY:  weight = sPlayerbotAIConfig->weightTeleToShattrathCity; break;
+                case CityId::DALARAN:         weight = sPlayerbotAIConfig->weightTeleToDalaran; break;
                 default:              weight = 0; break;
             }
             if (weight <= 0) continue;
@@ -2253,7 +2787,7 @@ void RandomPlayerbotMgr::RandomTeleportGrindForLevel(Player* bot)
     uint32 level = bot->GetLevel();
     uint8 race = bot->getRace();
     std::vector<WorldLocation>* locs = nullptr;
-    if (sPlayerbotAIConfig.enableNewRpgStrategy)
+    if (sPlayerbotAIConfig->enableNewRpgStrategy)
         locs = IsAlliance(race) ? &allianceStarterPerLevelCache[level] : &hordeStarterPerLevelCache[level];
     else
         locs = &locsPerLevelCache[level];
@@ -2268,11 +2802,11 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot)
     if (bot->InBattleground())
         return;
 
-    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomTeleport");
+    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomTeleport");
     std::vector<WorldLocation> locs;
 
     std::list<Unit*> targets;
-    float range = sPlayerbotAIConfig.randomBotTeleportDistance;
+    float range = sPlayerbotAIConfig->randomBotTeleportDistance;
     Acore::AnyUnitInObjectRangeCheck u_check(bot, range);
     Acore::UnitListSearcher<Acore::AnyUnitInObjectRangeCheck> searcher(bot, targets, u_check);
     Cell::VisitObjects(bot, searcher, range);
@@ -2282,7 +2816,7 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot)
         for (Unit* unit : targets)
         {
             bot->UpdatePosition(*unit);
-            FleeManager manager(bot, sPlayerbotAIConfig.sightDistance, 0, true);
+            FleeManager manager(bot, sPlayerbotAIConfig->sightDistance, 0, true);
             float rx, ry, rz;
             if (manager.CalculateDestination(&rx, &ry, &rz))
             {
@@ -2311,7 +2845,7 @@ void RandomPlayerbotMgr::Randomize(Player* bot)
     {
         RandomizeFirst(bot);
     }
-    else if (bot->GetLevel() < sPlayerbotAIConfig.randomBotMaxLevel || !sPlayerbotAIConfig.downgradeMaxLevelBot)
+    else if (bot->GetLevel() < sPlayerbotAIConfig->randomBotMaxLevel || !sPlayerbotAIConfig->downgradeMaxLevelBot)
     {
         uint8 level = bot->GetLevel();
         PlayerbotFactory factory(bot, level);
@@ -2326,11 +2860,11 @@ void RandomPlayerbotMgr::Randomize(Player* bot)
 
 void RandomPlayerbotMgr::IncreaseLevel(Player* bot)
 {
-    uint32 maxLevel = sPlayerbotAIConfig.randomBotMaxLevel;
+    uint32 maxLevel = sPlayerbotAIConfig->randomBotMaxLevel;
     if (maxLevel > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
         maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
 
-    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "IncreaseLevel");
+    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "IncreaseLevel");
     uint32 lastLevel = GetValue(bot, "level");
     uint8 level = bot->GetLevel() + 1;
     if (level > maxLevel)
@@ -2353,27 +2887,33 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
     if (!botAI)
         return;
 
-    uint32 maxLevel = sPlayerbotAIConfig.randomBotMaxLevel;
+    uint32 maxLevel = sPlayerbotAIConfig->randomBotMaxLevel;
     if (maxLevel > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
         maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
 
     // if lvl sync is enabled, max level is limited by online players lvl
-    if (sPlayerbotAIConfig.syncLevelWithPlayers)
-        maxLevel = std::max(sPlayerbotAIConfig.randomBotMinLevel,
+    if (sPlayerbotAIConfig->syncLevelWithPlayers)
+        maxLevel = std::max(sPlayerbotAIConfig->randomBotMinLevel,
                             std::min(playersLevel, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL)));
 
-    uint32 minLevel = sPlayerbotAIConfig.randomBotMinLevel;
+    uint32 minLevel = sPlayerbotAIConfig->randomBotMinLevel;
     if (bot->getClass() == CLASS_DEATH_KNIGHT)
     {
         maxLevel = std::max(maxLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
         minLevel = std::max(minLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
     }
 
-    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomizeFirst");
+    if (uint32 cap = GetCommunityLevelCap())
+        maxLevel = std::min(maxLevel, cap);
+
+    if (maxLevel < minLevel)
+        maxLevel = minLevel;
+
+    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomizeFirst");
 
     uint32 level;
 
-    if (sPlayerbotAIConfig.downgradeMaxLevelBot && bot->GetLevel() >= sPlayerbotAIConfig.randomBotMaxLevel)
+    if (sPlayerbotAIConfig->downgradeMaxLevelBot && bot->GetLevel() >= sPlayerbotAIConfig->randomBotMaxLevel)
     {
         if (bot->getClass() == CLASS_DEATH_KNIGHT)
         {
@@ -2381,18 +2921,18 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
         }
         else
         {
-            level = sPlayerbotAIConfig.randomBotMinLevel;
+            level = sPlayerbotAIConfig->randomBotMinLevel;
         }
     }
     else
     {
         uint32 roll = urand(1, 100);
-        if (roll <= 100 * sPlayerbotAIConfig.randomBotMaxLevelChance)
+        if (roll <= 100 * sPlayerbotAIConfig->randomBotMaxLevelChance)
         {
             level = maxLevel;
         }
         else if (roll <=
-                 (100 * (sPlayerbotAIConfig.randomBotMaxLevelChance + sPlayerbotAIConfig.randomBotMinLevelChance)))
+                 (100 * (sPlayerbotAIConfig->randomBotMaxLevelChance + sPlayerbotAIConfig->randomBotMinLevelChance)))
         {
             level = minLevel;
         }
@@ -2402,11 +2942,11 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
         }
     }
 
-    if (sPlayerbotAIConfig.disableRandomLevels)
+    if (sPlayerbotAIConfig->disableRandomLevels)
     {
-        level = bot->getClass() == CLASS_DEATH_KNIGHT ? std::max(sPlayerbotAIConfig.randombotStartingLevel,
+        level = bot->getClass() == CLASS_DEATH_KNIGHT ? std::max(sPlayerbotAIConfig->randombotStartingLevel,
                                                                  sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
-                                                      : sPlayerbotAIConfig.randombotStartingLevel;
+                                                      : sPlayerbotAIConfig->randombotStartingLevel;
     }
 
     SetValue(bot, "level", level);
@@ -2414,9 +2954,9 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
     factory.Randomize(false);
 
     uint32 randomTime =
-        urand(sPlayerbotAIConfig.minRandomBotRandomizeTime, sPlayerbotAIConfig.maxRandomBotRandomizeTime);
+        urand(sPlayerbotAIConfig->minRandomBotRandomizeTime, sPlayerbotAIConfig->maxRandomBotRandomizeTime);
     uint32 inworldTime =
-        urand(sPlayerbotAIConfig.minRandomBotInWorldTime, sPlayerbotAIConfig.maxRandomBotInWorldTime);
+        urand(sPlayerbotAIConfig->minRandomBotInWorldTime, sPlayerbotAIConfig->maxRandomBotInWorldTime);
 
     PlayerbotsDatabasePreparedStatement* stmt = PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_UPD_RANDOM_BOTS);
     stmt->SetData(0, randomTime);
@@ -2448,16 +2988,16 @@ void RandomPlayerbotMgr::RandomizeMin(Player* bot)
     if (!botAI)
         return;
 
-    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomizeMin");
-    uint32 level = sPlayerbotAIConfig.randomBotMinLevel;
+    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomizeMin");
+    uint32 level = sPlayerbotAIConfig->randomBotMinLevel;
     SetValue(bot, "level", level);
     PlayerbotFactory factory(bot, level);
     factory.Randomize(false);
 
     uint32 randomTime =
-        urand(sPlayerbotAIConfig.minRandomBotRandomizeTime, sPlayerbotAIConfig.maxRandomBotRandomizeTime);
+        urand(sPlayerbotAIConfig->minRandomBotRandomizeTime, sPlayerbotAIConfig->maxRandomBotRandomizeTime);
     uint32 inworldTime =
-        urand(sPlayerbotAIConfig.minRandomBotInWorldTime, sPlayerbotAIConfig.maxRandomBotInWorldTime);
+        urand(sPlayerbotAIConfig->minRandomBotInWorldTime, sPlayerbotAIConfig->maxRandomBotInWorldTime);
 
     PlayerbotsDatabasePreparedStatement* stmt = PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_UPD_RANDOM_BOTS);
     stmt->SetData(0, randomTime);
@@ -2496,8 +3036,8 @@ uint32 RandomPlayerbotMgr::GetZoneLevel(uint16 mapId, float teleX, float teleY, 
         "SELECT AVG(t.minlevel) minlevel, AVG(t.maxlevel) maxlevel FROM creature c "
         "INNER JOIN creature_template t ON c.id1 = t.entry WHERE map = {} AND minlevel > 1 AND ABS(position_x - {}) < "
         "{} AND ABS(position_y - {}) < {}",
-        mapId, teleX, sPlayerbotAIConfig.randomBotTeleportDistance / 2, teleY,
-        sPlayerbotAIConfig.randomBotTeleportDistance / 2);
+        mapId, teleX, sPlayerbotAIConfig->randomBotTeleportDistance / 2, teleY,
+        sPlayerbotAIConfig->randomBotTeleportDistance / 2);
 
     if (results)
     {
@@ -2529,7 +3069,7 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
         botAI->ResetStrategies(false);
     }
 
-    // if (sPlayerbotAIConfig.disableRandomLevels)
+    // if (sPlayerbotAIConfig->disableRandomLevels)
     //     return;
 
     if (bot->InBattleground())
@@ -2537,7 +3077,7 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     LOG_DEBUG("playerbots", "Refreshing bot {} <{}>", bot->GetGUID().ToString().c_str(), bot->GetName().c_str());
 
-    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "Refresh");
+    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "Refresh");
 
     botAI->Reset();
 
@@ -2581,7 +3121,7 @@ bool RandomPlayerbotMgr::IsRandomBot(Player* bot)
 bool RandomPlayerbotMgr::IsRandomBot(ObjectGuid::LowType bot)
 {
     ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>(bot);
-    if (!sPlayerbotAIConfig.IsInRandomAccountList(sCharacterCache->GetCharacterAccountIdByGuid(guid)))
+    if (!sPlayerbotAIConfig->IsInRandomAccountList(sCharacterCache->GetCharacterAccountIdByGuid(guid)))
         return false;
 
     if (std::find(currentBots.begin(), currentBots.end(), bot) != currentBots.end())
@@ -2635,30 +3175,57 @@ bool RandomPlayerbotMgr::IsAddclassBot(ObjectGuid::LowType bot)
     return false;
 }
 
+uint32 RandomPlayerbotMgr::GetTuningOrDefault(std::string const& key, uint32 def) const
+{
+    uint32 v = const_cast<RandomPlayerbotMgr*>(this)->GetEventValue(0, key);
+    return v ? v : def;
+}
+
 void RandomPlayerbotMgr::GetBots()
 {
-    if (!currentBots.empty())
+    uint32 target = GetMaxAllowedBotCount();
+
+    // Prune stale entries (no "add" event anymore)
+    for (auto it = currentBots.begin(); it != currentBots.end();)
+    {
+        if (!GetEventValue(*it, "add"))
+            it = currentBots.erase(it);
+        else
+            ++it;
+    }
+
+    // If we already have enough candidates, stop
+    if (currentBots.size() >= target)
         return;
 
+    // Fill up to target
     PlayerbotsDatabasePreparedStatement* stmt =
         PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_SEL_RANDOM_BOTS_BY_OWNER_AND_EVENT);
     stmt->SetData(0, 0);
     stmt->SetData(1, "add");
-    uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
+
+    std::unordered_set<uint32> already(currentBots.begin(), currentBots.end());
+
     if (PreparedQueryResult result = PlayerbotsDatabase.Query(stmt))
     {
         do
         {
             Field* fields = result->Fetch();
             uint32 bot = fields[0].Get<uint32>();
-            if (GetEventValue(bot, "add"))
+
+            if (!GetEventValue(bot, "add"))
+                continue;
+
+            if (already.insert(bot).second)
                 currentBots.push_back(bot);
 
-            if (currentBots.size() >= maxAllowedBotCount)
+            if (currentBots.size() >= target)
                 break;
+
         } while (result->NextRow());
     }
 }
+
 
 std::vector<uint32> RandomPlayerbotMgr::GetBgBots(uint32 bracket)
 {
@@ -2810,7 +3377,7 @@ std::string RandomPlayerbotMgr::GetData(uint32 bot, std::string const& type) { r
 
 void RandomPlayerbotMgr::SetValue(uint32 bot, std::string const& type, uint32 value, std::string const& data)
 {
-    SetEventValue(bot, type, value, sPlayerbotAIConfig.maxRandomBotInWorldTime, data);
+    SetEventValue(bot, type, value, sPlayerbotAIConfig->maxRandomBotInWorldTime, data);
 }
 
 void RandomPlayerbotMgr::SetValue(Player* bot, std::string const& type, uint32 value, std::string const& data)
@@ -2820,7 +3387,7 @@ void RandomPlayerbotMgr::SetValue(Player* bot, std::string const& type, uint32 v
 
 bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, char const* args)
 {
-    if (!sPlayerbotAIConfig.enabled)
+    if (!sPlayerbotAIConfig->enabled)
     {
         LOG_ERROR("playerbots", "Playerbots system is currently disabled!");
         return false;
@@ -2834,30 +3401,75 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
 
     std::string const cmd = args;
 
+    // Ratio tuning: .playerbots rndbot ratio [show|<value>]
+if (cmd.rfind("ratio", 0) == 0)
+{
+    std::string arg;
+    if (cmd.size() > 6)
+        arg = cmd.substr(6);
+
+    if (arg.empty() || arg == "show")
+    {
+        float dbRatio = sRandomPlayerbotMgr->LoadSavedBotsPerPlayerFromDB();
+
+        handler->PSendSysMessage(
+            "Ratio mode: {} | botsPerPlayer (DB) = {} | min={} max={}",
+            sPlayerbotAIConfig->usePlayerCountRatio ? "ENABLED" : "DISABLED",
+            dbRatio,
+            sPlayerbotAIConfig->minRandomBots,
+            sPlayerbotAIConfig->maxRandomBots);
+
+        handler->PSendSysMessage("Usage: .playerbots rndbot ratio <value>  (example: 1.5)");
+        return true;
+    }
+
+    float ratio = 0.0f;
+    try { ratio = std::stof(arg); }
+    catch (...)
+    {
+        handler->PSendSysMessage("Invalid ratio '{}'. Usage: .playerbots rndbot ratio <value>", arg);
+        return false;
+    }
+
+    if (ratio <= 0.0f)
+    {
+        handler->PSendSysMessage("Ratio must be > 0. Usage: .playerbots rndbot ratio <value>");
+        return false;
+    }
+
+    sRandomPlayerbotMgr->SaveBotsPerPlayerToDB(ratio);
+    sRandomPlayerbotMgr->ForceBotCountRecheck();
+
+    handler->PSendSysMessage("Randombot ratio set to {}. Population recalculation triggered.", ratio);
+    LOG_INFO("playerbots", "[RatioCmd] botsPerPlayer={} – forced population recheck", ratio);
+    return true;
+}
+
+
     if (cmd == "reset")
     {
         PlayerbotsDatabase.Execute(PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_DEL_RANDOM_BOTS));
-        sRandomPlayerbotMgr.eventCache.clear();
+        sRandomPlayerbotMgr->eventCache.clear();
         LOG_INFO("playerbots", "Random bots were reset for all players. Please restart the Server.");
         return true;
     }
 
     if (cmd == "stats")
     {
-        sRandomPlayerbotMgr.PrintStats();
+        sRandomPlayerbotMgr->PrintStats();
         // activatePrintStatsThread();
         return true;
     }
 
     if (cmd == "reload")
     {
-        sPlayerbotAIConfig.Initialize();
+        sPlayerbotAIConfig->Initialize();
         return true;
     }
 
     if (cmd == "update")
     {
-        sRandomPlayerbotMgr.UpdateAIInternal(0);
+        sRandomPlayerbotMgr->UpdateAIInternal(0);
         return true;
     }
 
@@ -2882,8 +3494,8 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
         std::string const name = cmd.size() > prefix.size() + 1 ? cmd.substr(1 + prefix.size()) : "%";
 
         std::vector<uint32> botIds;
-        for (std::vector<uint32>::iterator i = sPlayerbotAIConfig.randomBotAccounts.begin();
-             i != sPlayerbotAIConfig.randomBotAccounts.end(); ++i)
+        for (std::vector<uint32>::iterator i = sPlayerbotAIConfig->randomBotAccounts.begin();
+             i != sPlayerbotAIConfig->randomBotAccounts.end(); ++i)
         {
             uint32 account = *i;
             if (QueryResult results = CharacterDatabase.Query(
@@ -2895,7 +3507,7 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
 
                     uint32 botId = fields[0].Get<uint32>();
                     ObjectGuid guid = ObjectGuid::Create<HighGuid::Player>(botId);
-                    if (!sRandomPlayerbotMgr.IsRandomBot(guid.GetCounter()))
+                    if (!sRandomPlayerbotMgr->IsRandomBot(guid.GetCounter()))
                     {
                         continue;
                     }
@@ -2926,13 +3538,13 @@ bool RandomPlayerbotMgr::HandlePlayerbotConsoleCommand(ChatHandler* handler, cha
                      bot->GetName().c_str());
 
             ConsoleCommandHandler handler = j->second;
-            (sRandomPlayerbotMgr.*handler)(bot);
+            (sRandomPlayerbotMgr->*handler)(bot);
         }
 
         return true;
     }
 
-    // std::vector<std::string> messages = sRandomPlayerbotMgr.HandlePlayerbotCommand(args);
+    // std::vector<std::string> messages = sRandomPlayerbotMgr->HandlePlayerbotCommand(args);
     // for (std::vector<std::string>::iterator i = messages.begin(); i != messages.end(); ++i)
     // {
     //     LOG_INFO("playerbots", "{}", i->c_str());
@@ -2990,15 +3602,15 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
     if (_isBotLogging)
     {
         LOG_INFO("playerbots", "{}/{} Bot {} logged in", playerBots.size(),
-                 sRandomPlayerbotMgr.GetMaxAllowedBotCount(), bot->GetName().c_str());
+                 sRandomPlayerbotMgr->GetMaxAllowedBotCount(), bot->GetName().c_str());
 
-        if (playerBots.size() == sRandomPlayerbotMgr.GetMaxAllowedBotCount())
+        if (playerBots.size() == sRandomPlayerbotMgr->GetMaxAllowedBotCount())
         {
             _isBotLogging = false;
         }
     }
 
-    if (sPlayerbotAIConfig.randomBotFixedLevel)
+    if (sPlayerbotAIConfig->randomBotFixedLevel)
     {
         bot->SetPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
     }
@@ -3050,18 +3662,18 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
     {
         WorldPosition botPos(player);
 
-        // botPos.GetReachableRandomPointOnGround(player, sPlayerbotAIConfig.reactDistance * 2, true);
+        // botPos.GetReachableRandomPointOnGround(player, sPlayerbotAIConfig->reactDistance * 2, true);
 
         // player->TeleportTo(botPos);
         // player->Relocate(botPos.coord_x, botPos.coord_y, botPos.coord_z, botPos.orientation);
 
         if (!player->GetFactionTemplateEntry())
         {
-            botPos.GetReachableRandomPointOnGround(player, sPlayerbotAIConfig.reactDistance * 2, true);
+            botPos.GetReachableRandomPointOnGround(player, sPlayerbotAIConfig->reactDistance * 2, true);
         }
         else
         {
-            std::vector<TravelDestination*> dests = TravelMgr::instance().getRpgTravelDestinations(player, true, true, 200000.0f);
+            std::vector<TravelDestination*> dests = sTravelMgr->getRpgTravelDestinations(player, true, true, 200000.0f);
 
             do
             {
@@ -3250,7 +3862,7 @@ void RandomPlayerbotMgr::PrintStats()
 
         zoneCount[bot->GetZoneId()]++;
 
-        if (sPlayerbotAIConfig.enableNewRpgStrategy)
+        if (sPlayerbotAIConfig->enableNewRpgStrategy)
         {
             rpgStatusCount[botAI->rpgInfo.status]++;
             rpgStasticTotal += botAI->rpgStatistic;
@@ -3324,7 +3936,7 @@ void RandomPlayerbotMgr::PrintStats()
     LOG_INFO("playerbots", "    In Rest: {}", rest);
     LOG_INFO("playerbots", "    Dead: {}", dead);
 
-    if (sPlayerbotAIConfig.enableNewRpgStrategy)
+    if (sPlayerbotAIConfig->enableNewRpgStrategy)
     {
         LOG_INFO("playerbots", "Bots rpg status:");
         LOG_INFO("playerbots",
@@ -3350,8 +3962,8 @@ double RandomPlayerbotMgr::GetBuyMultiplier(Player* bot)
     if (!value)
     {
         value = urand(50, 120);
-        uint32 validIn = urand(sPlayerbotAIConfig.minRandomBotsPriceChangeInterval,
-                               sPlayerbotAIConfig.maxRandomBotsPriceChangeInterval);
+        uint32 validIn = urand(sPlayerbotAIConfig->minRandomBotsPriceChangeInterval,
+                               sPlayerbotAIConfig->maxRandomBotsPriceChangeInterval);
         SetEventValue(id, "buymultiplier", value, validIn);
     }
 
@@ -3365,8 +3977,8 @@ double RandomPlayerbotMgr::GetSellMultiplier(Player* bot)
     if (!value)
     {
         value = urand(80, 250);
-        uint32 validIn = urand(sPlayerbotAIConfig.minRandomBotsPriceChangeInterval,
-                               sPlayerbotAIConfig.maxRandomBotsPriceChangeInterval);
+        uint32 validIn = urand(sPlayerbotAIConfig->minRandomBotsPriceChangeInterval,
+                               sPlayerbotAIConfig->maxRandomBotsPriceChangeInterval);
         SetEventValue(id, "sellmultiplier", value, validIn);
     }
 
@@ -3395,7 +4007,7 @@ void RandomPlayerbotMgr::SetTradeDiscount(Player* bot, Player* master, uint32 va
 
     std::ostringstream name;
     name << "trade_discount_" << masterId;
-    SetEventValue(botId, name.str(), value, sPlayerbotAIConfig.maxRandomBotInWorldTime);
+    SetEventValue(botId, name.str(), value, sPlayerbotAIConfig->maxRandomBotInWorldTime);
 }
 
 uint32 RandomPlayerbotMgr::GetTradeDiscount(Player* bot, Player* master)
@@ -3438,7 +4050,7 @@ void RandomPlayerbotMgr::ChangeStrategy(Player* player)
 {
     uint32 bot = player->GetGUID().GetCounter();
 
-    if (frand(0.f, 100.f) > sPlayerbotAIConfig.randomBotRpgChance)
+    if (frand(0.f, 100.f) > sPlayerbotAIConfig->randomBotRpgChance)
     {
         LOG_INFO("playerbots", "Bot #{} <{}>: sent to grind spot", bot, player->GetName().c_str());
         ScheduleTeleport(bot, 30);
@@ -3448,7 +4060,7 @@ void RandomPlayerbotMgr::ChangeStrategy(Player* player)
         LOG_INFO("playerbots", "Changing strategy for bot #{} <{}> to RPG", bot, player->GetName().c_str());
         LOG_INFO("playerbots", "Bot #{} <{}>: sent to inn", bot, player->GetName().c_str());
         RandomTeleportForLevel(player);
-        SetEventValue(bot, "teleport", 1, sPlayerbotAIConfig.maxRandomBotInWorldTime);
+        SetEventValue(bot, "teleport", 1, sPlayerbotAIConfig->maxRandomBotInWorldTime);
     }
 
     ScheduleChangeStrategy(bot);
@@ -3458,7 +4070,7 @@ void RandomPlayerbotMgr::ChangeStrategyOnce(Player* player)
 {
     uint32 bot = player->GetGUID().GetCounter();
 
-    if (frand(0.f, 100.f) > sPlayerbotAIConfig.randomBotRpgChance)  // select grind / pvp
+    if (frand(0.f, 100.f) > sPlayerbotAIConfig->randomBotRpgChance)  // select grind / pvp
     {
         LOG_INFO("playerbots", "Bot #{} <{}>: sent to grind spot", bot, player->GetName().c_str());
         RandomTeleportForLevel(player);
@@ -3534,7 +4146,7 @@ ObjectGuid RandomPlayerbotMgr::GetBattleMasterGUID(Player* bot, BattlegroundType
 
     for (auto i = begin(Bms); i != end(Bms); ++i)
     {
-        CreatureData const* data = sRandomPlayerbotMgr.GetCreatureDataByEntry(*i);
+        CreatureData const* data = sRandomPlayerbotMgr->GetCreatureDataByEntry(*i);
         if (!data)
             continue;
 
@@ -3565,7 +4177,7 @@ ObjectGuid RandomPlayerbotMgr::GetBattleMasterGUID(Player* bot, BattlegroundType
         if (Bm->getDeathState() == DeathState::Dead)
             continue;
 
-        float dist2 = ServerFacade::instance().GetDistance2d(bot, data->posX, data->posY);
+        float dist2 = sServerFacade->GetDistance2d(bot, data->posX, data->posY);
         if (dist2 < dist1)
         {
             dist1 = dist2;

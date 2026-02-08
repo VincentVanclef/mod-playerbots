@@ -1279,7 +1279,7 @@ static std::pair<uint32, uint32> IC_AttackObjectives[] = {
 // useful commands for fixing BG bugs and checking waypoints/paths
 bool BGTactics::HandleConsoleCommand(ChatHandler* handler, char const* args)
 {
-    if (!sPlayerbotAIConfig.enabled)
+    if (!sPlayerbotAIConfig->enabled)
     {
         handler->PSendSysMessage("|cffff0000Playerbot system is currently disabled!");
         return true;
@@ -2249,34 +2249,118 @@ bool BGTactics::selectObjective(bool reset)
             uint8 role = context->GetValue<uint32>("bg role")->Get();
             WSBotStrategy strategyHorde = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_HORDE));
             WSBotStrategy strategyAlliance = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_ALLIANCE));
+
+            uint8 strategyIdHorde = GetBotStrategyForTeam(bg, TEAM_HORDE);
+            uint8 strategyIdAlliance = GetBotStrategyForTeam(bg, TEAM_ALLIANCE);
+
+            uint8 strategyId = (team == TEAM_ALLIANCE) ? strategyIdAlliance : strategyIdHorde;
+            uint8 enemyStrategyId = (team == TEAM_ALLIANCE) ? strategyIdHorde : strategyIdAlliance;
+
             WSBotStrategy strategy = (team == TEAM_ALLIANCE) ? strategyAlliance : strategyHorde;
             WSBotStrategy enemyStrategy = (team == TEAM_ALLIANCE) ? strategyHorde : strategyAlliance;
 
-            uint8 defendersProhab = 3;  // Default balanced
-
-            switch (strategy)
+            struct WSStrategyProfile
             {
-                case 0:
-                case 1:
-                case 2:
-                case 3:  // Balanced
-                    defendersProhab = 3;
+                uint8 defendersProhab = 3;                // role < defendersProhab => defender
+                uint8 bothFlagsEscortChance = 20;         // % chance to support own FC when both flags are taken
+                uint8 defenderEscortChance = 70;          // % chance defenders support own FC when no EFC target
+                uint8 defenderRoamBaseChance = 33;        // % chance defenders roam around own base
+                uint8 attackerPursueEnemyFCChance = 70;   // % chance attackers pursue enemy FC (if known)
+                uint8 attackerAssistOwnFCChance = 85;     // % chance attackers assist own FC (if known, and not pursuing EFC)
+                uint8 attackerRoamChance = 5;             // % chance attackers free-roam instead of pushing enemy base
+            };
+
+            WSStrategyProfile profile; // default: balanced baseline
+
+            // Strategy ID mapping:
+            // 0 = balanced default
+            // 1 = escort lean
+            // 2 = midfield control
+            // 3 = return focus (hunt enemy FC)
+            // 4-7 = heavier offense variants
+            // 8 = turtle
+            // 9 = anti-FC lockdown
+            switch (strategyId)
+            {
+                default:
+                case 0: // Balanced Default
                     break;
-                case 4:
-                case 5:
-                case 6:
-                case 7:  // Heavy Offense
-                    defendersProhab = 1;
+
+                case 1: // Balanced Escort Lean
+                    profile.bothFlagsEscortChance = 45;
+                    profile.defenderEscortChance = 85;
+                    profile.attackerAssistOwnFCChance = 95;
+                    profile.attackerPursueEnemyFCChance = 55;
                     break;
-                case 8:
-                case 9:  // Heavy Defense
-                    defendersProhab = 6;
+
+                case 2: // Balanced Mid Control
+                    profile.defenderRoamBaseChance = 45;
+                    profile.attackerRoamChance = 25;
+                    profile.bothFlagsEscortChance = 25;
+                    break;
+
+                case 3: // Balanced Return Focus
+                    profile.bothFlagsEscortChance = 10;
+                    profile.defenderEscortChance = 55;
+                    profile.attackerPursueEnemyFCChance = 90;
+                    profile.attackerAssistOwnFCChance = 60;
+                    break;
+
+                case 4: // Heavy Offense: Fast Cap
+                    profile.defendersProhab = 1;
+                    profile.bothFlagsEscortChance = 10;
+                    profile.attackerAssistOwnFCChance = 40;
+                    profile.attackerPursueEnemyFCChance = 55;
+                    profile.attackerRoamChance = 2;
+                    break;
+
+                case 5: // Heavy Offense: Split Push
+                    profile.defendersProhab = 1;
+                    profile.bothFlagsEscortChance = 15;
+                    profile.attackerAssistOwnFCChance = 60;
+                    profile.attackerPursueEnemyFCChance = 65;
+                    profile.attackerRoamChance = 3;
+                    break;
+
+                case 6: // Heavy Offense: Base Pressure
+                    profile.defendersProhab = 1;
+                    profile.bothFlagsEscortChance = 10;
+                    profile.attackerAssistOwnFCChance = 50;
+                    profile.attackerPursueEnemyFCChance = 75;
+                    profile.attackerRoamChance = 2;
+                    break;
+
+                case 7: // Heavy Offense: All-in
+                    profile.defendersProhab = 1;
+                    profile.bothFlagsEscortChance = 5;
+                    profile.attackerAssistOwnFCChance = 25;
+                    profile.attackerPursueEnemyFCChance = 60;
+                    profile.attackerRoamChance = 1;
+                    break;
+
+                case 8: // Heavy Defense: Turtle
+                    profile.defendersProhab = 6;
+                    profile.defenderRoamBaseChance = 10;
+                    profile.defenderEscortChance = 75;
+                    profile.attackerAssistOwnFCChance = 90;
+                    profile.attackerRoamChance = 2;
+                    break;
+
+                case 9: // Heavy Defense: Anti-FC Lockdown
+                    profile.defendersProhab = 6;
+                    profile.bothFlagsEscortChance = 15;
+                    profile.defenderEscortChance = 60;
+                    profile.attackerPursueEnemyFCChance = 90;
+                    profile.attackerAssistOwnFCChance = 70;
+                    profile.attackerRoamChance = 2;
                     break;
             }
 
-            if (enemyStrategy == WS_STRATEGY_DEFENSIVE)
-                defendersProhab = 2;
+            // Existing behavior: if the enemy strategy is defensive, reduce defenders bias (more pressure).
+            if (enemyStrategy == WS_STRATEGY_DEFENSIVE || enemyStrategyId == WS_STRATEGY_DEFENSIVE)
+                profile.defendersProhab = 2;
 
+            uint8 defendersProhab = profile.defendersProhab;
             // Role check
             bool isDefender = role < defendersProhab;
 
@@ -2292,11 +2376,11 @@ bool BGTactics::selectObjective(bool reset)
             bool bothFlagsTaken = enemyFC && teamFC;
             if (!hasFlag && bothFlagsTaken)
             {
-                // If both flags taken: Bots have 20% chance to support own flag carrier, otherwise attack enemy FC
-                if (urand(0, 99) < 20 && teamFC)
+                // If both flags taken: Bots have a strategy-tuned chance to support own flag carrier, otherwise attack enemy FC
+                if (urand(0, 99) < profile.bothFlagsEscortChance && teamFC)
                 {
                     target.Relocate(teamFC->GetPositionX(), teamFC->GetPositionY(), teamFC->GetPositionZ());
-                    if (ServerFacade::instance().GetDistance2d(bot, teamFC) < 33.0f)
+                    if (sServerFacade->GetDistance2d(bot, teamFC) < 33.0f)
                         Follow(teamFC);
                 }
                 else
@@ -2304,8 +2388,8 @@ bool BGTactics::selectObjective(bool reset)
             }
             // Graveyard Camping if in lead
             else if (!hasFlag && role < 8 &&
-                ((team == TEAM_ALLIANCE && allianceScore == 2 && hordeScore == 0) ||
-                (team == TEAM_HORDE && hordeScore == 2 && allianceScore == 0)))
+                (team == TEAM_ALLIANCE && allianceScore == 2 && hordeScore == 0) ||
+                (team == TEAM_HORDE && hordeScore == 2 && allianceScore == 0))
             {
                 if (team == TEAM_ALLIANCE)
                     SetSafePos(WS_GY_CAMPING_HORDE, 10.0f);
@@ -2329,18 +2413,18 @@ bool BGTactics::selectObjective(bool reset)
                         // Defenders attack enemy FC if found
                         target.Relocate(enemyFC->GetPositionX(), enemyFC->GetPositionY(), enemyFC->GetPositionZ());
                     }
-                    else if (urand(0, 99) < 33)
+                    else if (urand(0, 99) < profile.defenderRoamBaseChance)
                     {
                         // 33% chance to roam near own base
                         SetSafePos(team == TEAM_ALLIANCE ? WS_FLAG_HIDE_ALLIANCE[urand(0, 2)] : WS_FLAG_HIDE_HORDE[urand(0, 2)], 5.0f);
                     }
                     else if (teamFC)
                     {
-                        // 70% chance to support own FC
-                        if (urand(0, 99) < 70)
+                        // Strategy-tuned chance to support own FC
+                        if (urand(0, 99) < profile.defenderEscortChance)
                         {
                             target.Relocate(teamFC->GetPositionX(), teamFC->GetPositionY(), teamFC->GetPositionZ());
-                            if (ServerFacade::instance().GetDistance2d(bot, teamFC) < 33.0f)
+                            if (sServerFacade->GetDistance2d(bot, teamFC) < 33.0f)
                                 Follow(teamFC);
                         }
                     }
@@ -2352,21 +2436,29 @@ bool BGTactics::selectObjective(bool reset)
                 }
                 else  // attacker logic
                 {
-                    if (enemyFC && urand(0, 99) < 70)
+                    if (enemyFC && urand(0, 99) < profile.attackerPursueEnemyFCChance)
                     {
-                        // 70% chance to pursue enemy FC
+                        // Strategy-tuned chance to pursue enemy FC
                         target.Relocate(enemyFC->GetPositionX(), enemyFC->GetPositionY(), enemyFC->GetPositionZ());
                     }
                     else if (teamFC)
                     {
-                        // Assist own FC if not pursuing enemy FC
-                        target.Relocate(teamFC->GetPositionX(), teamFC->GetPositionY(), teamFC->GetPositionZ());
-                        if (ServerFacade::instance().GetDistance2d(bot, teamFC) < 33.0f)
-                            Follow(teamFC);
+                        // Strategy-tuned chance to assist own FC if not pursuing enemy FC
+                        if (urand(0, 99) < profile.attackerAssistOwnFCChance)
+                        {
+                            target.Relocate(teamFC->GetPositionX(), teamFC->GetPositionY(), teamFC->GetPositionZ());
+                            if (sServerFacade->GetDistance2d(bot, teamFC) < 33.0f)
+                                Follow(teamFC);
+                        }
+                        else
+                        {
+                            // Otherwise keep pressure on the enemy base
+                            SetSafePos(team == TEAM_ALLIANCE ? WS_FLAG_POS_HORDE : WS_FLAG_POS_ALLIANCE);
+                        }
                     }
-                    else if (urand(0, 99) < 5)
+                    else if (urand(0, 99) < profile.attackerRoamChance)
                     {
-                        // 5% chance to free roam
+                        // Strategy-tuned chance to free roam
                         SetSafePos(WS_ROAM_POS, 75.0f);
                     }
                     else
@@ -3281,11 +3373,11 @@ bool BGTactics::moveToObjective(bool ignoreDist)
             pos = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
         }
 
-        if (!ignoreDist && ServerFacade::instance().IsDistanceGreaterThan(ServerFacade::instance().GetDistance2d(bot, pos.x, pos.y), 100.0f))
+        if (!ignoreDist && sServerFacade->IsDistanceGreaterThan(sServerFacade->GetDistance2d(bot, pos.x, pos.y), 100.0f))
         {
             // std::ostringstream out;
             // out << "It is too far away! " << pos.x << ", " << pos.y << ", Distance: " <<
-            // ServerFacade::instance().GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
+            // sServerFacade->GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
             return false;
         }
 
@@ -3297,7 +3389,7 @@ bool BGTactics::moveToObjective(bool ignoreDist)
         }
 
         // std::ostringstream out; out << "Moving to objective " << pos.x << ", " << pos.y << ", Distance: " <<
-        // ServerFacade::instance().GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
+        // sServerFacade->GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
 
         // dont increase from 1.5 will cause bugs with horde capping AV towers
         return MoveNear(bot->GetMapId(), pos.x, pos.y, pos.z, 1.5f);
@@ -3522,7 +3614,7 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
     // out << "WP: ";
     // reverse ? out << currPoint << " <<< -> " << nPoint : out << currPoint << ">>> ->" << nPoint;
     // out << ", " << nextPoint.x << ", " << nextPoint.y << " Path Size: " << currentPath->size() << ", Dist: " <<
-    // ServerFacade::instance().GetDistance2d(bot, nextPoint.x, nextPoint.y); bot->Say(out.str(), LANG_UNIVERSAL);
+    // sServerFacade->GetDistance2d(bot, nextPoint.x, nextPoint.y); bot->Say(out.str(), LANG_UNIVERSAL);
 
     return MoveTo(bot->GetMapId(), nextPoint.x + frand(-2, 2), nextPoint.y + frand(-2, 2), nextPoint.z);
 }
@@ -4128,9 +4220,9 @@ bool BGTactics::useBuff()
     if (closeObjects.empty())
         return false;
 
-    bool needRegen = bot->GetHealthPct() < sPlayerbotAIConfig.mediumHealth ||
+    bool needRegen = bot->GetHealthPct() < sPlayerbotAIConfig->mediumHealth ||
                      (AI_VALUE2(bool, "has mana", "self target") &&
-                      AI_VALUE2(uint8, "mana", "self target") < sPlayerbotAIConfig.mediumMana);
+                      AI_VALUE2(uint8, "mana", "self target") < sPlayerbotAIConfig->mediumMana);
     bool needSpeed = (bgType != BATTLEGROUND_WS || bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) ||
                       bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL)) ||
                      !(teamFlagTaken() || flagTaken());
@@ -4146,7 +4238,7 @@ bool BGTactics::useBuff()
             continue;
 
         // use speed buff only if close
-        if (ServerFacade::instance().IsDistanceGreaterThan(ServerFacade::instance().GetDistance2d(bot, go),
+        if (sServerFacade->IsDistanceGreaterThan(sServerFacade->GetDistance2d(bot, go),
                                                  go->GetEntry() == Buff_Entries[0] ? 20.0f : 50.0f))
             continue;
 
@@ -4196,7 +4288,7 @@ uint32 BGTactics::getPlayersInArea(TeamId teamId, Position point, float range, b
             if (!combat && player->IsInCombat())
                 continue;
 
-            if (ServerFacade::instance().GetDistance2d(player, point.GetPositionX(), point.GetPositionY()) < range)
+            if (sServerFacade->GetDistance2d(player, point.GetPositionX(), point.GetPositionY()) < range)
                 ++defCount;
         }
     }
@@ -4280,9 +4372,9 @@ bool BGTactics::IsLockedInsideKeep()
         // get closest portal
         if (bot->GetTeamId() == TEAM_ALLIANCE && go->GetEntry() == GO_TELEPORTER_4)
         {
-            float tempDist = ServerFacade::instance().GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
+            float tempDist = sServerFacade->GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
 
-            if (ServerFacade::instance().IsDistanceLessThan(tempDist, closestDistance))
+            if (sServerFacade->IsDistanceLessThan(tempDist, closestDistance))
             {
                 closestDistance = tempDist;
                 closestPortal = go;
@@ -4293,9 +4385,9 @@ bool BGTactics::IsLockedInsideKeep()
         // get closest portal
         if (bot->GetTeamId() == TEAM_HORDE && go->GetEntry() == GO_TELEPORTER_2)
         {
-            float tempDist = ServerFacade::instance().GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
+            float tempDist = sServerFacade->GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
 
-            if (ServerFacade::instance().IsDistanceLessThan(tempDist, closestDistance))
+            if (sServerFacade->IsDistanceLessThan(tempDist, closestDistance))
             {
                 closestDistance = tempDist;
                 closestPortal = go;
@@ -4342,7 +4434,7 @@ bool ArenaTactics::Execute(Event event)
 {
     if (!bot->InBattleground())
     {
-        bool IsRandomBot = sRandomPlayerbotMgr.IsRandomBot(bot->GetGUID().GetCounter());
+        bool IsRandomBot = sRandomPlayerbotMgr->IsRandomBot(bot->GetGUID().GetCounter());
         botAI->ChangeStrategy("-arena", BOT_STATE_COMBAT);
         botAI->ChangeStrategy("-arena", BOT_STATE_NON_COMBAT);
         botAI->ResetStrategies(!IsRandomBot);

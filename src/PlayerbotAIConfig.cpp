@@ -16,6 +16,7 @@
 #include "RandomPlayerbotMgr.h"
 #include "Talentspec.h"
 
+
 template <class T>
 void LoadList(std::string const value, T& list)
 {
@@ -183,6 +184,22 @@ bool PlayerbotAIConfig::Initialize()
     randomBotAutologin = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotAutologin", true);
     minRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MinRandomBots", 500);
     maxRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBots", 500);
+
+    // Community-level pacing cap (optional)
+    communityLevelCapEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.CommunityLevelCap.Enable", false);
+    communityLevelCapTopN = sConfigMgr->GetOption<uint32>("AiPlayerbot.CommunityLevelCap.TopN", 20);
+    communityLevelCapBuffer = sConfigMgr->GetOption<int32>("AiPlayerbot.CommunityLevelCap.Buffer", 0);
+    communityLevelCapCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.CommunityLevelCap.CacheSeconds", 60);
+    usePlayerCountRatio = sConfigMgr->GetOption<bool>("AiPlayerbot.UsePlayerCountRatio", false);
+    botsPerPlayer = 0.0f;
+
+ratioGrowCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.GrowCheckSeconds", 5);
+ratioShrinkCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.ShrinkCheckSeconds", 30);
+ratioMaxShrinkPerCheck = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.MaxShrinkPerCheck", 5);
+ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSeconds", 10);
+
+    debugRatioScaling = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.RatioScaling", false);
+    debugCommunityLevelCap = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.CommunityLevelCap", false);
     randomBotUpdateInterval = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotUpdateInterval", 20);
     randomBotCountChangeMinInterval =
         sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotCountChangeMinInterval", 30 * MINUTE);

@@ -91,6 +91,29 @@ AiPlayerbot.RandomBotAutologin = 1
 AiPlayerbot.MinRandomBots = 500
 AiPlayerbot.MaxRandomBots = 500
 
+# Dynamic scaling by real players (DB-driven ratio)
+AiPlayerbot.UsePlayerCountRatio = 0
+
+#
+# Community-level pacing (optional): dynamic cap for random bot levels.
+# When enabled, the maximum level used for random bot level selection/level-ups is capped to:
+#   CapLevel = round( average( top N online REAL player levels ) ) + buffer
+# This lets the "community" pace bot leveling naturally.
+#
+# Notes:
+# - Only REAL players are counted (random bots/addclass bots excluded).
+# - CacheSeconds controls how often the cap is recomputed.
+#
+AiPlayerbot.CommunityLevelCap.Enable = 0
+AiPlayerbot.CommunityLevelCap.TopN = 20
+AiPlayerbot.CommunityLevelCap.Buffer = 0
+AiPlayerbot.CommunityLevelCap.CacheSeconds = 60
+
+# Debug toggles (extra logs)
+# These add additional LOG_DEBUG lines for diagnosing scaling logic.
+AiPlayerbot.Debug.RatioScaling = 0
+AiPlayerbot.Debug.CommunityLevelCap = 0
+
 # Randombot accounts
 # If you are not using any expansion at all, you may have to set this manually, in which case please
 # ensure that RandomBotAccountCount is at least greater than (MaxRandomBots / 10 + AddClassAccountPoolSize)
@@ -2183,3 +2206,6 @@ AiPlayerbot.SummonAtInnkeepersEnabled = 1
 # Buffs will be applied on PP, Sindragosa and Lich King
 
 AiPlayerbot.EnableICCBuffs = 1
+
+
+

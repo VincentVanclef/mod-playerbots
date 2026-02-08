@@ -41,6 +41,8 @@ struct BattlegroundInfo
     // Players (Battleground)
     uint32 bgHordePlayerCount = 0;
     uint32 bgAlliancePlayerCount = 0;
+    // Community level cap cache
+
 };
 
 class ChatHandler;
@@ -55,12 +57,16 @@ struct CachedEvent
     std::string data;
 
     bool IsEmpty() const { return !lastChangeTime; }
+    // Community level cap cache
+
 };
 
 struct BotEventCache
 {
     bool loaded = false;
     std::unordered_map<std::string, CachedEvent> events;
+    // Community level cap cache
+
 };
 
 // https://gist.github.com/bradley219/5373998
@@ -84,6 +90,8 @@ public:
 
 private:
     botPIDImpl* pimpl;
+    // Community level cap cache
+
 };
 
 class RandomPlayerbotMgr : public PlayerbotHolder
@@ -131,6 +139,11 @@ public:
     void RandomTeleportGrindForLevel(Player* bot);
     void RandomTeleportForRpg(Player* bot);
     uint32 GetMaxAllowedBotCount();
+    uint32 GetCommunityLevelCap();
+    uint32 GetOnlineRealPlayerCount() const;
+    float LoadSavedBotsPerPlayerFromDB() const;
+    void SaveBotsPerPlayerToDB(float ratio) const;
+    void ForceBotCountRecheck();
     bool ProcessBot(Player* player);
     void Revive(Player* player);
     void ChangeStrategy(Player* player);
@@ -272,6 +285,16 @@ private:
 
     //void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }
+    
+    // Ratio DB cache (bots-per-player)
+    time_t ratioCachedAt = 0;
+    float ratioCachedValue = 0.0f;
+
+    uint32 GetTuningOrDefault(std::string const& key, uint32 def) const;
+// Community level cap cache
+    time_t communityLevelCapCachedAt = 0;
+    uint32 communityLevelCapCachedValue = 0;
+
 };
 
 #define sRandomPlayerbotMgr RandomPlayerbotMgr::instance()
