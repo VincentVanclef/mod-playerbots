@@ -11,6 +11,8 @@
 #include "PlayerbotMgr.h"
 #include "GameTime.h"
 #include "PlayerbotCommandServer.h"
+#include "RandomPlayerbotMgr.h"
+
 
 struct BattlegroundInfo
 {
@@ -297,6 +299,7 @@ private:
 
 };
 
-#define sRandomPlayerbotMgr->RandomPlayerbotMgr::instance()
+#define sRandomPlayerbotMgr RandomPlayerbotMgr::instance()
+
 
 #endif

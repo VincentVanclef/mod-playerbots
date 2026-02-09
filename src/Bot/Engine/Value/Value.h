@@ -154,7 +154,7 @@ public:
         {
             this->lastCheckTime = now;
 
-            PerfMonitorOperation* pmo = sPerfMonitor->start(
+            PerfMonitorOperation* pmo = sPerfMonitor.start(
                 PERF_MON_VALUE, this->getName(), this->context ? &this->context->performanceStack : nullptr);
             this->value = this->Calculate();
             if (pmo)
