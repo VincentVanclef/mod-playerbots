@@ -64,10 +64,10 @@ class PlayerbotAIConfig
 public:
     PlayerbotAIConfig(){};
     static PlayerbotAIConfig& instance()
-    {
-        static PlayerbotAIConfig instance;
-        return &instance;
-    }
+{
+    static PlayerbotAIConfig instance;
+    return instance;
+}
 
     bool Initialize();
     bool IsInRandomAccountList(uint32 id);
