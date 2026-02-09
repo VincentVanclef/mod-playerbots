@@ -28,7 +28,7 @@ bool CheckMailAction::Execute(Event event)
             continue;
 
         uint32 account = owner->GetSession()->GetAccountId();
-        if (sPlayerbotAIConfig->IsInRandomAccountList(account))
+        if (sPlayerbotAIConfig.IsInRandomAccountList(account))
             continue;
 
         ProcessMail(mail, owner, trans);

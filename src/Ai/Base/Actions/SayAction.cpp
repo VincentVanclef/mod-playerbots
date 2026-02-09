@@ -206,7 +206,7 @@ void ChatReplyAction::ChatReplyDo(Player* bot, uint32& type, uint32& guid1, uint
     }
 
     //toxic links
-    if (msg.starts_with(sPlayerbotAIConfig->toxicLinksPrefix)
+    if (msg.starts_with(sPlayerbotAIConfig.toxicLinksPrefix)
         && (GET_PLAYERBOT_AI(bot)->GetChatHelper()->ExtractAllItemIds(msg).size() > 0 || GET_PLAYERBOT_AI(bot)->GetChatHelper()->ExtractAllQuestIds(msg).size() > 0))
     {
         HandleToxicLinksReply(bot, chatChannelSource, msg, name);
@@ -272,7 +272,7 @@ bool ChatReplyAction::HandleToxicLinksReply(Player* bot, ChatChannelSource chatC
 
     std::map<std::string, std::string> placeholders;
     placeholders["%random_inventory_item_link"] = botItems.size() > 0 ? GET_PLAYERBOT_AI(bot)->GetChatHelper()->FormatItem(botItems[rand() % botItems.size()]->GetTemplate()) : PlayerbotTextMgr::instance().GetBotText("string_empty_link");
-    placeholders["%prefix"] = sPlayerbotAIConfig->toxicLinksPrefix;
+    placeholders["%prefix"] = sPlayerbotAIConfig.toxicLinksPrefix;
 
     if (incompleteQuests.size() > 0)
     {

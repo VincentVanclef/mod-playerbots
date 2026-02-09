@@ -25,7 +25,7 @@ const int ITEM_SOUL_SHARD = 6265;
 bool CastDrainSoulAction::isUseful() { return AI_VALUE2(uint32, "item count", "soul shard") < 26; }
 
 // Checks if the bot's health is above a certain threshold, and if so, allows casting Life Tap
-bool CastLifeTapAction::isUseful() { return AI_VALUE2(uint8, "health", "self target") > sPlayerbotAIConfig->lowHealth; }
+bool CastLifeTapAction::isUseful() { return AI_VALUE2(uint8, "health", "self target") > sPlayerbotAIConfig.lowHealth; }
 
 // Checks if the target marked with the moon icon can be banished
 bool CastBanishOnCcAction::isPossible()

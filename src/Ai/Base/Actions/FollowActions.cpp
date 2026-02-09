@@ -44,7 +44,7 @@ bool FollowAction::Execute(Event event)
     //     botAI->PetFollow();
     // }
     // if (moved)
-    // botAI->SetNextCheckDelay(sPlayerbotAIConfig->reactDelay);
+    // botAI->SetNextCheckDelay(sPlayerbotAIConfig.reactDelay);
 
     return moved;
 }
@@ -98,7 +98,7 @@ bool FollowAction::isUseful()
         distance = bot->GetDistance(loc.GetPositionX(), loc.GetPositionY(), loc.GetPositionZ());
     }
     if (botAI->HasStrategy("master fishing", BOT_STATE_NON_COMBAT))
-        return ServerFacade::instance().IsDistanceGreaterThan(distance, sPlayerbotAIConfig->fishingDistanceFromMaster);
+        return ServerFacade::instance().IsDistanceGreaterThan(distance, sPlayerbotAIConfig.fishingDistanceFromMaster);
 
     return ServerFacade::instance().IsDistanceGreaterThan(distance, formation->GetMaxDistance());
 }
@@ -130,7 +130,7 @@ bool FleeToGroupLeaderAction::Execute(Event event)
     WorldPosition bosPos(bot);
     float distance = bosPos.fDist(targetPos);
 
-    if (distance < sPlayerbotAIConfig->reactDistance * 3)
+    if (distance < sPlayerbotAIConfig.reactDistance * 3)
     {
         if (!urand(0, 3))
             botAI->TellMaster("I am close, wait for me!");

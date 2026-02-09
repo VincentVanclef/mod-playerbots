@@ -105,7 +105,7 @@ Unit* CastFocusMagicOnPartyAction::GetTarget()
         if (!member || member == bot || !member->IsAlive())
             continue;
 
-        if (member->GetMap() != bot->GetMap() || bot->GetDistance(member) > sPlayerbotAIConfig->spellDistance)
+        if (member->GetMap() != bot->GetMap() || bot->GetDistance(member) > sPlayerbotAIConfig.spellDistance)
             continue;
 
         if (member->HasAura(54646))

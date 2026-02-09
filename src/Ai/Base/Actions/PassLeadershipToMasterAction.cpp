@@ -21,7 +21,7 @@ bool PassLeadershipToMasterAction::Execute(Event event)
             if (!message.empty())
                 botAI->TellMasterNoFacing(message);
 
-            if (sRandomPlayerbotMgr->IsRandomBot(bot))
+            if (sRandomPlayerbotMgr.IsRandomBot(bot))
             {
                 botAI->ResetStrategies();
                 botAI->Reset();

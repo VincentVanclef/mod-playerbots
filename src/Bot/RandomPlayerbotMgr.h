@@ -209,9 +209,9 @@ protected:
 private:
     RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
     {
-        this->playersLevel = sPlayerbotAIConfig->randombotStartingLevel;
+        this->playersLevel = sPlayerbotAIConfig.randombotStartingLevel;
 
-        if (sPlayerbotAIConfig->enabled || sPlayerbotAIConfig->randomBotAutologin)
+        if (sPlayerbotAIConfig.enabled || sPlayerbotAIConfig.randomBotAutologin)
         {
             PlayerbotCommandServer::instance().Start();
         }
@@ -300,6 +300,9 @@ private:
 };
 
 #define sRandomPlayerbotMgr RandomPlayerbotMgr::instance()
+<<<<<<< HEAD
 
+=======
+>>>>>>> parent of 7153ee83 (Revert of  . object back to -> pointer)
 
 #endif

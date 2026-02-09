@@ -24,7 +24,7 @@ bool TalkToQuestGiverAction::ProcessQuest(Quest const* quest, Object* questGiver
     QuestStatus status = bot->GetQuestStatus(quest->GetQuestId());
     Player* master = GetMaster();
 
-    if (sPlayerbotAIConfig->syncQuestForPlayer && master)
+    if (sPlayerbotAIConfig.syncQuestForPlayer && master)
     {
         PlayerbotAI* masterBotAI = GET_PLAYERBOT_AI(master);
         if (!masterBotAI || masterBotAI->IsRealPlayer())
@@ -35,7 +35,7 @@ bool TalkToQuestGiverAction::ProcessQuest(Quest const* quest, Object* questGiver
         }
     }
 
-    if (sPlayerbotAIConfig->syncQuestWithPlayer)
+    if (sPlayerbotAIConfig.syncQuestWithPlayer)
     {
         if (master && master->GetQuestStatus(quest->GetQuestId()) == QUEST_STATUS_COMPLETE &&
             (status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_FAILED))
@@ -171,7 +171,7 @@ void TalkToQuestGiverAction::RewardMultipleItem(Quest const* quest, Object* ques
     std::set<uint32> bestIds;
 
     std::ostringstream outid;
-    if (!botAI->IsAlt() || sPlayerbotAIConfig->autoPickReward == "yes")
+    if (!botAI->IsAlt() || sPlayerbotAIConfig.autoPickReward == "yes")
     {
         bestIds = BestRewards(quest);
         if (!bestIds.empty())
@@ -198,7 +198,7 @@ void TalkToQuestGiverAction::RewardMultipleItem(Quest const* quest, Object* ques
             AskToSelectReward(quest, out, true);
         }
     }
-    else if (sPlayerbotAIConfig->autoPickReward == "no")
+    else if (sPlayerbotAIConfig.autoPickReward == "no")
     {
         // Old functionality, list rewards.
         AskToSelectReward(quest, out, false);
@@ -260,7 +260,7 @@ bool TurnInQueryQuestAction::Execute(Event event)
     QuestStatus status = bot->GetQuestStatus(quest->GetQuestId());
     Player* master = GetMaster();
 
-    if (sPlayerbotAIConfig->syncQuestForPlayer && master)
+    if (sPlayerbotAIConfig.syncQuestForPlayer && master)
     {
         PlayerbotAI* masterBotAI = GET_PLAYERBOT_AI(master);
         if (!masterBotAI || masterBotAI->IsRealPlayer())
@@ -271,7 +271,7 @@ bool TurnInQueryQuestAction::Execute(Event event)
         }
     }
 
-    if (sPlayerbotAIConfig->syncQuestWithPlayer)
+    if (sPlayerbotAIConfig.syncQuestWithPlayer)
     {
         if (status == QUEST_STATUS_INCOMPLETE || status == QUEST_STATUS_FAILED)
         {

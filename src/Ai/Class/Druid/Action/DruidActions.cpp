@@ -44,7 +44,7 @@ bool CastStarfallAction::isUseful()
     if (ccTarget && ccTarget->IsAlive())
     {
         float dist2d = ServerFacade::instance().GetDistance2d(ccTarget, aoePos.GetPositionX(), aoePos.GetPositionY());
-        if (ServerFacade::instance().IsDistanceLessOrEqualThan(dist2d, sPlayerbotAIConfig->aoeRadius))
+        if (ServerFacade::instance().IsDistanceLessOrEqualThan(dist2d, sPlayerbotAIConfig.aoeRadius))
             return false;
     }
 
@@ -75,7 +75,7 @@ std::vector<NextAction> CastRebirthAction::getPrerequisites()
 bool CastRebirthAction::isUseful()
 {
     return CastSpellAction::isUseful() &&
-           AI_VALUE2(float, "distance", GetTargetName()) <= sPlayerbotAIConfig->spellDistance;
+           AI_VALUE2(float, "distance", GetTargetName()) <= sPlayerbotAIConfig.spellDistance;
 }
 
 Unit* CastRejuvenationOnNotFullAction::GetTarget()
@@ -91,7 +91,7 @@ Unit* CastRejuvenationOnNotFullAction::GetTarget()
         {
             continue;
         }
-        if (player->GetDistance2d(bot) > sPlayerbotAIConfig->spellDistance)
+        if (player->GetDistance2d(bot) > sPlayerbotAIConfig.spellDistance)
         {
             continue;
         }

@@ -171,7 +171,7 @@ bool GuildManageNearbyAction::Execute(Event event)
             continue;
         }
 
-        if (!sPlayerbotAIConfig->randomBotGuildNearby)
+        if (!sPlayerbotAIConfig.randomBotGuildNearby)
             return false;
 
         if (guild->GetMemberSize() > 1000)
@@ -185,7 +185,7 @@ bool GuildManageNearbyAction::Execute(Event event)
 
         PlayerbotAI* botAi = GET_PLAYERBOT_AI(player);
 
-        if (!sPlayerbotAIConfig->randomBotInvitePlayer && botAi && botAi->IsRealPlayer())
+        if (!sPlayerbotAIConfig.randomBotInvitePlayer && botAi && botAi->IsRealPlayer())
             continue;
 
         if (botAi)
@@ -193,16 +193,16 @@ bool GuildManageNearbyAction::Execute(Event event)
             if (botAi->GetGuilderType() == GuilderType::SOLO && !botAi->HasRealPlayerMaster()) //Do not invite solo players.
                 continue;
 
-            if (botAi->HasActivePlayerMaster() && !sRandomPlayerbotMgr->IsRandomBot(player)) //Do not invite alts of active players.
+            if (botAi->HasActivePlayerMaster() && !sRandomPlayerbotMgr.IsRandomBot(player)) //Do not invite alts of active players.
                 continue;
         }
 
         bool sameGroup = bot->GetGroup() && bot->GetGroup()->IsMember(player->GetGUID());
 
-        if (!sameGroup && ServerFacade::instance().GetDistance2d(bot, player) > sPlayerbotAIConfig->spellDistance)
+        if (!sameGroup && ServerFacade::instance().GetDistance2d(bot, player) > sPlayerbotAIConfig.spellDistance)
             continue;
 
-        if (sPlayerbotAIConfig->inviteChat && (sRandomPlayerbotMgr->IsRandomBot(bot) || !botAI->HasActivePlayerMaster()))
+        if (sPlayerbotAIConfig.inviteChat && (sRandomPlayerbotMgr.IsRandomBot(bot) || !botAI->HasActivePlayerMaster()))
         {
             /* std::map<std::string, std::string> placeholders;
             placeholders["%name"] = player->GetName();
@@ -274,7 +274,7 @@ bool GuildManageNearbyAction::Execute(Event event)
 
         if (botAI->DoSpecificAction("guild invite", Event("guild management", guid), true))
         {
-            if (sPlayerbotAIConfig->inviteChat)
+            if (sPlayerbotAIConfig.inviteChat)
                 return true;
             found++;
         }

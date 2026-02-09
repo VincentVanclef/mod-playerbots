@@ -87,7 +87,7 @@ namespace ai::buff
     {
         std::string castName = baseName;
         Group* g = bot->GetGroup();
-        if (!g || g->GetMembersCount() < static_cast<uint32>(sPlayerbotAIConfig->minBotsForGreaterBuff))
+        if (!g || g->GetMembersCount() < static_cast<uint32>(sPlayerbotAIConfig.minBotsForGreaterBuff))
             return castName; // Group too small: stay in solo mode
 
         if (std::string const groupName = GroupVariantFor(baseName); !groupName.empty())
@@ -114,7 +114,7 @@ namespace ai::buff
                 time_t now = std::time(nullptr);
                 uint32 botLow = static_cast<uint32>(bot->GetGUID().GetCounter());
                 time_t& last = s_lastWarn[ std::make_pair(botLow, groupName) ];
-                if (!last || now - last >= sPlayerbotAIConfig->rpWarningCooldown) // Configurable anti-spam
+                if (!last || now - last >= sPlayerbotAIConfig.rpWarningCooldown) // Configurable anti-spam
                 {
                     // DB Key choice in regard of the buff
                     std::string key;
