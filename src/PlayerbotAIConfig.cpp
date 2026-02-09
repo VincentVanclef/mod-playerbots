@@ -677,19 +677,12 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
     }
 
     // Assign account types after accounts are created
-<<<<<<< HEAD
-    RandomPlayerbotMgr::instance().AssignAccountTypes();
-=======
     sRandomPlayerbotMgr.AssignAccountTypes();
->>>>>>> parent of 7153ee83 (Revert of  . object back to -> pointer)
+
 
     if (sPlayerbotAIConfig.enabled)
     {
-<<<<<<< HEAD
-        RandomPlayerbotMgr::instance().Init();
-=======
         sRandomPlayerbotMgr.Init();
->>>>>>> parent of 7153ee83 (Revert of  . object back to -> pointer)
     }
 
     PlayerbotGuildMgr::instance().Init();

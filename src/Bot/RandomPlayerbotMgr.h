@@ -300,9 +300,6 @@ private:
 };
 
 #define sRandomPlayerbotMgr RandomPlayerbotMgr::instance()
-<<<<<<< HEAD
 
-=======
->>>>>>> parent of 7153ee83 (Revert of  . object back to -> pointer)
 
 #endif

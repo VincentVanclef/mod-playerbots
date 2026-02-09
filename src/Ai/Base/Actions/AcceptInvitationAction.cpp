@@ -58,11 +58,9 @@ bool AcceptInvitationAction::Execute(Event event)
 
     botAI->TellMaster("Hello");
 
-<<<<<<< HEAD
-    if (sPlayerbotAIConfig->summonWhenGroup && bot->GetDistance(inviter) > sPlayerbotAIConfig->sightDistance)
-=======
+
     if (sPlayerbotAIConfig.summonWhenGroup && bot->GetDistance(inviter) > sPlayerbotAIConfig.sightDistance)
->>>>>>> parent of 7153ee83 (Revert of  . object back to -> pointer)
+
     {
         Teleport(inviter, bot, true);
     }
