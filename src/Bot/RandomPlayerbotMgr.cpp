@@ -250,8 +250,6 @@ RandomPlayerbotMgr::RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
     PlayersCheckTimer = 0;
 }
 
-RandomPlayerbotMgr::~RandomPlayerbotMgr() {}
-
 uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
 {
     uint32 count = 0;
@@ -569,7 +567,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     if (totalPmo)
         totalPmo->finish();
 
-    totalPmo = sPerfMonitor->start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
+    totalPmo = sPerfMonitor.start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
 
     if (!sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
         return;
@@ -705,7 +703,7 @@ if (sPlayerbotAIConfig.enabled) // sanity
     uint32 updateIntervalTurboBoost = _isBotInitializing ? 1 : sPlayerbotAIConfig.randomBotUpdateInterval;
     SetNextCheckDelay(updateIntervalTurboBoost * (onlineBotFocus + 25) * 10);
 
-    PerfMonitorOperation* pmo = sPerfMonitor->start(
+    PerfMonitorOperation* pmo = sPerfMonitor.start(
         PERF_MON_TOTAL,
         onlineBotCount < maxAllowedBotCount ? "RandomPlayerbotMgr::Login" : "RandomPlayerbotMgr::UpdateAIInternal");
 
@@ -2211,7 +2209,7 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot, std::vector<WorldLocation>&
         return;
     }
 
-    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomTeleportByLocations");
+    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomTeleportByLocations");
 
     std::shuffle(std::begin(tlocs), std::end(tlocs), RandomEngine::Instance());
     for (uint32 i = 0; i < tlocs.size(); i++)
@@ -2802,7 +2800,7 @@ void RandomPlayerbotMgr::RandomTeleport(Player* bot)
     if (bot->InBattleground())
         return;
 
-    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomTeleport");
+    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomTeleport");
     std::vector<WorldLocation> locs;
 
     std::list<Unit*> targets;
@@ -2864,7 +2862,7 @@ void RandomPlayerbotMgr::IncreaseLevel(Player* bot)
     if (maxLevel > sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL))
         maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
 
-    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "IncreaseLevel");
+    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "IncreaseLevel");
     uint32 lastLevel = GetValue(bot, "level");
     uint8 level = bot->GetLevel() + 1;
     if (level > maxLevel)
@@ -2909,7 +2907,7 @@ void RandomPlayerbotMgr::RandomizeFirst(Player* bot)
     if (maxLevel < minLevel)
         maxLevel = minLevel;
 
-    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomizeFirst");
+    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomizeFirst");
 
     uint32 level;
 
@@ -2988,7 +2986,7 @@ void RandomPlayerbotMgr::RandomizeMin(Player* bot)
     if (!botAI)
         return;
 
-    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "RandomizeMin");
+    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "RandomizeMin");
     uint32 level = sPlayerbotAIConfig.randomBotMinLevel;
     SetValue(bot, "level", level);
     PlayerbotFactory factory(bot, level);
@@ -3077,7 +3075,7 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     LOG_DEBUG("playerbots", "Refreshing bot {} <{}>", bot->GetGUID().ToString().c_str(), bot->GetName().c_str());
 
-    PerfMonitorOperation* pmo = sPerfMonitor->start(PERF_MON_RNDBOT, "Refresh");
+    PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "Refresh");
 
     botAI->Reset();
 

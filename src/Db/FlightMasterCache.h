@@ -32,5 +32,6 @@ private:
     std::map<uint32, WorldPosition> allianceFlightMasterCache;
     std::map<uint32, WorldPosition> hordeFlightMasterCache;
 };
+#define sFlightMasterCache FlightMasterCache::instance()
 
 #endif

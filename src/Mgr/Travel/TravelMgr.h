@@ -947,5 +947,6 @@ private:
     TravelMgr(TravelMgr&&) = delete;
     TravelMgr& operator=(TravelMgr&&) = delete;
 };
+#define sTravelMgr TravelMgr::instance()
 
 #endif
