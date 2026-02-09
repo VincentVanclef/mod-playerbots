@@ -1919,7 +1919,7 @@ bool BGTactics::selectObjective(bool reset)
                 {
                     if (chest->isSpawned() && chest->GetGoState() == GO_STATE_READY)
                     {
-                        float dist = sServerFacade->GetDistance2d(storm, chest);
+                        float dist = sServerFacade.GetDistance2d(storm, chest);
                         float radius = BR_DOME_RADIUS * storm->GetObjectScale();
                         if (dist <= radius)
                         {
@@ -2380,7 +2380,7 @@ bool BGTactics::selectObjective(bool reset)
                 if (urand(0, 99) < profile.bothFlagsEscortChance && teamFC)
                 {
                     target.Relocate(teamFC->GetPositionX(), teamFC->GetPositionY(), teamFC->GetPositionZ());
-                    if (sServerFacade->GetDistance2d(bot, teamFC) < 33.0f)
+                    if (sServerFacade.GetDistance2d(bot, teamFC) < 33.0f)
                         Follow(teamFC);
                 }
                 else
@@ -2424,7 +2424,7 @@ bool BGTactics::selectObjective(bool reset)
                         if (urand(0, 99) < profile.defenderEscortChance)
                         {
                             target.Relocate(teamFC->GetPositionX(), teamFC->GetPositionY(), teamFC->GetPositionZ());
-                            if (sServerFacade->GetDistance2d(bot, teamFC) < 33.0f)
+                            if (sServerFacade.GetDistance2d(bot, teamFC) < 33.0f)
                                 Follow(teamFC);
                         }
                     }
@@ -2447,7 +2447,7 @@ bool BGTactics::selectObjective(bool reset)
                         if (urand(0, 99) < profile.attackerAssistOwnFCChance)
                         {
                             target.Relocate(teamFC->GetPositionX(), teamFC->GetPositionY(), teamFC->GetPositionZ());
-                            if (sServerFacade->GetDistance2d(bot, teamFC) < 33.0f)
+                            if (sServerFacade.GetDistance2d(bot, teamFC) < 33.0f)
                                 Follow(teamFC);
                         }
                         else
@@ -3373,11 +3373,11 @@ bool BGTactics::moveToObjective(bool ignoreDist)
             pos = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
         }
 
-        if (!ignoreDist && sServerFacade->IsDistanceGreaterThan(sServerFacade->GetDistance2d(bot, pos.x, pos.y), 100.0f))
+        if (!ignoreDist && sServerFacade.IsDistanceGreaterThan(sServerFacade.GetDistance2d(bot, pos.x, pos.y), 100.0f))
         {
             // std::ostringstream out;
             // out << "It is too far away! " << pos.x << ", " << pos.y << ", Distance: " <<
-            // sServerFacade->GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
+            // sServerFacade.GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
             return false;
         }
 
@@ -3389,7 +3389,7 @@ bool BGTactics::moveToObjective(bool ignoreDist)
         }
 
         // std::ostringstream out; out << "Moving to objective " << pos.x << ", " << pos.y << ", Distance: " <<
-        // sServerFacade->GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
+        // sServerFacade.GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
 
         // dont increase from 1.5 will cause bugs with horde capping AV towers
         return MoveNear(bot->GetMapId(), pos.x, pos.y, pos.z, 1.5f);
@@ -3614,7 +3614,7 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
     // out << "WP: ";
     // reverse ? out << currPoint << " <<< -> " << nPoint : out << currPoint << ">>> ->" << nPoint;
     // out << ", " << nextPoint.x << ", " << nextPoint.y << " Path Size: " << currentPath->size() << ", Dist: " <<
-    // sServerFacade->GetDistance2d(bot, nextPoint.x, nextPoint.y); bot->Say(out.str(), LANG_UNIVERSAL);
+    // sServerFacade.GetDistance2d(bot, nextPoint.x, nextPoint.y); bot->Say(out.str(), LANG_UNIVERSAL);
 
     return MoveTo(bot->GetMapId(), nextPoint.x + frand(-2, 2), nextPoint.y + frand(-2, 2), nextPoint.z);
 }
@@ -4238,7 +4238,7 @@ bool BGTactics::useBuff()
             continue;
 
         // use speed buff only if close
-        if (sServerFacade->IsDistanceGreaterThan(sServerFacade->GetDistance2d(bot, go),
+        if (sServerFacade.IsDistanceGreaterThan(sServerFacade.GetDistance2d(bot, go),
                                                  go->GetEntry() == Buff_Entries[0] ? 20.0f : 50.0f))
             continue;
 
@@ -4288,7 +4288,7 @@ uint32 BGTactics::getPlayersInArea(TeamId teamId, Position point, float range, b
             if (!combat && player->IsInCombat())
                 continue;
 
-            if (sServerFacade->GetDistance2d(player, point.GetPositionX(), point.GetPositionY()) < range)
+            if (sServerFacade.GetDistance2d(player, point.GetPositionX(), point.GetPositionY()) < range)
                 ++defCount;
         }
     }
@@ -4372,9 +4372,9 @@ bool BGTactics::IsLockedInsideKeep()
         // get closest portal
         if (bot->GetTeamId() == TEAM_ALLIANCE && go->GetEntry() == GO_TELEPORTER_4)
         {
-            float tempDist = sServerFacade->GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
+            float tempDist = sServerFacade.GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
 
-            if (sServerFacade->IsDistanceLessThan(tempDist, closestDistance))
+            if (sServerFacade.IsDistanceLessThan(tempDist, closestDistance))
             {
                 closestDistance = tempDist;
                 closestPortal = go;
@@ -4385,9 +4385,9 @@ bool BGTactics::IsLockedInsideKeep()
         // get closest portal
         if (bot->GetTeamId() == TEAM_HORDE && go->GetEntry() == GO_TELEPORTER_2)
         {
-            float tempDist = sServerFacade->GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
+            float tempDist = sServerFacade.GetDistance2d(bot, go->GetPositionX(), go->GetPositionY());
 
-            if (sServerFacade->IsDistanceLessThan(tempDist, closestDistance))
+            if (sServerFacade.IsDistanceLessThan(tempDist, closestDistance))
             {
                 closestDistance = tempDist;
                 closestPortal = go;

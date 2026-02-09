@@ -4177,7 +4177,7 @@ ObjectGuid RandomPlayerbotMgr::GetBattleMasterGUID(Player* bot, BattlegroundType
         if (Bm->getDeathState() == DeathState::Dead)
             continue;
 
-        float dist2 = sServerFacade->GetDistance2d(bot, data->posX, data->posY);
+        float dist2 = sServerFacade.GetDistance2d(bot, data->posX, data->posY);
         if (dist2 < dist1)
         {
             dist1 = dist2;
