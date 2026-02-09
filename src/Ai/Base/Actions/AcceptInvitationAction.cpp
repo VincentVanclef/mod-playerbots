@@ -8,6 +8,7 @@
 #include "Event.h"
 #include "ObjectAccessor.h"
 #include "PlayerbotAIConfig.h"
+#include "RandomPlayerbotMgr.h"
 #include "PlayerbotSecurity.h"
 #include "Playerbots.h"
 #include "WorldPacket.h"

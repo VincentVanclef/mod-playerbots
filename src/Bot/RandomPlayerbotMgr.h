@@ -297,6 +297,6 @@ private:
 
 };
 
-#define sRandomPlayerbotMgr->>RandomPlayerbotMgr::instance()
+#define sRandomPlayerbotMgr->RandomPlayerbotMgr::instance()
 
 #endif
