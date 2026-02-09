@@ -47,7 +47,7 @@ bool AcceptInvitationAction::Execute(Event event)
     if (!bot->GetGroup() || !bot->GetGroup()->IsMember(inviter->GetGUID()))
         return false;
 
-    if (sRandomPlayerbotMgr->IsRandomBot(bot))
+    if (sRandomPlayerbotMgr.IsRandomBot(bot))
         botAI->SetMaster(inviter);
     // else
     // PlayerbotRepository::instance().Save(botAI);
