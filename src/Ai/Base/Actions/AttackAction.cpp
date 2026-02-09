@@ -139,7 +139,7 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
         }
         else
         {
-            float engageDist = sPlayerbotAIConfig->spellDistance;
+            float engageDist = sPlayerbotAIConfig.spellDistance;
             if (engageDist < 10.0f) engageDist = 10.0f;
             if (bot->GetExactDist2d(target) > engageDist)
             {

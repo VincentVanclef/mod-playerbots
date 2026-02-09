@@ -1279,7 +1279,7 @@ static std::pair<uint32, uint32> IC_AttackObjectives[] = {
 // useful commands for fixing BG bugs and checking waypoints/paths
 bool BGTactics::HandleConsoleCommand(ChatHandler* handler, char const* args)
 {
-    if (!sPlayerbotAIConfig->enabled)
+    if (!sPlayerbotAIConfig.enabled)
     {
         handler->PSendSysMessage("|cffff0000Playerbot system is currently disabled!");
         return true;
@@ -4220,9 +4220,9 @@ bool BGTactics::useBuff()
     if (closeObjects.empty())
         return false;
 
-    bool needRegen = bot->GetHealthPct() < sPlayerbotAIConfig->mediumHealth ||
+    bool needRegen = bot->GetHealthPct() < sPlayerbotAIConfig.mediumHealth ||
                      (AI_VALUE2(bool, "has mana", "self target") &&
-                      AI_VALUE2(uint8, "mana", "self target") < sPlayerbotAIConfig->mediumMana);
+                      AI_VALUE2(uint8, "mana", "self target") < sPlayerbotAIConfig.mediumMana);
     bool needSpeed = (bgType != BATTLEGROUND_WS || bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) ||
                       bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL)) ||
                      !(teamFlagTaken() || flagTaken());
@@ -4434,7 +4434,7 @@ bool ArenaTactics::Execute(Event event)
 {
     if (!bot->InBattleground())
     {
-        bool IsRandomBot = sRandomPlayerbotMgr->IsRandomBot(bot->GetGUID().GetCounter());
+        bool IsRandomBot = sRandomPlayerbotMgr.IsRandomBot(bot->GetGUID().GetCounter());
         botAI->ChangeStrategy("-arena", BOT_STATE_COMBAT);
         botAI->ChangeStrategy("-arena", BOT_STATE_NON_COMBAT);
         botAI->ResetStrategies(!IsRandomBot);
