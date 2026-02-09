@@ -63,7 +63,7 @@ class PlayerbotAIConfig
 {
 public:
     PlayerbotAIConfig(){};
-    static PlayerbotAIConfig* instance()
+    static PlayerbotAIConfig& instance()
     {
         static PlayerbotAIConfig instance;
         return &instance;
