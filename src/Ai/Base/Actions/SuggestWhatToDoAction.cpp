@@ -54,7 +54,7 @@ SuggestWhatToDoAction::SuggestWhatToDoAction(PlayerbotAI* botAI, std::string con
 
 bool SuggestWhatToDoAction::isUseful()
 {
-    if (!sRandomPlayerbotMgr.IsRandomBot(bot) || bot->GetGroup() || bot->GetInstanceId() || bot->GetBattleground())
+    if (!sRandomPlayerbotMgr->IsRandomBot(bot) || bot->GetGroup() || bot->GetInstanceId() || bot->GetBattleground())
         return false;
 
     std::string qualifier = "suggest what to do";
@@ -262,7 +262,7 @@ bool SuggestDungeonAction::Execute(Event event)
 {
     // TODO: use PlayerbotDungeonRepository::instance()
 
-    if (!sPlayerbotAIConfig.randomBotSuggestDungeons || bot->GetGroup())
+    if (!sPlayerbotAIConfig->randomBotSuggestDungeons || bot->GetGroup())
         return false;
 
     if (instances.empty())
@@ -373,7 +373,7 @@ bool SuggestTradeAction::Execute(Event event)
     if (!proto)
         return false;
 
-    uint32 price = proto->SellPrice * sRandomPlayerbotMgr.GetSellMultiplier(bot) * count;
+    uint32 price = proto->SellPrice * sRandomPlayerbotMgr->GetSellMultiplier(bot) * count;
     if (!price)
         return false;
 

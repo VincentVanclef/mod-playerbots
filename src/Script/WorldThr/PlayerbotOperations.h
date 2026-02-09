@@ -448,7 +448,7 @@ public:
 
     bool Execute() override
     {
-        sRandomPlayerbotMgr.AddPlayerBot(m_botGuid, m_masterAccountId);
+        sRandomPlayerbotMgr->AddPlayerBot(m_botGuid, m_masterAccountId);
         return true;
     }
 

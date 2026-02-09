@@ -98,23 +98,23 @@ public:
         if (!player->GetSession()->IsBot())
         {
             PlayerbotsMgr::instance().AddPlayerbotData(player, false);
-            sRandomPlayerbotMgr.OnPlayerLogin(player);
+            sRandomPlayerbotMgr->OnPlayerLogin(player);
 
             // Before modifying the following messages, please make sure it does not violate the AGPLv3.0 license
             // especially if you are distributing a repack or hosting a public server
             // e.g. you can replace the URL with your own repository,
             // but it should be publicly accessible and include all modifications you've made
-            if (sPlayerbotAIConfig.enabled)
+            if (sPlayerbotAIConfig->enabled)
             {
                 ChatHandler(player->GetSession()).SendSysMessage(
                     "|cff00ff00This server runs with |cff00ccffmod-playerbots|r "
                     "|cffcccccchttps://github.com/mod-playerbots/mod-playerbots|r");
             }
 
-            if (sPlayerbotAIConfig.enabled || sPlayerbotAIConfig.randomBotAutologin)
+            if (sPlayerbotAIConfig->enabled || sPlayerbotAIConfig->randomBotAutologin)
             {
                 std::string roundedTime =
-                    std::to_string(std::ceil((sPlayerbotAIConfig.maxRandomBots * 0.11 / 60) * 10) / 10.0);
+                    std::to_string(std::ceil((sPlayerbotAIConfig->maxRandomBots * 0.11 / 60) * 10) / 10.0);
                 roundedTime = roundedTime.substr(0, roundedTime.find('.') + 2);
 
                 ChatHandler(player->GetSession()).SendSysMessage(
@@ -277,14 +277,14 @@ public:
             playerbotMgr->HandleCommand(type, msg);
         }
 
-        sRandomPlayerbotMgr.HandleCommand(type, msg, player);
+        sRandomPlayerbotMgr->HandleCommand(type, msg, player);
 
         return true;
     }
 
     bool OnPlayerBeforeAchievementComplete(Player* player, AchievementEntry const* achievement) override
     {
-        if ((sRandomPlayerbotMgr.IsRandomBot(player) || sRandomPlayerbotMgr.IsAddclassBot(player)) &&
+        if ((sRandomPlayerbotMgr->IsRandomBot(player) || sRandomPlayerbotMgr->IsAddclassBot(player)) &&
             (achievement->flags & (ACHIEVEMENT_FLAG_REALM_FIRST_REACH | ACHIEVEMENT_FLAG_REALM_FIRST_KILL)))
         {
             return false;
@@ -296,11 +296,11 @@ public:
     void OnPlayerGiveXP(Player* player, uint32& amount, Unit* /*victim*/, uint8 /*xpSource*/) override
     {
         // early return
-        if (sPlayerbotAIConfig.randomBotXPRate == 1.0 || !player)
+        if (sPlayerbotAIConfig->randomBotXPRate == 1.0 || !player)
             return;
 
         // no XP multiplier, when player is no bot.
-        if (!player->GetSession()->IsBot() || !sRandomPlayerbotMgr.IsRandomBot(player))
+        if (!player->GetSession()->IsBot() || !sRandomPlayerbotMgr->IsRandomBot(player))
             return;
 
         // no XP multiplier, when bot is in a group with a real player.
@@ -322,7 +322,7 @@ public:
         }
 
         // otherwise apply bot XP multiplier.
-        amount = static_cast<uint32>(std::round(static_cast<float>(amount) * sPlayerbotAIConfig.randomBotXPRate));
+        amount = static_cast<uint32>(std::round(static_cast<float>(amount) * sPlayerbotAIConfig->randomBotXPRate));
     }
 };
 
@@ -392,7 +392,7 @@ public:
         LOG_INFO("server.loading", " ");
         LOG_INFO("server.loading", "Load Playerbots Config...");
 
-        sPlayerbotAIConfig.Initialize();
+        sPlayerbotAIConfig->Initialize();
 
         LOG_INFO("server.loading", ">> Loaded playerbots config in {} ms", GetMSTimeDiffToNow(oldMSTime));
         LOG_INFO("server.loading", " ");
@@ -405,7 +405,7 @@ public:
     void OnUpdate(uint32 diff) override
     {
         PlayerbotWorldThreadProcessor::instance().Update(diff);
-        sRandomPlayerbotMgr.UpdateAI(diff);  // World thread only
+        sRandomPlayerbotMgr->UpdateAI(diff);  // World thread only
     }
 };
 
@@ -485,7 +485,7 @@ public:
 
     void OnPlayerbotUpdate(uint32 diff) override
     {
-        sRandomPlayerbotMgr.UpdateSessions();  // Per-bot updates only
+        sRandomPlayerbotMgr->UpdateSessions();  // Per-bot updates only
     }
 
     void OnPlayerbotUpdateSessions(Player* player) override
@@ -507,13 +507,13 @@ public:
             }
         }
 
-        sRandomPlayerbotMgr.OnPlayerLogout(player);
+        sRandomPlayerbotMgr->OnPlayerLogout(player);
     }
 
     void OnPlayerbotLogoutBots() override
     {
         LOG_INFO("playerbots", "Logging out all bots...");
-        sRandomPlayerbotMgr.LogoutAllBots();
+        sRandomPlayerbotMgr->LogoutAllBots();
     }
 };
 

@@ -677,23 +677,23 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
     }
 
     // Assign account types after accounts are created
-    sRandomPlayerbotMgr.AssignAccountTypes();
+    sRandomPlayerbotMgr->AssignAccountTypes();
 
-    if (sPlayerbotAIConfig.enabled)
+    if (sPlayerbotAIConfig->enabled)
     {
-        sRandomPlayerbotMgr.Init();
+        sRandomPlayerbotMgr->Init();
     }
 
     PlayerbotGuildMgr::instance().Init();
-    sRandomItemMgr.Init();
-    sRandomItemMgr.InitAfterAhBot();
+    sRandomItemMgr->Init();
+    sRandomItemMgr->InitAfterAhBot();
     PlayerbotTextMgr::instance().LoadBotTexts();
     PlayerbotTextMgr::instance().LoadBotTextChance();
     PlayerbotFactory::Init();
 
     AiObjectContext::BuildAllSharedContexts();
 
-    if (sPlayerbotAIConfig.randomBotSuggestDungeons)
+    if (sPlayerbotAIConfig->randomBotSuggestDungeons)
     {
         PlayerbotDungeonRepository::instance().LoadDungeonSuggestions();
     }

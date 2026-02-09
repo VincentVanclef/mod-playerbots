@@ -207,9 +207,9 @@ protected:
 private:
     RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
     {
-        this->playersLevel = sPlayerbotAIConfig.randombotStartingLevel;
+        this->playersLevel = sPlayerbotAIConfig->randombotStartingLevel;
 
-        if (sPlayerbotAIConfig.enabled || sPlayerbotAIConfig.randomBotAutologin)
+        if (sPlayerbotAIConfig->enabled || sPlayerbotAIConfig->randomBotAutologin)
         {
             PlayerbotCommandServer::instance().Start();
         }
@@ -297,6 +297,6 @@ private:
 
 };
 
-#define sRandomPlayerbotMgr RandomPlayerbotMgr::instance()
+#define sRandomPlayerbotMgr->RandomPlayerbotMgr::instance()
 
 #endif

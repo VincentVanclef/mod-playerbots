@@ -42,7 +42,7 @@ namespace
             }
         }
 
-        sRandomPlayerbotMgr.LogoutPlayerBot(target->GetGUID());
+        sRandomPlayerbotMgr->LogoutPlayerBot(target->GetGUID());
     }
 }
 
