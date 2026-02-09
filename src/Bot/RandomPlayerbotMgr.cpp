@@ -228,7 +228,7 @@ RandomPlayerbotMgr::RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
 
     if (sPlayerbotAIConfig.enabled || sPlayerbotAIConfig.randomBotAutologin)
     {
-        sPlayerbotCommandServer->Start();
+        sPlayerbotCommandServer.Start();
     }
 
     BattlegroundData.clear();  // Clear here and here only.
@@ -2506,10 +2506,10 @@ void RandomPlayerbotMgr::PrepareTeleportCache()
                 {
                     WorldPosition pos(mapId, x, y, z, orient);
                     if (forHorde)
-                        sFlightMasterCache->AddHordeFlightMaster(guid, pos);
+                        sFlightMasterCache.AddHordeFlightMaster(guid, pos);
 
                     if (forAlliance)
-                        sFlightMasterCache->AddAllianceFlightMaster(guid, pos);
+                        sFlightMasterCache.AddAllianceFlightMaster(guid, pos);
                 }
                 const AreaTableEntry* area = sAreaTableStore.LookupEntry(map->GetAreaId(PHASEMASK_NORMAL, x, y, z));
                 uint32 zoneId = area->zone ? area->zone : area->ID;
@@ -3671,7 +3671,7 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
         }
         else
         {
-            std::vector<TravelDestination*> dests = sTravelMgr->getRpgTravelDestinations(player, true, true, 200000.0f);
+            std::vector<TravelDestination*> dests = sTravelMgr.getRpgTravelDestinations(player, true, true, 200000.0f);
 
             do
             {
