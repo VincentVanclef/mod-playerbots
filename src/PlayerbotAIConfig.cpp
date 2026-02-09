@@ -685,8 +685,8 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
     }
 
     PlayerbotGuildMgr::instance().Init();
-    sRandomItemMgr->Init();
-    sRandomItemMgr->InitAfterAhBot();
+    sRandomItemMgr.Init();
+    sRandomItemMgr.InitAfterAhBot();
     PlayerbotTextMgr::instance().LoadBotTexts();
     PlayerbotTextMgr::instance().LoadBotTextChance();
     PlayerbotFactory::Init();
