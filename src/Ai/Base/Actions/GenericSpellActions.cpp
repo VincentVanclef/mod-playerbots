@@ -55,7 +55,7 @@ bool CastSpellAction::Execute(Event event)
 
         uint32 castId = 0;
 
-        for (PlayerSpellMap::iterator itr = botAI->GetSpellMap().begin(); itr != botAI->GetSpellMap().end(); ++itr)
+        for (PlayerSpellMap::iterator itr = bot->GetSpellMap().begin(); itr != bot->GetSpellMap().end(); ++itr)
         {
             uint32 spellId = itr->first;
 
@@ -81,7 +81,7 @@ bool CastSpellAction::Execute(Event event)
             if (!proto)
                 continue;
 
-            if (botAI->CanUseItem(proto) != EQUIP_ERR_OK)
+            if (bot->CanUseItem(proto) != EQUIP_ERR_OK)
                 continue;
 
             if (spellInfo->Id > castId)
@@ -92,18 +92,18 @@ bool CastSpellAction::Execute(Event event)
     }
 
     Unit* spellTarget = GetTarget();
-if (spellTarget && IsSpellcasterClass(botAI->getClass()) && !botAI->IsInVehicle() && !botAI->IsMounted())
+if (spellTarget && IsSpellcasterClass(bot->getClass()) && !botAI->IsInVehicle() && !bot->IsMounted())
 {
     // If target is outside our generic spell engagement range, start moving in so we don't "wait" for the target to walk in.
     // Small buffer prevents edge-range jitter.
     float const buffer = 1.0f;
     float const desired = range + sPlayerbotAIConfig.contactDistance;
-    if (!botAI->IsWithinCombatRange(spellTarget, desired - buffer))
+    if (!bot->IsWithinCombatRange(spellTarget, desired - buffer))
     {
         // Don't override "stay" (e.g. parked bots) and don't break channeling spells.
-        if (!botAI->HasStrategy("stay", botAI->GetState()) && botAI->GetCurrentSpell(CURRENT_CHANNELED_SPELL) == nullptr)
+        if (!botAI->HasStrategy("stay", botAI->GetState()) && bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL) == nullptr)
         {
-            botAI->GetMotionMaster()->MoveChase(spellTarget);
+            bot->GetMotionMaster()->MoveChase(spellTarget);
             return true;
         }
     }
@@ -116,27 +116,27 @@ bool CastSpellAction::isPossible()
 {
     if (botAI->IsInVehicle() && !botAI->IsInVehicle(false, false, true))
     {
-        if (!sPlayerbotAIConfig.logInGroupOnly || (botAI->GetGroup() && botAI->HasRealPlayerMaster()))
+        if (!sPlayerbotAIConfig.logInGroupOnly || (bot->GetGroup() && botAI->HasRealPlayerMaster()))
         {
-            LOG_DEBUG("playerbots", "Can cast spell failed. Vehicle. - bot name: {}", botAI->GetName());
+            LOG_DEBUG("playerbots", "Can cast spell failed. Vehicle. - bot name: {}", bot->GetName());
         }
         return false;
     }
 
-    if (spell == "mount" && !botAI->IsMounted() && !botAI->IsInCombat())
+    if (spell == "mount" && !bot->IsMounted() && !bot->IsInCombat())
         return true;
 
-    if (spell == "mount" && botAI->IsInCombat())
+    if (spell == "mount" && bot->IsInCombat())
     {
-        if (!sPlayerbotAIConfig.logInGroupOnly || (botAI->GetGroup() && botAI->HasRealPlayerMaster()))
+        if (!sPlayerbotAIConfig.logInGroupOnly || (bot->GetGroup() && botAI->HasRealPlayerMaster()))
         {
-            LOG_DEBUG("playerbots", "Can cast spell failed. Mount. - bot name: {}", botAI->GetName());
+            LOG_DEBUG("playerbots", "Can cast spell failed. Mount. - bot name: {}", bot->GetName());
         }
-        botAI->Dismount();
+        bot->Dismount();
         return false;
     }
 
-    // Spell* currentSpell = botAI->GetCurrentSpell(CURRENT_GENERIC_SPELL); //not used, line marked for removal.
+    // Spell* currentSpell = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL); //not used, line marked for removal.
     Unit* spellTarget = GetTarget();
 
 // Normal castability check.
@@ -144,10 +144,10 @@ if (botAI->CanCastSpell(spell, spellTarget))
     return true;
 
 // Spellcasters should proactively close the gap to get into spell range instead of waiting for the target.
-if (spellTarget && IsSpellcasterClass(botAI->getClass()) && spellTarget->IsInWorld() && spellTarget->GetMapId() == botAI->GetMapId())
+if (spellTarget && IsSpellcasterClass(bot->getClass()) && spellTarget->IsInWorld() && spellTarget->GetMapId() == bot->GetMapId())
 {
     float const desired = range + sPlayerbotAIConfig.contactDistance;
-    if (!botAI->IsWithinCombatRange(spellTarget, desired))
+    if (!bot->IsWithinCombatRange(spellTarget, desired))
         return true; // allow Execute() to move us into range
 }
 
@@ -159,12 +159,12 @@ bool CastSpellAction::isUseful()
     if (botAI->IsInVehicle() && !botAI->IsInVehicle(false, false, true))
         return false;
 
-    if (spell == "mount" && !botAI->IsMounted() && !botAI->IsInCombat())
+    if (spell == "mount" && !bot->IsMounted() && !bot->IsInCombat())
         return true;
 
-    if (spell == "mount" && botAI->IsInCombat())
+    if (spell == "mount" && bot->IsInCombat())
     {
-        botAI->Dismount();
+        bot->Dismount();
         return false;
     }
 
@@ -172,10 +172,10 @@ bool CastSpellAction::isUseful()
     if (!spellTarget)
         return false;
 
-    if (!spellTarget->IsInWorld() || spellTarget->GetMapId() != botAI->GetMapId())
+    if (!spellTarget->IsInWorld() || spellTarget->GetMapId() != bot->GetMapId())
         return false;
 
-    // float combatReach = botAI->GetCombatReach() + spellTarget->GetCombatReach();
+    // float combatReach = bot->GetCombatReach() + spellTarget->GetCombatReach();
     // if (!botAI->IsRanged(bot))
     //     combatReach += 4.0f / 3.0f;
 
@@ -195,7 +195,7 @@ bool CastMeleeSpellAction::isUseful()
     if (!target)
         return false;
 
-    if (!botAI->IsWithinMeleeRange(target))
+    if (!bot->IsWithinMeleeRange(target))
         return false;
 
     return CastSpellAction::isUseful();
@@ -212,7 +212,7 @@ bool CastMeleeDebuffSpellAction::isUseful()
     if (!target)
         return false;
 
-    if (!botAI->IsWithinMeleeRange(target))
+    if (!bot->IsWithinMeleeRange(target))
         return false;
 
     return CastDebuffSpellAction::isUseful();
@@ -294,7 +294,7 @@ bool BuffOnPartyAction::Execute(Event event)
 
 CastShootAction::CastShootAction(PlayerbotAI* botAI) : CastSpellAction(botAI, "shoot")
 {
-    if (Item* const pItem = botAI->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
+    if (Item* const pItem = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
     {
         spell = "shoot";
 
@@ -364,12 +364,12 @@ bool CastVehicleSpellAction::Execute(Event event)
 
 bool UseTrinketAction::Execute(Event event)
 {
-    Item* trinket1 = botAI->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET1);
+    Item* trinket1 = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET1);
 
     if (trinket1 && UseTrinket(trinket1))
         return true;
 
-    Item* trinket2 = botAI->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET2);
+    Item* trinket2 = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET2);
     if (trinket2 && UseTrinket(trinket2))
         return true;
 
@@ -378,10 +378,10 @@ bool UseTrinketAction::Execute(Event event)
 
 bool UseTrinketAction::UseTrinket(Item* item)
 {
-    if (botAI->CanUseItem(item) != EQUIP_ERR_OK)
+    if (bot->CanUseItem(item) != EQUIP_ERR_OK)
         return false;
 
-    if (botAI->IsNonMeleeSpellCast(true))
+    if (bot->IsNonMeleeSpellCast(true))
         return false;
 
     uint8 bagIndex = item->GetBagSlot();
@@ -439,8 +439,8 @@ bool UseTrinketAction::UseTrinket(Item* item)
     packet << bagIndex << slot << cast_count << spellId << item_guid << glyphIndex << castFlags;
 
     targetFlag = TARGET_FLAG_NONE;
-    packet << targetFlag << botAI->GetPackGUID();
-    botAI->GetSession()->HandleUseItemOpcode(packet);
+    packet << targetFlag << bot->GetPackGUID();
+    bot->GetSession()->HandleUseItemOpcode(packet);
     return true;
 }
 
