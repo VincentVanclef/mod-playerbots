@@ -386,7 +386,10 @@ void PlayerbotAI::UpdateAIGroupMaster()
 
     bool IsRandomBot = sRandomPlayerbotMgr.IsRandomBot(bot);
 
-    // If bot is not in group verify that for is RandomBot before clearing  master and resetting.
+    // If bot is not in a group:
+    //  - Random bots: fully detach from any master and reset.
+    //  - Player-controlled bots (alt/addclass): keep master for command security, but stop following
+    //    so they don't "linger" around a player after the party is gone.
     if (!group)
     {
         if (master && IsRandomBot)
@@ -395,6 +398,20 @@ void PlayerbotAI::UpdateAIGroupMaster()
             Reset(true);
             ResetStrategies();
         }
+        else if (master && !GET_PLAYERBOT_AI(master))
+        {
+            // Not grouped with master anymore: stop follow/formation movement.
+            if (HasStrategy("follow", BOT_STATE_NON_COMBAT) || HasStrategy("follow", BOT_STATE_COMBAT))
+            {
+                ChangeStrategy("-follow", BOT_STATE_NON_COMBAT);
+                ChangeStrategy("-follow", BOT_STATE_COMBAT);
+            }
+
+            // Clear any queued movement so the bot doesn't keep orbiting the former leader.
+            bot->GetMotionMaster()->Clear();
+            bot->StopMoving();
+        }
+
         return;
     }
 
