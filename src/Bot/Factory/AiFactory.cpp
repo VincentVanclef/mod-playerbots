@@ -12,6 +12,7 @@
 #include "Group.h"
 #include "HunterAiObjectContext.h"
 #include "Item.h"
+#include "LFGMgr.h"
 #include "MageAiObjectContext.h"
 #include "PaladinAiObjectContext.h"
 #include "PlayerbotAI.h"
@@ -400,9 +401,11 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
     {
         if (group->isLFGGroup())
         {
+            // Role bitmask values are stable across Trinity/AzerothCore forks:
+            //   0x02 = tank, 0x04 = healer, 0x08 = damage
             uint32 roles = sLFGMgr->GetRoles(player->GetGUID());
-            lfgTank = roles & lfg::PLAYER_ROLE_TANK;
-            lfgHealer = roles & lfg::PLAYER_ROLE_HEALER;
+            lfgTank = (roles & 0x02) != 0;
+            lfgHealer = (roles & 0x04) != 0;
             lfgRoleOverride = lfgTank || lfgHealer;
         }
     }
