@@ -789,7 +789,14 @@ void PlayerbotAI::HandleTeleportAck()
         {
             bot->GetMotionMaster()->Clear(true);
             bot->StopMoving();
+            bot->GetMotionMaster()->MoveIdle();
         }
+
+        // Extra stabilization for instance portals (e.g. Deadmines):
+        // if a bot keeps an invalid movement generator state after FAR teleport,
+        // it can "walk upward" or disappear while its pet mirrors the behavior.
+        // Keeping this lightweight avoids dependence on map data.
+        bot->ClearUnitState(UNIT_STATE_CONFUSED | UNIT_STATE_FLEEING | UNIT_STATE_ROAMING);
 
         // simulate far teleport latency (cmangos-style)
         SetNextCheckDelay(urand(2000, 5000));

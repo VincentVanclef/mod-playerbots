@@ -149,36 +149,29 @@ AiPlayerbot.DisabledWithoutRealPlayerLogoutDelay = 300
 #
 
 # The maximum number of bots that a player can control simultaneously
-AiPlayerbot.MaxAddedBots = 40
-
+AiPlayerbot.MaxAddedBots = 0
 # Enable/Disable creating bots by addclass command (0 = GM only, 1 = enabled)
 # Default: 1 (enabled)
-AiPlayerbot.AddClassCommand = 1
-
+AiPlayerbot.AddClassCommand = 0
 # Set the addclass command account pool size
 AiPlayerbot.AddClassAccountPoolSize = 50
 
 # Bot group invitation permission level (0 = GM only, 1 = accept based on level, 2 = always accept)
 # Default: 1 (accept based on level)
-AiPlayerbot.GroupInvitationPermission = 1
-
+AiPlayerbot.GroupInvitationPermission = 0
 # Keep alt bots in the party even when the master leaves
 # 0 = disabled (default behavior)
 # 1 = enabled (prevents bots from automatically leaving the group)
 AiPlayerbot.KeepAltsInGroup = 0
-
 # Auto-login all player alts as altbots on player login
 AiPlayerbot.BotAutologin = 0
 
 # Allow/deny inviting altbots from the player's account
-AiPlayerbot.AllowAccountBots = 1
-
+AiPlayerbot.AllowAccountBots = 0
 # Allow/deny inviting altbots in the player's guild
-AiPlayerbot.AllowGuildBots = 1
-
+AiPlayerbot.AllowGuildBots = 0
 # Allow linking accounts for shared altbot control
-AiPlayerbot.AllowTrustedAccountBots = 1
-
+AiPlayerbot.AllowTrustedAccountBots = 0
 # Randombots will create guilds with nearby randombots
 # Note: currently, randombots will not invite more bots after a guild is created,
 # meaning randombot guilds will have only the 10 initial randombots needed to sign the charter
@@ -196,17 +189,13 @@ AiPlayerbot.DeleteRandomBotGuilds = 0
 
 # Randombots will invite players to groups/raids/guilds
 AiPlayerbot.RandomBotInvitePlayer = 0
-
 # Bots will chat in say/guild when they invite other bots to groups/raids/guilds
 AiPlayerbot.InviteChat = 0
-
 # Bots will be automatically summoned to the player when they accept a group invitation
-AiPlayerbot.SummonWhenGroup = 1
-
+AiPlayerbot.SummonWhenGroup = 0
 # Player can be activated as a bot (selfbot)
 # Selfbot permission level (0 = disabled, 1 = GM only (default), 2 = all players, 3 = activate on login)
-AiPlayerbot.SelfBotLevel = 1
-
+AiPlayerbot.SelfBotLevel = 0
 # Non-GM player can only use init=auto to initialize bots based on their own level and gearscore
 # Default: 0 (non-GM player can use any intialization commands)
 AiPlayerbot.AutoInitOnly = 0
@@ -231,24 +220,19 @@ AiPlayerbot.AutoTrainSpells = yes
 
 # Enable/Disable summoning bots when the master is in combat
 # Default: 1 (enabled)
-AiPlayerbot.AllowSummonInCombat = 1
-
+AiPlayerbot.AllowSummonInCombat = 0
 # Enable/Disable summoning bots when the master is dead
 # Default: 1 (enabled)
-AiPlayerbot.AllowSummonWhenMasterIsDead = 1
-
+AiPlayerbot.AllowSummonWhenMasterIsDead = 0
 # Enable/Disable summoning bots when they are dead (0 = only when the bots are ghosts, 1 = always)
 # Default: 1 (always)
-AiPlayerbot.AllowSummonWhenBotIsDead = 1
-
+AiPlayerbot.AllowSummonWhenBotIsDead = 0
 # Enable/Disable reviving bots when summoning them (0 = disabled, 1 = disabled in combat, 2 = enabled)
 # Default: 1 (disabled in combat)
-AiPlayerbot.ReviveBotWhenSummoned = 1
-
+AiPlayerbot.ReviveBotWhenSummoned = 0
 # Enable/Disable bots repairing gear when summoned
 # Default: 1 (enabled)
-AiPlayerbot.BotRepairWhenSummon = 1
-
+AiPlayerbot.BotRepairWhenSummon = 0
 #
 #
 #
@@ -1974,8 +1958,7 @@ PlayerbotsDatabase.SynchThreads     = 1
 Playerbots.Updates.EnableDatabases = 1
 
 # Command server port, 0 - disabled
-AiPlayerbot.CommandServerPort = 8888
-
+AiPlayerbot.CommandServerPort = 0
 #
 #
 #
@@ -1987,8 +1970,7 @@ AiPlayerbot.CommandServerPort = 8888
 #
 
 AiPlayerbot.SpellDump = 0
-AiPlayerbot.LogInGroupOnly = 1
-AiPlayerbot.LogValuesPerTick = 0
+AiPlayerbot.LogInGroupOnly = 0AiPlayerbot.LogValuesPerTick = 0
 AiPlayerbot.RandomChangeMultiplier = 1
 
 # Tell which spell is avoiding (experimental)
@@ -2199,13 +2181,34 @@ AiPlayerbot.GuildTaskKillTaskDistance = 200
 AiPlayerbot.TargetPosRecalcDistance = 0.1
 
 # Allow bots to be summoned near innkeepers
-AiPlayerbot.SummonAtInnkeepersEnabled = 1
-
+AiPlayerbot.SummonAtInnkeepersEnabled = 0
 # Enable buffs in ICC to make Heroic easier and more casual.
 # 30% more damage, 40% damage reduction (tank bots), increased all resistances, reduced threat for non tank bots, increased threat for tank bots.
 # Buffs will be applied on PP, Sindragosa and Lich King
 
 AiPlayerbot.EnableICCBuffs = 1
+# --------------------------------------------------
+# RTG Anti-Exploit Overrides (manual grouping disabled; no summon conveniences)
+# These values are intentionally restrictive to prevent open-world bot exploitation.
+# --------------------------------------------------
 
-
+# AiPlayerbot.GroupInvitationPermission = 0
+# AiPlayerbot.AddClassCommand = 0
+# AiPlayerbot.MaxAddedBots = 0
+# AiPlayerbot.AllowAccountBots = 0
+# AiPlayerbot.AllowGuildBots = 0
+# AiPlayerbot.AllowTrustedAccountBots = 0
+# AiPlayerbot.SelfBotLevel = 0
+# AiPlayerbot.SummonWhenGroup = 0
+# AiPlayerbot.AllowSummonInCombat = 0
+# AiPlayerbot.AllowSummonWhenMasterIsDead = 0
+# AiPlayerbot.AllowSummonWhenBotIsDead = 0
+# AiPlayerbot.ReviveBotWhenSummoned = 0
+# AiPlayerbot.BotRepairWhenSummon = 0
+# AiPlayerbot.SummonAtInnkeepersEnabled = 0
+# AiPlayerbot.RandomBotInvitePlayer = 0
+# AiPlayerbot.InviteChat = 0
+# AiPlayerbot.KeepAltsInGroup = 0
+# AiPlayerbot.LogInGroupOnly = 0
+# AiPlayerbot.CommandServerPort = 0
 
