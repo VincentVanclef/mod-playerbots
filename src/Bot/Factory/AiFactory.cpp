@@ -391,13 +391,74 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
             break;
     }
 
-    if (PlayerbotAI::IsTank(player, true))
+   // --- LFG role override ---
+    bool lfgRoleOverride = false;
+    bool lfgTank = false;
+    bool lfgHealer = false;
+
+    if (Group* group = player->GetGroup())
+    {
+        if (group->isLFGGroup())
+        {
+            uint32 roles = sLFGMgr->GetRoles(player->GetGUID());
+            lfgTank = roles & lfg::PLAYER_ROLE_TANK;
+            lfgHealer = roles & lfg::PLAYER_ROLE_HEALER;
+            lfgRoleOverride = lfgTank || lfgHealer;
+        }
+    }
+
+    if (lfgRoleOverride)
+    {
+        if (lfgHealer)
+        {
+            engine->removeStrategy("tank", false);
+            engine->removeStrategy("bear", false);
+            engine->removeStrategy("blood", false);
+            engine->removeStrategy("tank assist", false);
+            engine->removeStrategy("tank face", false);
+        }
+        if (lfgTank)
+        {
+            engine->removeStrategy("heal", false);
+            engine->removeStrategy("holy heal", false);
+            engine->removeStrategy("resto", false);
+            engine->removeStrategy("save mana", false);
+            engine->removeStrategy("healer dps", false);
+        }
+
+        if (lfgHealer)
+        {
+            switch (player->getClass())
+            {
+                case CLASS_SHAMAN: engine->addStrategy("resto", false); break;
+                case CLASS_PRIEST: engine->addStrategy("heal", false); break;
+                default: engine->addStrategy("heal", false); break;
+            }
+
+            if (sPlayerbotAIConfig.autoSaveMana)
+                engine->addStrategy("save mana", false);
+            if (!sPlayerbotAIConfig.IsRestrictedHealerDPSMap(player->GetMapId()))
+                engine->addStrategy("healer dps", false);
+        }
+
+        if (lfgTank)
+        {
+            switch (player->getClass())
+            {
+                case CLASS_DRUID: engine->addStrategy("bear", false); break;
+                case CLASS_DEATH_KNIGHT: engine->addStrategy("blood", false); break;
+                default: engine->addStrategy("tank", false); break;
+            }
+
+            engine->addStrategy("tank face", false);
+        }
+    }
+
+    if (!lfgRoleOverride && PlayerbotAI::IsTank(player, true))
         engine->addStrategy("tank face", false);
-
-    if (PlayerbotAI::IsMelee(player, true) && PlayerbotAI::IsDps(player, true))
+    if (!lfgRoleOverride && PlayerbotAI::IsMelee(player, true) && PlayerbotAI::IsDps(player, true))
         engine->addStrategy("behind", false);
-
-    if (PlayerbotAI::IsHeal(player, true))
+    if (!lfgRoleOverride && PlayerbotAI::IsHeal(player, true))
     {
         if (sPlayerbotAIConfig.autoSaveMana)
             engine->addStrategy("save mana", false);
