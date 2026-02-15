@@ -39,6 +39,9 @@ private:
     bool ShouldDelayBattlegroundRelease() const;
 
     time_t m_bgGossipTime = 0;
+    // Timestamp (seconds since epoch) when the bot first became dead (and not yet released).
+    // Used to implement a "wait for rez" window in instanced PvE.
+    mutable time_t m_deathStartTime = 0;
 };
 
 class RepopAction : public SpiritHealerAction
