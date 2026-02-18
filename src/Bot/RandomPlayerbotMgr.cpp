@@ -630,6 +630,90 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 	}
 
     GetBots();
+
+    // ------------------------------------------------------------------
+    // RTG policy: bots must not remain grouped in the open world.
+    // - Allow groups ONLY while inside Dungeon Finder instances (LFG groups)
+    //   or inside Battleground/Arena (BG groups).
+    // - Dissolve bot-only groups (no real players online) even in allowed
+    //   contexts to prevent exploitation and "bot shields".
+    // ------------------------------------------------------------------
+    {
+        uint32 now = NowSeconds();
+
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+                continue;
+
+            Group* group = bot->GetGroup();
+            if (!group)
+            {
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
+                continue;
+            }
+
+            Map* map = bot->GetMap();
+            bool inBg = map && map->IsBattlegroundOrArena();
+            bool inInstance = map && (map->IsDungeon() || map->IsRaid());
+
+            bool isBgGroup = group->isBGGroup();
+            bool isLfgGroup = group->isLFGGroup();
+
+            bool allowedHere = (isBgGroup && inBg) || (isLfgGroup && inInstance);
+
+            // Any non-LFG / non-BG grouping is forbidden.
+            if ((!isBgGroup && !isLfgGroup) || !allowedHere)
+            {
+                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                    botAI->LeaveOrDisbandGroup();
+
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
+                continue;
+            }
+
+            // Dissolve bot-only groups (no real players online).
+            bool hasRealOnline = false;
+            for (Group::MemberSlot const& slot : group->GetMemberSlots())
+            {
+                Player* member = ObjectAccessor::FindPlayer(slot.guid);
+                if (!member)
+                    continue;
+
+                // A "real" player is one without PlayerbotAI attached.
+                if (!GET_PLAYERBOT_AI(member))
+                {
+                    hasRealOnline = true;
+                    break;
+                }
+            }
+
+            uint32 botId = bot->GetGUID().GetCounter();
+            if (hasRealOnline)
+            {
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
+                continue;
+            }
+
+            // Start / continue a short grace period so we don't flail on transient states.
+            uint32 started = GetEventValue(botId, "rtg_group_noreal");
+            if (!started)
+            {
+                SetEventValue(botId, "rtg_group_noreal", now, 600);
+                continue;
+            }
+
+            // After 10s with no real players online, dissolve.
+            if (now > started + 10)
+            {
+                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                    botAI->LeaveOrDisbandGroup();
+
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
+            }
+        }
+    }
     std::list<uint32> availableBots = currentBots;
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();

@@ -24,6 +24,22 @@
 using ai::buff::MakeAuraQualifierForBuff;
 using ai::buff::UpgradeToGroupIfAppropriate;
 
+static bool IsSpellcasterClass(uint8 cls)
+{
+    switch (cls)
+    {
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+        case CLASS_DRUID:
+        case CLASS_SHAMAN:
+            return true;
+        default:
+            return false;
+    }
+}
+
+
 CastSpellAction::CastSpellAction(PlayerbotAI* botAI, std::string const spell)
     : Action(botAI, spell), range(botAI->GetRange("spell")), spell(spell)
 {
@@ -75,7 +91,25 @@ bool CastSpellAction::Execute(Event event)
         return botAI->CastSpell(castId, bot);
     }
 
-    return botAI->CastSpell(spell, GetTarget());
+    Unit* spellTarget = GetTarget();
+if (spellTarget && IsSpellcasterClass(bot->getClass()) && !botAI->IsInVehicle() && !bot->IsMounted())
+{
+    // If target is outside our generic spell engagement range, start moving in so we don't "wait" for the target to walk in.
+    // Small buffer prevents edge-range jitter.
+    float const buffer = 1.0f;
+    float const desired = range + sPlayerbotAIConfig.contactDistance;
+    if (!bot->IsWithinCombatRange(spellTarget, desired - buffer))
+    {
+        // Don't override "stay" (e.g. parked bots) and don't break channeling spells.
+        if (!botAI->HasStrategy("stay", botAI->GetState()) && bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL) == nullptr)
+        {
+            bot->GetMotionMaster()->MoveChase(spellTarget);
+            return true;
+        }
+    }
+}
+
+return botAI->CastSpell(spell, spellTarget);
 }
 
 bool CastSpellAction::isPossible()
@@ -103,7 +137,21 @@ bool CastSpellAction::isPossible()
     }
 
     // Spell* currentSpell = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL); //not used, line marked for removal.
-    return botAI->CanCastSpell(spell, GetTarget());
+    Unit* spellTarget = GetTarget();
+
+// Normal castability check.
+if (botAI->CanCastSpell(spell, spellTarget))
+    return true;
+
+// Spellcasters should proactively close the gap to get into spell range instead of waiting for the target.
+if (spellTarget && IsSpellcasterClass(bot->getClass()) && spellTarget->IsInWorld() && spellTarget->GetMapId() == bot->GetMapId())
+{
+    float const desired = range + sPlayerbotAIConfig.contactDistance;
+    if (!bot->IsWithinCombatRange(spellTarget, desired))
+        return true; // allow Execute() to move us into range
+}
+
+return false;
 }
 
 bool CastSpellAction::isUseful()

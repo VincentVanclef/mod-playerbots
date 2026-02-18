@@ -99,6 +99,11 @@ bool CheckMountStateAction::isUseful()
     // BG Logic
     if (bot->InBattleground())
     {
+        // In WSG (489) and EotS (566), mounts are disabled by BG rules; avoid mount-cast spam/jitter.
+                uint32 mapId = bot->GetMapId();
+                if (mapId == 489 || mapId == 566)
+                    return false;
+
         // Do not use when carrying BG Flags
         if (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
             return false;
