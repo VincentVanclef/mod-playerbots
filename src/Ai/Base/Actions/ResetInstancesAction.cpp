@@ -5,11 +5,14 @@
 
 #include "ResetInstancesAction.h"
 
+#include "InstancePackets.h" // WorldPackets::Instance::ResetInstances
 #include "Playerbots.h"
 
 bool ResetInstancesAction::Execute(Event event)
 {
-    WorldPacket packet(CMSG_RESET_INSTANCES, 0);
+    // AzerothCore switched this handler to use a typed WorldPackets packet
+    // instead of the old generic WorldPacket.
+    WorldPackets::Instance::ResetInstances packet;
     bot->GetSession()->HandleResetInstancesOpcode(packet);
 
     botAI->TellMaster("Resetting all instances");
