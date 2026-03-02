@@ -9,8 +9,35 @@
 
 void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
 {
+    // Existing behavior
     triggers.push_back(new TriggerNode("random", { NextAction("clean quest log", 1.0f) }));
     triggers.push_back(new TriggerNode("timer", { NextAction("check mount state", 1.0f) }));
+
+    // ------------------------------------------------------------
+    // RTG: Dungeon tank auto-pull logic
+    // Tank bots will initiate pulls automatically when healer mana >= 70%
+    // ------------------------------------------------------------
+    triggers.push_back(
+        new TriggerNode(
+            "often",
+            {
+                NextAction("dungeon tank pull", 30.0f)
+            }
+        )
+    );
+
+    // ------------------------------------------------------------
+    // RTG: Immediate assist when tank has a pull target
+    // Prevents bots waiting for chat "attack" or first damage event
+    // ------------------------------------------------------------
+    triggers.push_back(
+        new TriggerNode(
+            "dungeon assist tank",
+            {
+                NextAction("tank assist", 60.0f)
+            }
+        )
+    );
 }
 
 void CollisionStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
