@@ -314,28 +314,38 @@ namespace
 
 bool LfgTeleportAction::Execute(Event event)
 {
+    // Determine direction:
+    // out == true  -> teleport OUT
+    // out == false -> teleport INTO dungeon
     bool out = false;
 
-    WorldPacket p(event.getPacket());
-    if (!p.empty())
+    std::string const param = event.getParam();
+    if (!param.empty())
     {
-        p.rpos(0);
-        p >> out;
+        // accept common playerbot command params
+        if (param == "out" || param == "leave" || param == "1")
+            out = true;
     }
 
-    bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+    // If not in LFG system, nothing to do
+    LfgState state = sLFGMgr->GetState(bot->GetGUID());
+    if (state == LFG_STATE_NONE)
+        return false;
 
+    // JoinLfg/Teleport are not thread-safe; queue packet to session
     WorldPacket* packet = new WorldPacket(CMSG_LFG_TELEPORT);
-    *packet << out;
+    *packet << (uint8)out;
     bot->GetSession()->QueuePacket(packet);
-    // sLFGMgr->TeleportPlayer(bot, out);
-	
-	// If teleporting INTO dungeon, enforce correct role strategy
-	if (!out)
-	{
-		uint32 roleMask = GetRoles();
-		ApplyDungeonRoleStrategies(botAI, bot, roleMask);
-	}
+
+    // ------------------------------------------------------------------
+    // RTG Policy: Enforce correct role strategies ON DUNGEON ENTRY.
+    // This prevents "healer" bots from staying in DPS strategies after teleport.
+    // ------------------------------------------------------------------
+    if (!out) // teleporting INTO the dungeon
+    {
+        uint32 roleMask = uint32(sLFGMgr->GetRoles(bot->GetGUID()));
+        ApplyDungeonRoleStrategies(botAI, bot, roleMask);
+    }
 
     return true;
 }
