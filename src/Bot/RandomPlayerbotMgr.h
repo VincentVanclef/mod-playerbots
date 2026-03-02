@@ -119,6 +119,7 @@ public:
     void Clear(Player* bot);
     void RandomizeFirst(Player* bot);
     void RandomizeMin(Player* bot);
+	void RandomizeToLevel(Player* bot, uint32 level);
     void IncreaseLevel(Player* bot);
     void ScheduleTeleport(uint32 bot, uint32 time = 0);
     void ScheduleChangeStrategy(uint32 bot, uint32 time = 0);

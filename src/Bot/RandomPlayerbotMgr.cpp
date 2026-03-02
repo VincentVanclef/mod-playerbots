@@ -33,6 +33,7 @@
 #include "Define.h"
 #include "FleeManager.h"
 #include "FlightMasterCache.h"
+#include "GameGraveyard.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "GuildMgr.h"
@@ -2089,7 +2090,6 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
 
 bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 {
-
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     if (!botAI)
         return false;
@@ -2100,7 +2100,7 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
     if (bot->InBattlegroundQueue())
         return false;
 
-     uint32 botId = bot->GetGUID().GetCounter();
+    uint32 botId = bot->GetGUID().GetCounter();
 
     // if death revive
     if (bot->isDead())
@@ -2123,6 +2123,55 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         }
 
         return false;
+    }
+
+    // ------------------------------------------------------------
+    // RTG: If a random bot is hanging around a graveyard, relocate it.
+    // Prevents bots idling in cemetery spots / lowbie graveyards.
+    // Uses existing RandomTeleportForLevel() to pick an appropriate zone.
+    // ------------------------------------------------------------
+    if (IsRandomBot(bot) &&
+        bot->IsAlive() &&
+        !bot->IsInCombat() &&
+        !bot->GetGroup() &&
+        !bot->HasUnitState(UNIT_STATE_IN_FLIGHT) &&
+        !bot->IsBeingTeleported())
+    {
+        // Optional: don't interfere with bots that are actively traveling
+        bool traveling = false;
+        if (TravelTarget* target = botAI->GetAiObjectContext()->GetValue<TravelTarget*>("travel target")->Get())
+            traveling = (target->getTravelState() != TravelState::TRAVEL_STATE_IDLE);
+
+        if (!traveling)
+        {
+            // Cooldown: only relocate once per 5 minutes max
+            if (!GetEventValue(botId, "rtg_graveyard_relocate"))
+            {
+                GraveyardStruct const* g = sGraveyard->GetClosestGraveyard(bot, bot->GetTeamId());
+                if (g && g->map == bot->GetMapId())
+                {
+                    float dx = bot->GetPositionX() - g->x;
+                    float dy = bot->GetPositionY() - g->y;
+                    float dist2 = dx * dx + dy * dy;
+
+                    // Within 80 yards => basically "at the graveyard"
+                    if (dist2 <= (80.0f * 80.0f))
+                    {
+                        SetEventValue(botId, "rtg_graveyard_relocate", 1, 300); // 5 min cooldown
+
+                        LOG_DEBUG("playerbots", "RTG: Relocating bot #{} <{}> from graveyard area", botId,
+                                  bot->GetName().c_str());
+
+                        Refresh(bot);
+                        RandomTeleportForLevel(bot);
+
+                        // Avoid immediate re-teleport by scheduling a normal teleport window
+                        ScheduleTeleport(botId, urand(240, 420));
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
     // leave group if leader is rndbot
@@ -2153,27 +2202,6 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         uint32 randomize = GetEventValue(botId, "randomize");
         if (!randomize)
         {
-            // bool randomiser = true;
-            // if (player->GetGuildId())
-            // {
-            //     if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
-            //     {
-            //         if (guild->GetLeaderGUID() == player->GetGUID())
-            //         {
-            //             for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
-            //                 sGuildTaskMgr->Update(*i, player);
-            //         }
-
-            //         uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(guild->GetLeaderGUID());
-            //         if (!sPlayerbotAIConfig.IsInRandomAccountList(accountId))
-            //         {
-            //             uint8 rank = player->GetRank();
-            //             randomiser = rank < 4 ? false : true;
-            //         }
-            //     }
-            // }
-            // if (randomiser)
-            // {
             Randomize(bot);
             LOG_DEBUG("playerbots", "Bot #{} {}:{} <{}>: randomized", botId,
                       bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName());
@@ -2182,14 +2210,6 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             ScheduleRandomize(botId, randomTime);
             return true;
         }
-
-        // uint32 changeStrategy = GetEventValue(bot, "change_strategy");
-        // if (!changeStrategy)
-        // {
-        //     LOG_INFO("playerbots", "Changing strategy for bot  #{} <{}>", bot, player->GetName().c_str());
-        //     ChangeStrategy(player);
-        //     return true;
-        // }
 
         uint32 teleport = GetEventValue(botId, "teleport");
         if (!teleport)
@@ -3088,6 +3108,29 @@ void RandomPlayerbotMgr::RandomizeMin(Player* bot)
         pmo->finish();
 }
 
+void RandomPlayerbotMgr::RandomizeToLevel(Player* bot, uint32 level)
+{
+    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+    if (!botAI)
+        return;
+
+    uint32 maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    if (level < 1) level = 1;
+    if (level > maxLevel) level = maxLevel;
+
+    SetValue(bot, "level", level);
+
+    PlayerbotFactory factory(bot, level);
+    factory.Randomize(false);
+
+    botAI->Reset(true);
+
+    if (bot->GetGroup())
+        botAI->LeaveOrDisbandGroup();
+
+    RandomTeleportForLevel(bot);
+}
+
 void RandomPlayerbotMgr::Clear(Player* bot)
 {
     PlayerbotFactory factory(bot, bot->GetLevel());
@@ -3772,10 +3815,90 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
         // simplicity. line marked for removal.
     }
     else
-    {
-        players.push_back(player);
-        LOG_DEBUG("playerbots", "Including non-random bot player {} into random bot update", player->GetName().c_str());
-    }
+	{
+		players.push_back(player);
+		LOG_DEBUG("playerbots", "Including non-random bot player {} into random bot update", player->GetName().c_str());
+
+		// ------------------------------------------------------------
+		// RTG: Starter-wave bots (1-9 bracket support)
+		// When a real new/low-level player logs in, recycle 10 Horde + 10 Alliance bots to level 1
+		// so the 1-9 world/BG experience stays alive.
+		// ------------------------------------------------------------
+		if (!player->IsGameMaster() && player->GetLevel() <= 9)
+		{
+			// Per-account cooldown (prevents spam on relog)
+			static std::unordered_map<uint32, time_t> s_lastStarterWaveByAccount;
+
+			uint32 accountId = player->GetSession() ? player->GetSession()->GetAccountId() : 0;
+			time_t now = time(nullptr);
+
+			// 10 minute cooldown per account (tune)
+			time_t& last = s_lastStarterWaveByAccount[accountId];
+			if (accountId && (last == 0 || now >= last + 600))
+			{
+				last = now;
+
+				uint32 wantPerFaction = 10; // 10 Horde + 10 Alliance = 20 total
+
+				auto recycleBots = [&](uint32 teamId, uint32 want)
+				{
+					uint32 done = 0;
+
+					for (auto const& kv : playerBots)
+					{
+						Player* bot = kv.second;
+						if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+							continue;
+
+						if (bot->GetTeamId() != teamId)
+							continue;
+
+						// Only recycle bots that are safe to “reset”
+						if (!bot->IsAlive() || bot->IsInCombat() || bot->InBattleground() || bot->InBattlegroundQueue())
+							continue;
+
+						Group* g = bot->GetGroup();
+						if (g) // don’t rip bots out of groups
+							continue;
+
+						if (bot->HasUnitState(UNIT_STATE_IN_FLIGHT) || bot->IsBeingTeleported())
+							continue;
+
+						// Optional: prefer recycling high-level bots so 19 population stays "real"
+						// (tune threshold as you like)
+						if (bot->GetLevel() < 10)
+							continue;
+
+						// Cooldown so we don’t recycle the same bot constantly
+						uint32 botId = bot->GetGUID().GetCounter();
+						if (GetEventValue(botId, "rtg_starter_recycled"))
+							continue;
+
+						SetEventValue(botId, "rtg_starter_recycled", 1, 1800); // 30 min recycle lockout
+
+						LOG_INFO("playerbots", "RTG: Starter-wave: recycling bot {} ({}:{}) to level 1",
+							bot->GetName().c_str(),
+							(bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H"),
+							bot->GetLevel());
+
+						RandomizeToLevel(bot, 1);
+						done++;
+
+						if (done >= want)
+							break;
+					}
+
+					return done;
+				};
+
+				uint32 aDone = recycleBots(TEAM_ALLIANCE, wantPerFaction);
+				uint32 hDone = recycleBots(TEAM_HORDE, wantPerFaction);
+
+				LOG_INFO("playerbots", "RTG: Starter-wave triggered by {} (lvl {}): recycled A={} H={}",
+					player->GetName().c_str(), player->GetLevel(), aDone, hDone);
+			}
+		}
+	}
 }
 
 void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
