@@ -34,13 +34,15 @@ uint32 LfgJoinAction::GetRoles()
     switch (bot->getClass())
     {
         case CLASS_DRUID:
-            if (spec == 2)
-                return PLAYER_ROLE_HEALER;
-            else if (spec == 1 && bot->HasAura(16931) /* thick hide */)
-                return PLAYER_ROLE_TANK;
-            else
-                return PLAYER_ROLE_DAMAGE;
-            break;
+			// WotLK: 0 = Balance, 1 = Feral, 2 = Resto
+			// Do NOT require Thick Hide aura – aura checks are unreliable
+			// and were preventing proper tank role assignment.
+			if (spec == 2)
+				return PLAYER_ROLE_HEALER;
+			else if (spec == 1)
+				return PLAYER_ROLE_TANK;
+			else
+				return PLAYER_ROLE_DAMAGE;
         case CLASS_PALADIN:
             if (spec == 1)
                 return PLAYER_ROLE_TANK;
@@ -283,6 +285,33 @@ bool LfgLeaveAction::Execute(Event event)
 
 bool LfgLeaveAction::isUseful() { return true; }
 
+
+// RTG Policy to give roles exact strategy for their chosen roles
+namespace
+{
+    void ApplyDungeonRoleStrategies(PlayerbotAI* botAI, Player* bot, uint32 roleMask)
+    {
+        if (!botAI || !bot)
+            return;
+
+        Map* map = bot->GetMap();
+        if (!map || !map->IsDungeon())
+            return;
+
+        std::string strat;
+
+        if (roleMask & PLAYER_ROLE_TANK)
+            strat = "+tank,-heal,-dps";
+        else if (roleMask & PLAYER_ROLE_HEALER)
+            strat = "+heal,-tank,-dps,+save mana";
+        else
+            strat = "+dps,-tank,-heal";
+
+        botAI->ChangeStrategy(strat, BOT_STATE_NON_COMBAT);
+        botAI->ChangeStrategy(strat, BOT_STATE_COMBAT);
+    }
+}
+
 bool LfgTeleportAction::Execute(Event event)
 {
     bool out = false;
@@ -300,6 +329,13 @@ bool LfgTeleportAction::Execute(Event event)
     *packet << out;
     bot->GetSession()->QueuePacket(packet);
     // sLFGMgr->TeleportPlayer(bot, out);
+	
+	// If teleporting INTO dungeon, enforce correct role strategy
+	if (!out)
+	{
+		uint32 roleMask = GetRoles();
+		ApplyDungeonRoleStrategies(botAI, bot, roleMask);
+	}
 
     return true;
 }
