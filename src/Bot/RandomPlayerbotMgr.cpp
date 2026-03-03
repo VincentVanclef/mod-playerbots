@@ -387,39 +387,6 @@ if (ratio < 0.0)
     return target;
 }
 
-// Cache dungeon entrance destinations so we don't leak allocations every tick.
-namespace
-{
-    struct DungeonEntranceCache
-    {
-        TravelDestination* dest = nullptr;
-        WorldPosition* pos = nullptr;
-    };
-
-    static std::unordered_map<uint32, DungeonEntranceCache> sDungeonEntranceCache;
-
-    static DungeonEntranceCache const* GetDungeonEntrance(uint32 dungeonId)
-    {
-        if (!dungeonId)
-            return nullptr;
-
-        auto& slot = sDungeonEntranceCache[dungeonId];
-        if (slot.dest && slot.pos)
-            return &slot;
-
-        LFGDungeonEntry const* dungeon = sLFGDungeonStore.LookupEntry(dungeonId);
-        if (!dungeon)
-            return nullptr;
-
-        // Build a single-point destination at the LFG entrance coordinates.
-        slot.pos = new WorldPosition(dungeon->MapID, dungeon->x, dungeon->y, dungeon->z, 0.0f);
-        slot.dest = new TravelDestination(0.0f, 0.0f);
-        slot.dest->addPoint(slot.pos);
-
-        return &slot;
-    }
-}
-
 uint32 RandomPlayerbotMgr::GetCommunityLevelCap()  // NOTE: GetCommunityLevelCap is called from the world update thread only.
 {
     if (!sPlayerbotAIConfig.communityLevelCapEnabled)
@@ -2194,13 +2161,11 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 			Map* map = bot->GetMap();
 			bool inDungeon = map && map->IsDungeon();
 
-			// Only after they've released (ghost), and only if not already inside the instance
 			if (!inDungeon && bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
 			{
-				// Throttle attempts (every 15s per bot)
 				if (!GetEventValue(botId, "rtg_ghost_lfg_tp"))
 				{
-					SetEventValue(botId, "rtg_ghost_lfg_tp", 1, 20);
+					SetEventValue(botId, "rtg_ghost_lfg_tp", 1, 15);
 
 					lfg::LfgState st = sLFGMgr->GetState(bot->GetGUID());
 					if (st != lfg::LFG_STATE_NONE && bot->IsInWorld() && !bot->IsBeingTeleported())
@@ -2209,14 +2174,12 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 								 bot->GetName().c_str());
 
 						WorldPacket* p = new WorldPacket(CMSG_LFG_TELEPORT);
-						*p << (uint8)0; // out=false => teleport INTO dungeon
+						*p << (uint8)0; // teleport INTO dungeon
 						bot->GetSession()->QueuePacket(p);
 					}
 				}
 			}
 
-			// In LFG runs, do NOT use random world revive timers here.
-			// Let corpse-run/rez happen naturally in the instance.
 			return false;
 		}
 
