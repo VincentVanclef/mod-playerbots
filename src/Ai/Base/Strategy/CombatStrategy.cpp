@@ -10,6 +10,38 @@
 
 void CombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
 {
+	// ------------------------------------------------------------
+	// RTG: Healers should focus on healing in dungeons.
+	// Stop healer DPS unless it's self defense.
+	// Runs every combat tick at very high priority.
+	// ------------------------------------------------------------
+	triggers.push_back(
+		new TriggerNode(
+			"timer",
+			{
+				NextAction("healer hold dps", 100.0f)
+			}
+		)
+	);
+	
+	triggers.push_back(
+		new TriggerNode(
+			"timer",
+			{
+				NextAction("follow dungeon tank", 55.0f)
+			}
+		)
+	);
+	
+	triggers.push_back(
+        new TriggerNode(
+            "dungeon assist tank",
+            {
+                NextAction("tank assist", 90.0f)
+            }
+        )
+    );
+	
     triggers.push_back(
         new TriggerNode(
             "enemy out of spell",

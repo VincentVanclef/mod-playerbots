@@ -66,6 +66,8 @@
 #include "FishingAction.h"
 #include "CancelChannelAction.h"
 #include "DungeonTankPullAction.h"
+#include "HealerHoldDpsAction.h"
+#include "FollowDungeonTankAction.h"
 
 class PlayerbotAI;
 
@@ -88,6 +90,8 @@ public:
         creators["attack"] = &ActionContext::melee;
         creators["melee"] = &ActionContext::melee;
 		creators["dungeon tank pull"] = &ActionContext::dungeon_tank_pull;
+		creators["healer hold dps"] = &ActionContext::healer_hold_dps;
+		creators["follow dungeon tank"] = &ActionContext::follow_dungeon_tank;
         creators["switch to melee"] = &ActionContext::switch_to_melee;
         creators["switch to ranged"] = &ActionContext::switch_to_ranged;
         creators["reach spell"] = &ActionContext::ReachSpell;
@@ -277,6 +281,8 @@ private:
     static Action* move_to_rpg_target(PlayerbotAI* botAI) { return new MoveToRpgTargetAction(botAI); }
     static Action* travel(PlayerbotAI* botAI) { return new TravelAction(botAI); }
 	static Action* dungeon_tank_pull(PlayerbotAI* botAI) { return new DungeonTankPullAction(botAI); }
+	static Action* healer_hold_dps(PlayerbotAI* botAI) { return new HealerHoldDpsAction(botAI); }
+	static Action* follow_dungeon_tank(PlayerbotAI* botAI) { return new FollowDungeonTankAction(botAI); }
     static Action* choose_travel_target(PlayerbotAI* botAI) { return new ChooseTravelTargetAction(botAI); }
     static Action* move_to_travel_target(PlayerbotAI* botAI) { return new MoveToTravelTargetAction(botAI); }
     static Action* move_out_of_collision(PlayerbotAI* botAI) { return new MoveOutOfCollisionAction(botAI); }

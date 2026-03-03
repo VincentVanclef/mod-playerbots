@@ -25,6 +25,15 @@ void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
             }
         )
     );
+	
+	triggers.push_back(
+		new TriggerNode(
+			"timer",
+			{
+				NextAction("follow dungeon tank", 55.0f)
+			}
+		)
+	);
 
     // ------------------------------------------------------------
     // RTG: Immediate assist when tank has a pull target
