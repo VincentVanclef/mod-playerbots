@@ -48,7 +48,7 @@ Unit* DungeonTankPullAction::PickPullTarget() const
             continue;
 
         // Keep pulls tight so tank doesn't sprint through packs
-        if (!bot->IsWithinDistInMap(u, 25.0f)) // tune
+        if (!bot->IsWithinDistInMap(u, 45.0f)) // tune
             continue;
 
         if (!bot->IsWithinLOSInMap(u))
@@ -101,13 +101,19 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
     }
 
     Unit* target = PickPullTarget();
-    if (!target)
-        return false;
+	if (!target)
+		return false;
 
-    // Mark pull target so other bots have something consistent to assist onto
-    context->GetValue<ObjectGuid>("pull target")->Set(target->GetGUID());
-    botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({ target->GetGUID() });
+	// If target is not in pull range yet, move into position (don’t wait for player body-pull)
+	if (!bot->IsWithinDistInMap(target, 25.0f))
+	{
+		// Move into line-of-sight like a ranged pull setup (safer than charging through packs)
+		return MoveToLOS(target, true); // ranged = true
+	}
 
-    // Initiate combat
-    return Attack(target);
+	// Now we’re in pull range: publish pull target so DPS/heals instantly assist
+	context->GetValue<ObjectGuid>("pull target")->Set(target->GetGUID());
+	botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({ target->GetGUID() });
+
+	return Attack(target);
 }

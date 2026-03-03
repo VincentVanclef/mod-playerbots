@@ -19,9 +19,9 @@ void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
     // ------------------------------------------------------------
     triggers.push_back(
         new TriggerNode(
-            "often",
+            "timer",
             {
-                NextAction("dungeon tank pull", 30.0f)
+                NextAction("dungeon tank pull", 40.0f)
             }
         )
     );
