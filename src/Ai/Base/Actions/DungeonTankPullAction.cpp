@@ -5,13 +5,11 @@
 #include "ObjectAccessor.h"
 #include "MotionMaster.h"
 #include "GameTime.h"
-
 #include <unordered_map>
 
 namespace
 {
-    // botId -> unix time seconds when we first noticed "no pull target"
-    static std::unordered_map<uint32, uint32> sTankNoTargetSince;
+    static std::unordered_map<uint32, uint32> sTankNoTargetSince; // botId -> unix time seconds
 }
 
 bool DungeonTankPullAction::PartyHealerReady(uint8 minManaPct) const
@@ -57,7 +55,7 @@ Unit* DungeonTankPullAction::PickPullTarget() const
         if (u->GetCreatureType() == CREATURE_TYPE_CRITTER)
             continue;
 
-        // Acquire targets a bit farther away so the tank can start walking to the next pack
+        // Keep pulls tight so tank doesn't sprint through packs
         if (!bot->IsWithinDistInMap(u, 45.0f)) // tune
             continue;
 
@@ -69,7 +67,7 @@ Unit* DungeonTankPullAction::PickPullTarget() const
             continue;
 
         // Avoid targets that are already in messy combat clusters
-        if (u->GetAttackers().size() >= 3)
+        if (u->getAttackers().size() >= 3)
             continue;
 
         return u;
@@ -111,35 +109,34 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
     }
 
     uint32 botId = bot->GetGUID().GetCounter();
-    uint32 now = GameTime::GetGameTime();
+	uint32 now = GameTime::GetGameTime();
 
-    Unit* target = PickPullTarget();
-    if (!target)
-    {
-        // Compromise: don't "hard follow" all the time, but don't get lost either.
-        // Start a timer; if we've had no target for 10s, regroup near leader.
-        uint32& since = sTankNoTargetSince[botId];
-        if (!since)
-            since = now;
+	Unit* target = PickPullTarget();
+	if (!target)
+	{
+		// Compromise: don't get lost—after 10s of no pull target, regroup near leader.
+		uint32& since = sTankNoTargetSince[botId];
+		if (!since)
+			since = now;
 
-        if (now >= since + 10)
-        {
-            Player* leader = ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID());
-            if (leader && leader != bot && leader->IsInWorld())
-            {
-                if (!bot->IsWithinDistInMap(leader, 25.0f))
-                {
-                    bot->GetMotionMaster()->MoveFollow(leader, 18.0f, 0.0f);
-                    return true;
-                }
-            }
-        }
+		if (now >= since + 10)
+		{
+			Player* leader = ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID());
+			if (leader && leader != bot && leader->IsInWorld())
+			{
+				if (!bot->IsWithinDistInMap(leader, 25.0f))
+				{
+					bot->GetMotionMaster()->MoveFollow(leader, 18.0f, 0.0f);
+					return true;
+				}
+			}
+		}
 
-        return false;
-    }
+		return false;
+	}
 
-    // We found a target again: clear the no-target timer
-    sTankNoTargetSince.erase(botId);
+	// Found a target again: clear timer
+	sTankNoTargetSince.erase(botId);
 
     // If target is not in pull range yet, move into position (don’t wait for player body-pull)
     if (!bot->IsWithinDistInMap(target, 25.0f))
