@@ -2178,49 +2178,45 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 		}
 	}
 
-    // if death revive / dungeon wipe behavior
+	// if death revive / dungeon wipe behavior
 	if (bot->isDead())
 	{
 		Group* grp = bot->GetGroup();
 
 		// ------------------------------------------------------------
-		// RTG: Ghost dungeon return logic
+		// RTG: Ghost LFG recovery
 		// If bot is a ghost in an LFG run and is outside the dungeon map,
-		// assign a travel target to the dungeon entrance so it runs back
-		// (respects mmaps/vmaps) instead of idling at graveyard.
+		// teleport it INTO the dungeon entrance using LFG teleport.
+		// This prevents ghosts idling at graveyard when the real player is alive.
 		// ------------------------------------------------------------
 		if (grp && grp->isLFGGroup())
 		{
 			Map* map = bot->GetMap();
 			bool inDungeon = map && map->IsDungeon();
 
-			// Only do this once they've released (ghost). Don't interfere with corpse state.
+			// Only after they've released (ghost), and only if not already inside the instance
 			if (!inDungeon && bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
 			{
-				// Throttle: don't reassign every tick
-				if (!GetEventValue(botId, "rtg_ghost_return"))
+				// Throttle attempts (every 15s per bot)
+				if (!GetEventValue(botId, "rtg_ghost_lfg_tp"))
 				{
-					SetEventValue(botId, "rtg_ghost_return", 1, 15);
+					SetEventValue(botId, "rtg_ghost_lfg_tp", 1, 20);
 
-					// Get current LFG dungeon id
-					uint32 dungeonId = sLFGMgr->GetDungeon(bot->GetGUID());
-					if (auto const* ent = GetDungeonEntrance(dungeonId))
+					lfg::LfgState st = sLFGMgr->GetState(bot->GetGUID());
+					if (st != lfg::LFG_STATE_NONE && bot->IsInWorld() && !bot->IsBeingTeleported())
 					{
-						TravelTarget* tt = botAI->GetAiObjectContext()->GetValue<TravelTarget*>("travel target")->Get();
-						if (tt)
-						{
-							tt->setForced(true);
-							tt->setTarget(ent->dest, ent->pos);
+						LOG_INFO("playerbots", "RTG: Ghost bot {} teleporting back into dungeon via LFG",
+								 bot->GetName().c_str());
 
-							LOG_DEBUG("playerbots", "RTG: Ghost bot {} running back to dungeon entrance (dungeonId={})",
-									  bot->GetName().c_str(), dungeonId);
-						}
+						WorldPacket* p = new WorldPacket(CMSG_LFG_TELEPORT);
+						*p << (uint8)0; // out=false => teleport INTO dungeon
+						bot->GetSession()->QueuePacket(p);
 					}
 				}
 			}
 
-			// In LFG runs we do NOT use random world revive timers here.
-			// Let dungeon/party logic handle rez/corpse run.
+			// In LFG runs, do NOT use random world revive timers here.
+			// Let corpse-run/rez happen naturally in the instance.
 			return false;
 		}
 
