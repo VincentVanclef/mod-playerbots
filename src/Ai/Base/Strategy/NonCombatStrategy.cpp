@@ -34,7 +34,7 @@ void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
         new TriggerNode(
             "dungeon assist tank",
             {
-                NextAction("tank assist", 60.0f)
+                NextAction("tank assist", 90.0f)
             }
         )
     );

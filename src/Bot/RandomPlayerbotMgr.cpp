@@ -2102,6 +2102,48 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         return false;
 
     uint32 botId = bot->GetGUID().GetCounter();
+	
+	// ------------------------------------------------------------
+	// RTG: LFG teleport watchdog
+	// If bot is in an LFG group but not inside the dungeon map, force teleport in.
+	// Prevents "missing bot" stuck outside -> 4-man dungeon.
+	// ------------------------------------------------------------
+	if (Group* g = bot->GetGroup())
+	{
+		if (g->isLFGGroup())
+		{
+			Map* map = bot->GetMap();
+			bool inDungeon = map && map->IsDungeon();
+
+			// Only try to fix "missing bot" if we're alive (or ghost) and not already teleporting/loading
+			if (!inDungeon &&
+				bot->IsInWorld() &&
+				bot->IsAlive() &&
+				!bot->IsInCombat() &&
+				!bot->IsBeingTeleported() &&
+				!bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+			{
+				// throttle attempts (every 20s per bot)
+				if (!GetEventValue(botId, "rtg_lfg_force_tp"))
+				{
+					SetEventValue(botId, "rtg_lfg_force_tp", 1, 20);
+
+					// only if the LFG system thinks we're actually in dungeon run
+					LfgState st = sLFGMgr->GetState(bot->GetGUID());
+					if (st != LFG_STATE_NONE)
+					{
+						LOG_INFO("playerbots", "RTG: LFG watchdog teleporting bot {} into dungeon", bot->GetName().c_str());
+
+						WorldPacket* p = new WorldPacket(CMSG_LFG_TELEPORT);
+						*p << (uint8)0; // out=false => teleport INTO dungeon
+						bot->GetSession()->QueuePacket(p);
+
+						return true;
+					}
+				}
+			}
+		}
+	}
 
     // if death revive
     if (bot->isDead())
@@ -2148,11 +2190,11 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             // Cooldown: only relocate once per 5 minutes max
             if (!GetEventValue(botId, "rtg_graveyard_relocate"))
             {
-                GraveyardStruct const* g = sGraveyard->GetClosestGraveyard(bot, bot->GetTeamId());
-                if (g && g->Map == bot->GetMapId())
+                GraveyardStruct const* gy = sGraveyard->GetClosestGraveyard(bot, bot->GetTeamId());
+                if (gy && gy->Map == bot->GetMapId())
                 {
-                    float dx = bot->GetPositionX() - g->x;
-                    float dy = bot->GetPositionY() - g->y;
+                    float dx = bot->GetPositionX() - gy->x;
+                    float dy = bot->GetPositionY() - gy->y;
                     float dist2 = dx * dx + dy * dy;
 
                     // Within 80 yards => basically "at the graveyard"

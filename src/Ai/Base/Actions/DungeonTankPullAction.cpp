@@ -50,11 +50,39 @@ Unit* DungeonTankPullAction::PickPullTarget() const
             continue;
 
         // Keep it close-ish so tank doesn’t sprint across the instance
-        if (!bot->IsWithinDistInMap(u, sPlayerbotAIConfig.sightDistance))
-            continue;
+        // Don't sprint deep into the dungeon and drag everything
+		if (!bot->IsWithinDistInMap(u, 25.0f)) // tune
+			continue;
 
         if (!bot->IsWithinLOSInMap(u))
             continue;
+		
+		// Avoid targets embedded in huge packs
+		uint32 nearby = 0;
+		std::list<Unit*> nearUnits;
+		botAI->GetUnitList(nearUnits, bot, 35.0f); // adjust radius
+		for (Unit* n : nearUnits)
+		{
+			if (!n)
+				continue;
+
+			// Skip the main candidate target itself
+			if (n == u)
+				continue;
+
+			if (n->isDead() || bot->IsFriendlyTo(n))
+				continue;
+
+			if (n->GetCreatureType() == CREATURE_TYPE_CRITTER)
+				continue;
+
+			// Count hostile creatures near that target
+			if (n->IsWithinDistInMap(u, 12.0f))
+				nearby++;
+		}
+
+		if (nearby >= 6) // tune: 6+ near target is likely a disaster pull
+			continue;
 
         return u;
     }
@@ -72,7 +100,8 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
     if (!map || !map->IsDungeon())
         return false;
 
-    if (!bot->GetGroup())
+    Group* group = bot->GetGroup();
+    if (!group)
         return false;
 
     if (bot->IsInCombat())
@@ -85,8 +114,13 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
     if (!PartyHealerReady(70))
         return false;
 
-    // Don’t pull while anyone is drinking/eating nearby? (optional)
-    // You can expand this later using party aura checks.
+    // If anyone in group is still in combat, do NOT pull (prevents chain pulls)
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* m = ref->GetSource();
+        if (m && m->IsInCombat())
+            return false;
+    }
 
     Unit* target = PickPullTarget();
     if (!target)
