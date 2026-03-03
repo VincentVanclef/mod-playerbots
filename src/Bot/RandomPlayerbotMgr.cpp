@@ -387,6 +387,39 @@ if (ratio < 0.0)
     return target;
 }
 
+// Cache dungeon entrance destinations so we don't leak allocations every tick.
+namespace
+{
+    struct DungeonEntranceCache
+    {
+        TravelDestination* dest = nullptr;
+        WorldPosition* pos = nullptr;
+    };
+
+    static std::unordered_map<uint32, DungeonEntranceCache> sDungeonEntranceCache;
+
+    static DungeonEntranceCache const* GetDungeonEntrance(uint32 dungeonId)
+    {
+        if (!dungeonId)
+            return nullptr;
+
+        auto& slot = sDungeonEntranceCache[dungeonId];
+        if (slot.dest && slot.pos)
+            return &slot;
+
+        LFGDungeonEntry const* dungeon = sLFGDungeonStore.LookupEntry(dungeonId);
+        if (!dungeon)
+            return nullptr;
+
+        // Build a single-point destination at the LFG entrance coordinates.
+        slot.pos = new WorldPosition(dungeon->MapID, dungeon->x, dungeon->y, dungeon->z, 0.0f);
+        slot.dest = new TravelDestination(0.0f, 0.0f);
+        slot.dest->addPoint(slot.pos);
+
+        return &slot;
+    }
+}
+
 uint32 RandomPlayerbotMgr::GetCommunityLevelCap()  // NOTE: GetCommunityLevelCap is called from the world update thread only.
 {
     if (!sPlayerbotAIConfig.communityLevelCapEnabled)
@@ -2145,28 +2178,74 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 		}
 	}
 
-    // if death revive
-    if (bot->isDead())
-    {
-        if (!GetEventValue(botId, "dead"))
-        {
-            uint32 randomTime =
-                urand(sPlayerbotAIConfig.minRandomBotReviveTime, sPlayerbotAIConfig.maxRandomBotReviveTime);
-            LOG_DEBUG("playerbots", "Mark bot {} as dead, will be revived in {}s.", bot->GetName().c_str(),
-                      randomTime);
-            SetEventValue(botId, "dead", 1, sPlayerbotAIConfig.maxRandomBotInWorldTime);
-            SetEventValue(botId, "revive", 1, randomTime);
-            return false;
-        }
+    // if death revive / dungeon wipe behavior
+	if (bot->isDead())
+	{
+		Group* grp = bot->GetGroup();
 
-        if (!GetEventValue(botId, "revive"))
-        {
-            Revive(bot);
-            return true;
-        }
+		// ------------------------------------------------------------
+		// RTG: Ghost dungeon return logic
+		// If bot is a ghost in an LFG run and is outside the dungeon map,
+		// assign a travel target to the dungeon entrance so it runs back
+		// (respects mmaps/vmaps) instead of idling at graveyard.
+		// ------------------------------------------------------------
+		if (grp && grp->isLFGGroup())
+		{
+			Map* map = bot->GetMap();
+			bool inDungeon = map && map->IsDungeon();
 
-        return false;
-    }
+			// Only do this once they've released (ghost). Don't interfere with corpse state.
+			if (!inDungeon && bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+			{
+				// Throttle: don't reassign every tick
+				if (!GetEventValue(botId, "rtg_ghost_return"))
+				{
+					SetEventValue(botId, "rtg_ghost_return", 1, 15);
+
+					// Get current LFG dungeon id
+					uint32 dungeonId = sLFGMgr->GetDungeon(bot->GetGUID());
+					if (auto const* ent = GetDungeonEntrance(dungeonId))
+					{
+						TravelTarget* tt = botAI->GetAiObjectContext()->GetValue<TravelTarget*>("travel target")->Get();
+						if (tt)
+						{
+							tt->setForced(true);
+							tt->setTarget(ent->dest, ent->pos);
+
+							LOG_DEBUG("playerbots", "RTG: Ghost bot {} running back to dungeon entrance (dungeonId={})",
+									  bot->GetName().c_str(), dungeonId);
+						}
+					}
+				}
+			}
+
+			// In LFG runs we do NOT use random world revive timers here.
+			// Let dungeon/party logic handle rez/corpse run.
+			return false;
+		}
+
+		// ------------------------------------------------------------
+		// Stock/random-bot world revive behavior (non-LFG)
+		// ------------------------------------------------------------
+		if (!GetEventValue(botId, "dead"))
+		{
+			uint32 randomTime =
+				urand(sPlayerbotAIConfig.minRandomBotReviveTime, sPlayerbotAIConfig.maxRandomBotReviveTime);
+
+			LOG_DEBUG("playerbots", "Mark bot {} as dead, will be revived in {}s.", bot->GetName().c_str(), randomTime);
+			SetEventValue(botId, "dead", 1, sPlayerbotAIConfig.maxRandomBotInWorldTime);
+			SetEventValue(botId, "revive", 1, randomTime);
+			return false;
+		}
+
+		if (!GetEventValue(botId, "revive"))
+		{
+			Revive(bot);
+			return true;
+		}
+
+		return false;
+	}
 
     // ------------------------------------------------------------
     // RTG: If a random bot is hanging around a graveyard, relocate it.
