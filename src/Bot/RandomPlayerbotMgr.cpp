@@ -637,8 +637,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
 	// ------------------------------------------------------------------
 	// RTG policy: bots must not remain grouped in the open world.
-	// - Allow groups ONLY while inside Dungeon Finder instances (LFG groups)
-	//   or inside Battleground/Arena (BG groups).
+	// - Allow LFG groups (stable even during corpse runs / outside-instance transitions)
+	// - Allow BG groups ONLY while inside Battleground/Arena maps
 	//
 	// IMPORTANT:
 	// We DO NOT dissolve LFG/BG groups based on "no real players online" checks.
@@ -655,48 +655,49 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
 				continue;
 
+			uint32 botId = bot->GetGUID().GetCounter();  // <-- define once here
+
 			Group* group = bot->GetGroup();
 			if (!group)
 			{
-				SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
+				SetEventValue(botId, "rtg_group_noreal", 0, 0);
 				continue;
 			}
 
 			Map* map = bot->GetMap();
 			bool inBg = map && map->IsBattlegroundOrArena();
-			bool inInstance = map && map->IsDungeon();
 
 			bool isBgGroup = group->isBGGroup();
 			bool isLfgGroup = group->isLFGGroup();
 
-			bool allowedHere = (isBgGroup && inBg) || (isLfgGroup && inInstance);
+			// BG groups must stay inside BG/Arena maps.
+			// LFG groups are allowed even if a member is temporarily outside the instance
+			// (corpse run / release puts ghosts at entrance/graveyard and we must not disband).
+			bool allowedHere = true;
 
-			// Any non-LFG / non-BG grouping is forbidden.
-			if ((!isBgGroup && !isLfgGroup) || !allowedHere)
+			if (isBgGroup)
+				allowedHere = inBg;
+			else if (!isLfgGroup)
+				allowedHere = false; // any non-LFG / non-BG grouping is forbidden
+
+			if (!allowedHere)
 			{
 				// --- Leave cooldown guard (prevents spam / repeated leave attempts) ---
-				uint32 botId = bot->GetGUID().GetCounter();
 				uint32 last = GetEventValue(botId, "rtg_group_leave");
-
 				if (last && now < last + 5)
-					continue; // recently tried leaving, skip this tick
-
+					continue;
 				SetEventValue(botId, "rtg_group_leave", now, 10);
-				// -----------------------------------------------------------------------
+				// --------------------------------------------------------------------
 
 				if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
 					botAI->LeaveOrDisbandGroup();
 
-				SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
+				SetEventValue(botId, "rtg_group_noreal", 0, 0);
 				continue;
 			}
 
-			// Allowed group context (LFG in instance, or BG group in BG).
-			// Do NOT run "no real player online -> dissolve" logic here.
-			// Clear any legacy timer state and keep the group stable.
-			SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
-			(void)now; // keep 'now' available if you later reintroduce timed logic safely
-			continue;
+			// Allowed group context: keep stable.
+			SetEventValue(botId, "rtg_group_noreal", 0, 0);
 		}
 	}
 
