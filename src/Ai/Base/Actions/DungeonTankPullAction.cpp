@@ -3,6 +3,7 @@
 #include "Playerbots.h"
 #include "Group.h"
 #include "ObjectAccessor.h"
+#include "MotionMaster.h"
 
 bool DungeonTankPullAction::PartyHealerReady(uint8 minManaPct) const
 {
@@ -102,7 +103,26 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
 
     Unit* target = PickPullTarget();
 	if (!target)
+	{
+		// No safe pull target right now.
+		// Compromise: regroup near the party so the tank doesn't get lost or left behind.
+		Group* group = bot->GetGroup();
+		if (!group)
+			return false;
+
+		Player* leader = ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID());
+		if (!leader || leader == bot)
+			return false;
+
+		// If we're far from the party, move back in (but don't "follow forever")
+		if (!bot->IsWithinDistInMap(leader, 25.0f))
+		{
+			bot->GetMotionMaster()->MoveFollow(leader, 18.0f, 0.0f);
+			return true;
+		}
+
 		return false;
+	}
 
 	// If target is not in pull range yet, move into position (don’t wait for player body-pull)
 	if (!bot->IsWithinDistInMap(target, 25.0f))
