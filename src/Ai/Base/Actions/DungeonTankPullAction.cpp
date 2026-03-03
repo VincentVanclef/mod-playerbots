@@ -101,39 +101,51 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
             return false;
     }
 
+    uint32 botId = bot->GetGUID().GetCounter();
+    uint32 now = NowSeconds();
+
     Unit* target = PickPullTarget();
-	if (!target)
-	{
-		// No safe pull target right now.
-		// Compromise: regroup near the party so the tank doesn't get lost or left behind.
-		Group* group = bot->GetGroup();
-		if (!group)
-			return false;
+    if (!target)
+    {
+        // Mark that we currently have no pull target (TTL 15s to avoid stale states)
+        uint32 lastNoTarget = GetEventValue(botId, "rtg_tank_notarget");
+        if (!lastNoTarget)
+        {
+            SetEventValue(botId, "rtg_tank_notarget", now, 15);
+            return false; // give it a few ticks to find something naturally
+        }
 
-		Player* leader = ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID());
-		if (!leader || leader == bot)
-			return false;
+        // If we've been without targets for a bit, regroup near leader so tank doesn't get lost
+        if (now >= lastNoTarget + 10)
+        {
+            Player* leader = ObjectAccessor::FindConnectedPlayer(group->GetLeaderGUID());
+            if (leader && leader != bot && leader->IsInWorld())
+            {
+                // Only regroup if we're actually separated
+                if (!bot->IsWithinDistInMap(leader, 25.0f))
+                {
+                    bot->GetMotionMaster()->MoveFollow(leader, 18.0f, 0.0f);
+                    return true;
+                }
+            }
+        }
 
-		// If we're far from the party, move back in (but don't "follow forever")
-		if (!bot->IsWithinDistInMap(leader, 25.0f))
-		{
-			bot->GetMotionMaster()->MoveFollow(leader, 18.0f, 0.0f);
-			return true;
-		}
+        return false;
+    }
 
-		return false;
-	}
+    // We found a target: clear the "no target" timer
+    SetEventValue(botId, "rtg_tank_notarget", 0, 0);
 
-	// If target is not in pull range yet, move into position (don’t wait for player body-pull)
-	if (!bot->IsWithinDistInMap(target, 25.0f))
-	{
-		// Move into line-of-sight like a ranged pull setup (safer than charging through packs)
-		return MoveToLOS(target, true); // ranged = true
-	}
+    // If target is not in pull range yet, move into position (don’t wait for player body-pull)
+    if (!bot->IsWithinDistInMap(target, 25.0f))
+    {
+        // Move into line-of-sight like a ranged pull setup (safer than charging through packs)
+        return MoveToLOS(target, true); // ranged = true
+    }
 
-	// Now we’re in pull range: publish pull target so DPS/heals instantly assist
-	context->GetValue<ObjectGuid>("pull target")->Set(target->GetGUID());
-	botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({ target->GetGUID() });
+    // Now we’re in pull range: publish pull target so DPS/heals instantly assist
+    context->GetValue<ObjectGuid>("pull target")->Set(target->GetGUID());
+    botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({ target->GetGUID() });
 
-	return Attack(target);
+    return Attack(target);
 }

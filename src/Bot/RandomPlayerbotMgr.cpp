@@ -2228,29 +2228,24 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             // Cooldown: only relocate once per 5 minutes max
             if (!GetEventValue(botId, "rtg_graveyard_relocate"))
             {
-                GraveyardStruct const* gy = sGraveyard->GetClosestGraveyard(bot, bot->GetTeamId());
-                if (gy && gy->Map == bot->GetMapId())
-                {
-                    float dx = bot->GetPositionX() - gy->x;
-                    float dy = bot->GetPositionY() - gy->y;
-                    float dist2 = dx * dx + dy * dy;
+                // Detect graveyard loitering by nearby Spirit Healer / Spirit Guide NPCs
+				// This avoids GetClosestGraveyard() zone/area errors and is much more reliable.
+				std::list<Creature*> near;
+				bot->GetCreatureListWithEntryInGrid(near, 6491, 60.0f); // Spirit Healer (classic)
+				bot->GetCreatureListWithEntryInGrid(near, 13116, 60.0f); // Spirit Guide (BG) - harmless if none
 
-                    // Within 80 yards => basically "at the graveyard"
-                    if (dist2 <= (80.0f * 80.0f))
-                    {
-                        SetEventValue(botId, "rtg_graveyard_relocate", 1, 300); // 5 min cooldown
+				if (!near.empty())
+				{
+					SetEventValue(botId, "rtg_graveyard_relocate", 1, 300); // 5 min cooldown
 
-                        LOG_DEBUG("playerbots", "RTG: Relocating bot #{} <{}> from graveyard area", botId,
-                                  bot->GetName().c_str());
+					LOG_DEBUG("playerbots", "RTG: Relocating bot #{} <{}> away from graveyard NPC area", botId,
+							  bot->GetName().c_str());
 
-                        Refresh(bot);
-                        RandomTeleportForLevel(bot);
-
-                        // Avoid immediate re-teleport by scheduling a normal teleport window
-                        ScheduleTeleport(botId, urand(240, 420));
-                        return true;
-                    }
-                }
+					Refresh(bot);
+					RandomTeleportForLevel(bot);
+					ScheduleTeleport(botId, urand(240, 420));
+					return true;
+				}
             }
         }
     }
