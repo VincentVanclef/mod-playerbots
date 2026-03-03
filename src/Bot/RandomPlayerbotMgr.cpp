@@ -2149,7 +2149,7 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             if (!GetEventValue(botId, "rtg_graveyard_relocate"))
             {
                 GraveyardStruct const* g = sGraveyard->GetClosestGraveyard(bot, bot->GetTeamId());
-                if (g && g->map == bot->GetMapId())
+                if (g && g->Map == bot->GetMapId())
                 {
                     float dx = bot->GetPositionX() - g->x;
                     float dy = bot->GetPositionY() - g->y;
