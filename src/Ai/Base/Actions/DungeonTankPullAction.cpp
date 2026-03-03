@@ -109,7 +109,7 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
     }
 
     uint32 botId = bot->GetGUID().GetCounter();
-	uint32 now = GameTime::GetGameTime();
+	uint32 now = GameTime::GetGameTime().count();
 
 	Unit* target = PickPullTarget();
 	if (!target)
