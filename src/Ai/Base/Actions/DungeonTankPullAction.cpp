@@ -55,9 +55,10 @@ Unit* DungeonTankPullAction::PickPullTarget() const
         if (u->GetCreatureType() == CREATURE_TYPE_CRITTER)
             continue;
 
-        // Keep pulls tight so tank doesn't sprint through packs
-        if (!bot->IsWithinDistInMap(u, 45.0f)) // tune
-            continue;
+        // Start pull logic much earlier so tank doesn't wait for body aggro.
+		// LOS requirement below prevents picking through walls.
+		if (!bot->IsWithinDistInMap(u, 100.0f)) // tune
+			continue;
 
         if (!bot->IsWithinLOSInMap(u))
             continue;
@@ -67,8 +68,8 @@ Unit* DungeonTankPullAction::PickPullTarget() const
             continue;
 
         // Avoid targets that are already in messy combat clusters
-        if (u->getAttackers().size() >= 3)
-            continue;
+		if (u->GetAttackers().size() >= 5)
+			continue;
 
         return u;
     }
@@ -139,11 +140,9 @@ bool DungeonTankPullAction::Execute(Event /*event*/)
 	sTankNoTargetSince.erase(botId);
 
     // If target is not in pull range yet, move into position (don’t wait for player body-pull)
-    if (!bot->IsWithinDistInMap(target, 25.0f))
-    {
-        // Move into line-of-sight like a ranged pull setup (safer than charging through packs)
-        return MoveToLOS(target, true); // ranged = true
-    }
+    // If target is far, start moving earlier so we don't stall behind the player
+	if (!bot->IsWithinDistInMap(target, 40.0f))
+    return MoveToLOS(target, true);
 
     // Now we’re in pull range: publish pull target so DPS/heals instantly assist
     context->GetValue<ObjectGuid>("pull target")->Set(target->GetGUID());

@@ -286,7 +286,7 @@ bool LfgLeaveAction::Execute(Event event)
 bool LfgLeaveAction::isUseful() { return true; }
 
 
-// RTG Policy to give roles exact strategy for their chosen roles
+// RTG Policy: roles + stable anchor follow in dungeons
 namespace
 {
     void ApplyDungeonRoleStrategies(PlayerbotAI* botAI, Player* bot, uint32 roleMask)
@@ -301,11 +301,11 @@ namespace
         std::string strat;
 
         if (roleMask & PLAYER_ROLE_TANK)
-            strat = "+tank,-heal,-dps,-follow,-follow master,-follow player,-stay";
+            strat = "+tank,+follow,-heal,-dps";
         else if (roleMask & PLAYER_ROLE_HEALER)
-            strat = "+heal,-tank,-dps,+save mana";
+            strat = "+heal,+follow,-tank,-dps,+save mana";
         else
-            strat = "+dps,-tank,-heal";
+            strat = "+dps,+follow,-tank,-heal";
 
         botAI->ChangeStrategy(strat, BOT_STATE_NON_COMBAT);
         botAI->ChangeStrategy(strat, BOT_STATE_COMBAT);
