@@ -34,7 +34,6 @@ bool DungeonTankPullAction::PartyHealerReady(uint8 minManaPct) const
 
 Unit* DungeonTankPullAction::PickPullTarget() const
 {
-    // Prefer targets that are actually in LOS and “possible”
     GuidVector targets = AI_VALUE(GuidVector, "possible targets");
     for (ObjectGuid const& g : targets)
     {
@@ -45,44 +44,23 @@ Unit* DungeonTankPullAction::PickPullTarget() const
         if (bot->IsFriendlyTo(u))
             continue;
 
-        // Don’t pull critters / nonsense
         if (u->GetCreatureType() == CREATURE_TYPE_CRITTER)
             continue;
 
-        // Keep it close-ish so tank doesn’t sprint across the instance
-        // Don't sprint deep into the dungeon and drag everything
-		if (!bot->IsWithinDistInMap(u, 25.0f)) // tune
-			continue;
+        // Keep pulls tight so tank doesn't sprint through packs
+        if (!bot->IsWithinDistInMap(u, 25.0f)) // tune
+            continue;
 
         if (!bot->IsWithinLOSInMap(u))
             continue;
-		
-		// Avoid targets embedded in huge packs
-		uint32 nearby = 0;
-		std::list<Unit*> nearUnits;
-		botAI->GetUnitList(nearUnits, bot, 35.0f); // adjust radius
-		for (Unit* n : nearUnits)
-		{
-			if (!n)
-				continue;
 
-			// Skip the main candidate target itself
-			if (n == u)
-				continue;
+        // Don't pull targets already fighting something
+        if (u->IsInCombat())
+            continue;
 
-			if (n->isDead() || bot->IsFriendlyTo(n))
-				continue;
-
-			if (n->GetCreatureType() == CREATURE_TYPE_CRITTER)
-				continue;
-
-			// Count hostile creatures near that target
-			if (n->IsWithinDistInMap(u, 12.0f))
-				nearby++;
-		}
-
-		if (nearby >= 6) // tune: 6+ near target is likely a disaster pull
-			continue;
+        // Avoid targets that are already in messy combat clusters
+        if (u->GetAttackers().size() >= 3)
+            continue;
 
         return u;
     }

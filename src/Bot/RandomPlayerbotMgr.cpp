@@ -2129,8 +2129,8 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 					SetEventValue(botId, "rtg_lfg_force_tp", 1, 20);
 
 					// only if the LFG system thinks we're actually in dungeon run
-					LfgState st = sLFGMgr->GetState(bot->GetGUID());
-					if (st != LFG_STATE_NONE)
+					lfg::LfgState st = sLFGMgr->GetState(bot->GetGUID());
+					if (st != lfg::LFG_STATE_NONE)
 					{
 						LOG_INFO("playerbots", "RTG: LFG watchdog teleporting bot {} into dungeon", bot->GetName().c_str());
 
