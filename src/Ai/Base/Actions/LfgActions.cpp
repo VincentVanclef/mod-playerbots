@@ -301,7 +301,7 @@ namespace
         std::string strat;
 
         if (roleMask & PLAYER_ROLE_TANK)
-            strat = "+tank,-heal,-dps";
+            strat = "+tank,-heal,-dps,-follow,-follow master,-follow player,-stay";
         else if (roleMask & PLAYER_ROLE_HEALER)
             strat = "+heal,-tank,-dps,+save mana";
         else
