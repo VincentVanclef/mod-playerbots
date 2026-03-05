@@ -99,6 +99,18 @@ public:
 
     uint32 openGoSpell;
     bool randomBotAutologin;
+
+    // RTG: Event-driven bots (keep bots offline unless needed for BG/LFG)
+    bool rtgEventDriven = false;
+    uint32 rtgQueueGraceSeconds = 180;
+    uint32 rtgEventMaxBots = 60;
+    bool rtgKeepWorldBots = false; // if true, preserves normal world population target
+
+    // RTG: Optional low-bracket recycle caps (only used if your recycle logic is enabled elsewhere)
+    bool rtgLowBracketCapsEnable = false;
+    uint32 rtgLowBracketBotCap = 40;
+    uint32 rtgLowBotsPerNewPlayer = 20;
+
     bool botAutologin;
     std::string randomBotMapsAsString;
     float probTeleToBankers;

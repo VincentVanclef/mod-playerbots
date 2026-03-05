@@ -234,6 +234,23 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     if (!bg)
         return false;
 
+
+    // ------------------------------------------------------------------
+    // RTG: Event-driven queueing
+    // Keep bots from queueing unless real players have initiated queues,
+    // and respect the grace window so real players get first shot.
+    // ------------------------------------------------------------------
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_bg_start");
+        if (!start)
+            return false;
+
+        time_t now = time(nullptr);
+        if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+            return false;
+    }
+
     TeamId teamId = bot->GetTeamId();
     uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
     uint32 TeamSize = bg->GetMaxPlayersPerTeam();

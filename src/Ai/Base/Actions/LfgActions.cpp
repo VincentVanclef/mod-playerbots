@@ -34,15 +34,13 @@ uint32 LfgJoinAction::GetRoles()
     switch (bot->getClass())
     {
         case CLASS_DRUID:
-			// WotLK: 0 = Balance, 1 = Feral, 2 = Resto
-			// Do NOT require Thick Hide aura – aura checks are unreliable
-			// and were preventing proper tank role assignment.
-			if (spec == 2)
-				return PLAYER_ROLE_HEALER;
-			else if (spec == 1)
-				return PLAYER_ROLE_TANK;
-			else
-				return PLAYER_ROLE_DAMAGE;
+            if (spec == 2)
+                return PLAYER_ROLE_HEALER;
+            else if (spec == 1 && bot->HasAura(16931) /* thick hide */)
+                return PLAYER_ROLE_TANK;
+            else
+                return PLAYER_ROLE_DAMAGE;
+            break;
         case CLASS_PALADIN:
             if (spec == 1)
                 return PLAYER_ROLE_TANK;
@@ -90,6 +88,23 @@ bool LfgJoinAction::JoinLFG()
     LfgState state = sLFGMgr->GetState(bot->GetGUID());
     if (state != LFG_STATE_NONE)
         return false;
+
+
+    // ------------------------------------------------------------------
+    // RTG: Event-driven LFG grace
+    // Only let bots queue for LFG after real players have initiated LFG queueing
+    // and the grace window has expired.
+    // ------------------------------------------------------------------
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent(\"rtg_lfg_start\");
+        if (!start)
+            return false;
+
+        time_t now = time(nullptr);
+        if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+            return false;
+    }
 
     /*ItemCountByQuality visitor;
     IterateItems(&visitor, ITERATE_ITEMS_IN_EQUIP);
@@ -285,67 +300,23 @@ bool LfgLeaveAction::Execute(Event event)
 
 bool LfgLeaveAction::isUseful() { return true; }
 
-
-// RTG Policy: roles + stable anchor follow in dungeons
-namespace
-{
-    void ApplyDungeonRoleStrategies(PlayerbotAI* botAI, Player* bot, uint32 roleMask)
-    {
-        if (!botAI || !bot)
-            return;
-
-        Map* map = bot->GetMap();
-        if (!map || !map->IsDungeon())
-            return;
-
-        std::string strat;
-
-        if (roleMask & PLAYER_ROLE_TANK)
-            strat = "+tank,+follow,-heal,-dps";
-        else if (roleMask & PLAYER_ROLE_HEALER)
-            strat = "+heal,+follow,-tank,-dps,+save mana";
-        else
-            strat = "+dps,+follow,-tank,-heal";
-
-        botAI->ChangeStrategy(strat, BOT_STATE_NON_COMBAT);
-        botAI->ChangeStrategy(strat, BOT_STATE_COMBAT);
-    }
-}
-
 bool LfgTeleportAction::Execute(Event event)
 {
-    // Determine direction:
-    // out == true  -> teleport OUT
-    // out == false -> teleport INTO dungeon
     bool out = false;
 
-    std::string const param = event.getParam();
-    if (!param.empty())
+    WorldPacket p(event.getPacket());
+    if (!p.empty())
     {
-        // accept common playerbot command params
-        if (param == "out" || param == "leave" || param == "1")
-            out = true;
+        p.rpos(0);
+        p >> out;
     }
 
-    // If not in LFG system, nothing to do
-    LfgState state = sLFGMgr->GetState(bot->GetGUID());
-    if (state == LFG_STATE_NONE)
-        return false;
+    bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
-    // JoinLfg/Teleport are not thread-safe; queue packet to session
     WorldPacket* packet = new WorldPacket(CMSG_LFG_TELEPORT);
-    *packet << (uint8)out;
+    *packet << out;
     bot->GetSession()->QueuePacket(packet);
-
-    // ------------------------------------------------------------------
-    // RTG Policy: Enforce correct role strategies ON DUNGEON ENTRY.
-    // This prevents "healer" bots from staying in DPS strategies after teleport.
-    // ------------------------------------------------------------------
-    if (!out) // teleporting INTO the dungeon
-    {
-        uint32 roleMask = uint32(sLFGMgr->GetRoles(bot->GetGUID()));
-        ApplyDungeonRoleStrategies(botAI, bot, roleMask);
-    }
+    // sLFGMgr->TeleportPlayer(bot, out);
 
     return true;
 }

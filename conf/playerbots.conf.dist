@@ -2212,3 +2212,21 @@ AiPlayerbot.EnableICCBuffs = 1
 # AiPlayerbot.LogInGroupOnly = 0
 # AiPlayerbot.CommandServerPort = 0
 
+
+
+####################################################################################################
+# RTG: EVENT-DRIVEN BOT POPULATION (optional)
+#
+# Goal: Keep randombots offline unless needed to fill battleground/arena/LFG queues.
+# - When enabled, the normal "world population" target is forced to 0 unless KeepWorldBots=true.
+# - When real players start queueing, bots will begin joining ONLY AFTER QueueGraceSeconds expires.
+#
+AiPlayerbot.RTG.EventDriven.Enable = 0
+AiPlayerbot.RTG.QueueGraceSeconds = 180
+AiPlayerbot.RTG.EventDriven.MaxBots = 60
+AiPlayerbot.RTG.EventDriven.KeepWorldBots = 0
+
+# RTG: Optional low-bracket recycle caps (for your "start new bots when new players start" logic)
+AiPlayerbot.RTG.LowBracketCaps.Enable = 0
+AiPlayerbot.RTG.LowBracketCaps.Cap = 40
+AiPlayerbot.RTG.LowBracketCaps.PerNewPlayer = 20

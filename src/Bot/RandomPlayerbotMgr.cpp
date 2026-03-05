@@ -33,7 +33,6 @@
 #include "Define.h"
 #include "FleeManager.h"
 #include "FlightMasterCache.h"
-#include "GameGraveyard.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "GuildMgr.h"
@@ -609,101 +608,187 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 	// If ratio scaling is enabled, override target bot count dynamically
 	if (sPlayerbotAIConfig.usePlayerCountRatio)
 	{
-		maxAllowedBotCount = GetMaxAllowedBotCount();
+		uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
 
 		// Optional: store into event cache so .playerbots rndbot stats can show it
+		// Keep TTL short so it tracks changes
 		SetEventValue(0, "bot_count_ratio_target", maxAllowedBotCount, 30);
-
-		// Optional: also persist the actual active bot count target to the key the system uses later.
-		// If later code reads "bot_count" from cache, this keeps behavior consistent:
-		// SetEventValue(0, "bot_count", maxAllowedBotCount, 30);
 	}
 	else
 	{
-		// Stock behavior...
+		// Stock behavior: randomize target bot_count over time if invalid/out of range
 		maxAllowedBotCount = GetEventValue(0, "bot_count");
-
+		
 		if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig.minRandomBots ||
 									maxAllowedBotCount > sPlayerbotAIConfig.maxRandomBots))
 		{
 			maxAllowedBotCount = urand(sPlayerbotAIConfig.minRandomBots, sPlayerbotAIConfig.maxRandomBots);
 			SetEventValue(0, "bot_count", maxAllowedBotCount,
-				urand(sPlayerbotAIConfig.randomBotCountChangeMinInterval,
-					  sPlayerbotAIConfig.randomBotCountChangeMaxInterval));
+						urand(sPlayerbotAIConfig.randomBotCountChangeMinInterval,
+								sPlayerbotAIConfig.randomBotCountChangeMaxInterval));
 		}
 	}
+
+    // ------------------------------------------------------------------
+    // RTG: event-driven population target
+    // When enabled, keep randombots offline unless there is active demand
+    // from BG/LFG queues. World population target becomes 0 unless
+    // AiPlayerbot.RTG.EventDriven.KeepWorldBots = 1.
+    // ------------------------------------------------------------------
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 baseWorld = sPlayerbotAIConfig.rtgKeepWorldBots ? maxAllowedBotCount : 0u;
+
+        bool bgDemand  = (GetEventValue(0, "rtg_bg_start")  != 0);
+        bool lfgDemand = (GetEventValue(0, "rtg_lfg_start") != 0);
+
+        // Only start logging in event bots AFTER the grace window expires.
+        time_t now = time(nullptr);
+        uint32 bgStart  = GetEventValue(0, "rtg_bg_start");
+        uint32 lfgStart = GetEventValue(0, "rtg_lfg_start");
+        bool bgReady  = bgDemand  && now >= (time_t)(bgStart  + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+        bool lfgReady = lfgDemand && now >= (time_t)(lfgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+
+        uint32 eventTarget = (bgReady || lfgReady) ? sPlayerbotAIConfig.rtgEventMaxBots : 0u;
+
+        maxAllowedBotCount = baseWorld + eventTarget;
+
+        // If there is no demand at all, force target to 0 so bots log out naturally.
+        if (!bgDemand && !lfgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
+            maxAllowedBotCount = 0;
+    }
 
     GetBots();
 
-	// ------------------------------------------------------------------
-	// RTG policy: bots must not remain grouped in the open world.
-	// - Allow LFG groups (stable even during corpse runs / outside-instance transitions)
-	// - Allow BG groups ONLY while inside Battleground/Arena maps
-	//
-	// IMPORTANT:
-	// We DO NOT dissolve LFG/BG groups based on "no real players online" checks.
-	// During dungeon teleport/loading, ObjectAccessor::FindPlayer() can temporarily
-	// fail to resolve real players and this was causing bots to Leave/Disband
-	// immediately after dungeon entry.
-	// ------------------------------------------------------------------
-	{
-		uint32 now = NowSeconds();
+    // ------------------------------------------------------------------
+    // RTG policy: bots must not remain grouped in the open world.
+    // - Allow groups ONLY while inside Dungeon Finder instances (LFG groups)
+    //   or inside Battleground/Arena (BG groups).
+    // - Dissolve bot-only groups (no real players online) even in allowed
+    //   contexts to prevent exploitation and "bot shields".
+    // ------------------------------------------------------------------
+    {
+        uint32 now = NowSeconds();
 
-		for (auto const& kv : playerBots)
-		{
-			Player* bot = kv.second;
-			if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
-				continue;
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+                continue;
 
-			uint32 botId = bot->GetGUID().GetCounter();  // <-- define once here
+            Group* group = bot->GetGroup();
+            if (!group)
+            {
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
+                continue;
+            }
 
-			Group* group = bot->GetGroup();
-			if (!group)
-			{
-				SetEventValue(botId, "rtg_group_noreal", 0, 0);
-				continue;
-			}
+            Map* map = bot->GetMap();
+            bool inBg = map && map->IsBattlegroundOrArena();
+            bool inInstance = map && (map->IsDungeon() || map->IsRaid());
 
-			Map* map = bot->GetMap();
-			bool inBg = map && map->IsBattlegroundOrArena();
+            bool isBgGroup = group->isBGGroup();
+            bool isLfgGroup = group->isLFGGroup();
 
-			bool isBgGroup = group->isBGGroup();
-			bool isLfgGroup = group->isLFGGroup();
+            bool allowedHere = (isBgGroup && inBg) || (isLfgGroup && inInstance);
 
-			// BG groups must stay inside BG/Arena maps.
-			// LFG groups are allowed even if a member is temporarily outside the instance
-			// (corpse run / release puts ghosts at entrance/graveyard and we must not disband).
-			bool allowedHere = true;
+            // Any non-LFG / non-BG grouping is forbidden.
+            if ((!isBgGroup && !isLfgGroup) || !allowedHere)
+            {
+                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                    botAI->LeaveOrDisbandGroup();
 
-			if (isBgGroup)
-				allowedHere = inBg;
-			else if (!isLfgGroup)
-				allowedHere = false; // any non-LFG / non-BG grouping is forbidden
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
+                continue;
+            }
 
-			if (!allowedHere)
-			{
-				// --- Leave cooldown guard (prevents spam / repeated leave attempts) ---
-				uint32 last = GetEventValue(botId, "rtg_group_leave");
-				if (last && now < last + 5)
-					continue;
-				SetEventValue(botId, "rtg_group_leave", now, 10);
-				// --------------------------------------------------------------------
+            // Dissolve bot-only groups (no real players online).
+            bool hasRealOnline = false;
+            for (Group::MemberSlot const& slot : group->GetMemberSlots())
+            {
+                Player* member = ObjectAccessor::FindPlayer(slot.guid);
+                if (!member)
+                    continue;
 
-				if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-					botAI->LeaveOrDisbandGroup();
+                // A "real" player is one without PlayerbotAI attached.
+                if (!GET_PLAYERBOT_AI(member))
+                {
+                    hasRealOnline = true;
+                    break;
+                }
+            }
 
-				SetEventValue(botId, "rtg_group_noreal", 0, 0);
-				continue;
-			}
+            uint32 botId = bot->GetGUID().GetCounter();
+            if (hasRealOnline)
+            {
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
+                continue;
+            }
 
-			// Allowed group context: keep stable.
-			SetEventValue(botId, "rtg_group_noreal", 0, 0);
-		}
-	}
+            // Start / continue a short grace period so we don't flail on transient states.
+            uint32 started = GetEventValue(botId, "rtg_group_noreal");
+            if (!started)
+            {
+                SetEventValue(botId, "rtg_group_noreal", now, 600);
+                continue;
+            }
 
+            // After 10s with no real players online, dissolve.
+            if (now > started + 10)
+            {
+                if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                    botAI->LeaveOrDisbandGroup();
+
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
+            }
+        }
+    }
     std::list<uint32> availableBots = currentBots;
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
+
+    // ------------------------------------------------------------------
+    // RTG: event-driven shrink
+    // If event-driven mode is on and we're above target (often 0), mark a few
+    // bots for logout quickly so they go offline when not needed.
+    // ------------------------------------------------------------------
+    if (sPlayerbotAIConfig.rtgEventDriven && onlineBotCount > maxAllowedBotCount)
+    {
+        uint32 over = onlineBotCount - maxAllowedBotCount;
+        uint32 toLogout = std::min<uint32>(over, std::max<uint32>(1u, sPlayerbotAIConfig.randomBotsPerInterval));
+
+        for (auto const& kv : playerBots)
+        {
+            if (!toLogout)
+                break;
+
+            ObjectGuid botGuid = kv.first;
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            // Don't disrupt active gameplay
+            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+                continue;
+
+            Map* map = bot->GetMap();
+            if (map && (map->IsDungeon() || map->IsRaid()))
+                continue;
+
+            if (bot->GetGroup())
+                continue;
+
+            if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                continue;
+
+            uint32 botId = botGuid.GetCounter();
+            SetEventValue(botId, "add", 0, 0);
+            currentBots.remove(botId);
+            LogoutPlayerBot(botGuid);
+            --toLogout;
+        }
+    }
+
 
 // ---------------------------------------------------------
 // Seed replacement: keep open-world population steady even when
@@ -1554,6 +1639,8 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
     LOG_DEBUG("playerbots", "Checking BG Queue...");
 
+    bool anyRealQueued = false;
+
     // Initialize Battleground Data (do not clear here)
 
     for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
@@ -1571,6 +1658,9 @@ void RandomPlayerbotMgr::CheckBgQueue()
         // Skip player if not currently in a queue
         if (!player->InBattlegroundQueue())
             continue;
+
+
+        anyRealQueued = true;
 
         Battleground* bg = player->GetBattleground();
         if (bg && bg->GetStatus() == STATUS_WAIT_LEAVE)
@@ -1892,6 +1982,22 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                      bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount, bgInfo.bgInstanceCount, bgInfo.activeBgQueue);
         }
     }
+    // RTG: Event-driven start marker for BG queueing (grace window begins when first real player queues)
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        if (anyRealQueued)
+        {
+            uint32 existing = GetEventValue(0, "rtg_bg_start");
+            uint32 now = (uint32)time(nullptr);
+            uint32 start = existing ? existing : now;
+            SetEventValue(0, "rtg_bg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        }
+        else
+        {
+            SetEventValue(0, "rtg_bg_start", 0, 0);
+        }
+    }
+
     LOG_DEBUG("playerbots", "BG Queue check finished");
 }
 
@@ -1901,6 +2007,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         LfgCheckTimer = time(nullptr);
 
     LOG_DEBUG("playerbots", "Checking LFG Queue...");
+
+    bool anyRealLfgQueued = false;
 
     // Clear LFG list
     LfgDungeons[TEAM_ALLIANCE].clear();
@@ -1918,6 +2026,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         lfg::LfgState gState = sLFGMgr->GetState(guid);
         if (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON)
         {
+            anyRealLfgQueued = true;
+
             lfg::LfgDungeonSet const& dList = sLFGMgr->GetSelectedDungeons(player->GetGUID());
             for (lfg::LfgDungeonSet::const_iterator itr = dList.begin(); itr != dList.end(); ++itr)
             {
@@ -1927,6 +2037,22 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 
                 LfgDungeons[player->GetTeamId()].push_back(dungeon->id);
             }
+        }
+    }
+
+    // RTG: Event-driven start marker for LFG queueing
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        if (anyRealLfgQueued)
+        {
+            uint32 existing = GetEventValue(0, "rtg_lfg_start");
+            uint32 now = (uint32)time(nullptr);
+            uint32 start = existing ? existing : now;
+            SetEventValue(0, "rtg_lfg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        }
+        else
+        {
+            SetEventValue(0, "rtg_lfg_start", 0, 0);
         }
     }
 
@@ -2091,6 +2217,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
 
 bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 {
+
     PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
     if (!botAI)
         return false;
@@ -2101,153 +2228,29 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
     if (bot->InBattlegroundQueue())
         return false;
 
-    uint32 botId = bot->GetGUID().GetCounter();
-	
-	// ------------------------------------------------------------
-	// RTG: LFG teleport watchdog
-	// If bot is in an LFG group but not inside the dungeon map, force teleport in.
-	// Prevents "missing bot" stuck outside -> 4-man dungeon.
-	// ------------------------------------------------------------
-	if (Group* g = bot->GetGroup())
-	{
-		if (g->isLFGGroup())
-		{
-			Map* map = bot->GetMap();
-			bool inDungeon = map && map->IsDungeon();
+     uint32 botId = bot->GetGUID().GetCounter();
 
-			// Only try to fix "missing bot" if we're alive (or ghost) and not already teleporting/loading
-			if (!inDungeon &&
-				bot->IsInWorld() &&
-				bot->IsAlive() &&
-				!bot->IsInCombat() &&
-				!bot->IsBeingTeleported() &&
-				!bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-			{
-				// throttle attempts (every 20s per bot)
-				if (!GetEventValue(botId, "rtg_lfg_force_tp"))
-				{
-					SetEventValue(botId, "rtg_lfg_force_tp", 1, 20);
-
-					// only if the LFG system thinks we're actually in dungeon run
-					lfg::LfgState st = sLFGMgr->GetState(bot->GetGUID());
-					if (st != lfg::LFG_STATE_NONE)
-					{
-						LOG_INFO("playerbots", "RTG: LFG watchdog teleporting bot {} into dungeon", bot->GetName().c_str());
-
-						WorldPacket* p = new WorldPacket(CMSG_LFG_TELEPORT);
-						*p << (uint8)0; // out=false => teleport INTO dungeon
-						bot->GetSession()->QueuePacket(p);
-
-						return true;
-					}
-				}
-			}
-		}
-	}
-
-	// if death revive / dungeon wipe behavior
-	if (bot->isDead())
-	{
-		Group* grp = bot->GetGroup();
-
-		// ------------------------------------------------------------
-		// RTG: Ghost LFG recovery
-		// If bot is a ghost in an LFG run and is outside the dungeon map,
-		// teleport it INTO the dungeon entrance using LFG teleport.
-		// This prevents ghosts idling at graveyard when the real player is alive.
-		// ------------------------------------------------------------
-		if (grp && grp->isLFGGroup())
-		{
-			Map* map = bot->GetMap();
-			bool inDungeon = map && map->IsDungeon();
-
-			if (!inDungeon && bot->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
-			{
-				if (!GetEventValue(botId, "rtg_ghost_lfg_tp"))
-				{
-					SetEventValue(botId, "rtg_ghost_lfg_tp", 1, 15);
-
-					lfg::LfgState st = sLFGMgr->GetState(bot->GetGUID());
-					if (st != lfg::LFG_STATE_NONE && bot->IsInWorld() && !bot->IsBeingTeleported())
-					{
-						LOG_INFO("playerbots", "RTG: Ghost bot {} teleporting back into dungeon via LFG",
-								 bot->GetName().c_str());
-
-						WorldPacket* p = new WorldPacket(CMSG_LFG_TELEPORT);
-						*p << (uint8)0; // teleport INTO dungeon
-						bot->GetSession()->QueuePacket(p);
-					}
-				}
-			}
-
-			return false;
-		}
-
-		// ------------------------------------------------------------
-		// Stock/random-bot world revive behavior (non-LFG)
-		// ------------------------------------------------------------
-		if (!GetEventValue(botId, "dead"))
-		{
-			uint32 randomTime =
-				urand(sPlayerbotAIConfig.minRandomBotReviveTime, sPlayerbotAIConfig.maxRandomBotReviveTime);
-
-			LOG_DEBUG("playerbots", "Mark bot {} as dead, will be revived in {}s.", bot->GetName().c_str(), randomTime);
-			SetEventValue(botId, "dead", 1, sPlayerbotAIConfig.maxRandomBotInWorldTime);
-			SetEventValue(botId, "revive", 1, randomTime);
-			return false;
-		}
-
-		if (!GetEventValue(botId, "revive"))
-		{
-			Revive(bot);
-			return true;
-		}
-
-		return false;
-	}
-
-    // ------------------------------------------------------------
-    // RTG: If a random bot is hanging around a graveyard, relocate it.
-    // Prevents bots idling in cemetery spots / lowbie graveyards.
-    // Uses existing RandomTeleportForLevel() to pick an appropriate zone.
-    // ------------------------------------------------------------
-    if (IsRandomBot(bot) &&
-        bot->IsAlive() &&
-        !bot->IsInCombat() &&
-        !bot->GetGroup() &&
-        !bot->HasUnitState(UNIT_STATE_IN_FLIGHT) &&
-        !bot->IsBeingTeleported())
+    // if death revive
+    if (bot->isDead())
     {
-        // Optional: don't interfere with bots that are actively traveling
-        bool traveling = false;
-        if (TravelTarget* target = botAI->GetAiObjectContext()->GetValue<TravelTarget*>("travel target")->Get())
-            traveling = (target->getTravelState() != TravelState::TRAVEL_STATE_IDLE);
-
-        if (!traveling)
+        if (!GetEventValue(botId, "dead"))
         {
-            // Cooldown: only relocate once per 5 minutes max
-            if (!GetEventValue(botId, "rtg_graveyard_relocate"))
-            {
-                // Detect graveyard loitering by nearby Spirit Healer / Spirit Guide NPCs
-				// This avoids GetClosestGraveyard() zone/area errors and is much more reliable.
-				std::list<Creature*> near;
-				bot->GetCreatureListWithEntryInGrid(near, 6491, 60.0f); // Spirit Healer (classic)
-				bot->GetCreatureListWithEntryInGrid(near, 13116, 60.0f); // Spirit Guide (BG) - harmless if none
-
-				if (!near.empty())
-				{
-					SetEventValue(botId, "rtg_graveyard_relocate", 1, 300); // 5 min cooldown
-
-					LOG_DEBUG("playerbots", "RTG: Relocating bot #{} <{}> away from graveyard NPC area", botId,
-							  bot->GetName().c_str());
-
-					Refresh(bot);
-					RandomTeleportForLevel(bot);
-					ScheduleTeleport(botId, urand(240, 420));
-					return true;
-				}
-            }
+            uint32 randomTime =
+                urand(sPlayerbotAIConfig.minRandomBotReviveTime, sPlayerbotAIConfig.maxRandomBotReviveTime);
+            LOG_DEBUG("playerbots", "Mark bot {} as dead, will be revived in {}s.", bot->GetName().c_str(),
+                      randomTime);
+            SetEventValue(botId, "dead", 1, sPlayerbotAIConfig.maxRandomBotInWorldTime);
+            SetEventValue(botId, "revive", 1, randomTime);
+            return false;
         }
+
+        if (!GetEventValue(botId, "revive"))
+        {
+            Revive(bot);
+            return true;
+        }
+
+        return false;
     }
 
     // leave group if leader is rndbot
@@ -2278,6 +2281,27 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
         uint32 randomize = GetEventValue(botId, "randomize");
         if (!randomize)
         {
+            // bool randomiser = true;
+            // if (player->GetGuildId())
+            // {
+            //     if (Guild* guild = sGuildMgr->GetGuildById(player->GetGuildId()))
+            //     {
+            //         if (guild->GetLeaderGUID() == player->GetGUID())
+            //         {
+            //             for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
+            //                 sGuildTaskMgr->Update(*i, player);
+            //         }
+
+            //         uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(guild->GetLeaderGUID());
+            //         if (!sPlayerbotAIConfig.IsInRandomAccountList(accountId))
+            //         {
+            //             uint8 rank = player->GetRank();
+            //             randomiser = rank < 4 ? false : true;
+            //         }
+            //     }
+            // }
+            // if (randomiser)
+            // {
             Randomize(bot);
             LOG_DEBUG("playerbots", "Bot #{} {}:{} <{}>: randomized", botId,
                       bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName());
@@ -2286,6 +2310,14 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
             ScheduleRandomize(botId, randomTime);
             return true;
         }
+
+        // uint32 changeStrategy = GetEventValue(bot, "change_strategy");
+        // if (!changeStrategy)
+        // {
+        //     LOG_INFO("playerbots", "Changing strategy for bot  #{} <{}>", bot, player->GetName().c_str());
+        //     ChangeStrategy(player);
+        //     return true;
+        // }
 
         uint32 teleport = GetEventValue(botId, "teleport");
         if (!teleport)
@@ -3184,29 +3216,6 @@ void RandomPlayerbotMgr::RandomizeMin(Player* bot)
         pmo->finish();
 }
 
-void RandomPlayerbotMgr::RandomizeToLevel(Player* bot, uint32 level)
-{
-    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
-    if (!botAI)
-        return;
-
-    uint32 maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
-    if (level < 1) level = 1;
-    if (level > maxLevel) level = maxLevel;
-
-    SetValue(bot, "level", level);
-
-    PlayerbotFactory factory(bot, level);
-    factory.Randomize(false);
-
-    botAI->Reset(true);
-
-    if (bot->GetGroup())
-        botAI->LeaveOrDisbandGroup();
-
-    RandomTeleportForLevel(bot);
-}
-
 void RandomPlayerbotMgr::Clear(Player* bot)
 {
     PlayerbotFactory factory(bot, bot->GetLevel());
@@ -3891,90 +3900,10 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
         // simplicity. line marked for removal.
     }
     else
-	{
-		players.push_back(player);
-		LOG_DEBUG("playerbots", "Including non-random bot player {} into random bot update", player->GetName().c_str());
-
-		// ------------------------------------------------------------
-		// RTG: Starter-wave bots (1-9 bracket support)
-		// When a real new/low-level player logs in, recycle 10 Horde + 10 Alliance bots to level 1
-		// so the 1-9 world/BG experience stays alive.
-		// ------------------------------------------------------------
-		if (!player->IsGameMaster() && player->GetLevel() <= 9)
-		{
-			// Per-account cooldown (prevents spam on relog)
-			static std::unordered_map<uint32, time_t> s_lastStarterWaveByAccount;
-
-			uint32 accountId = player->GetSession() ? player->GetSession()->GetAccountId() : 0;
-			time_t now = time(nullptr);
-
-			// 10 minute cooldown per account (tune)
-			time_t& last = s_lastStarterWaveByAccount[accountId];
-			if (accountId && (last == 0 || now >= last + 600))
-			{
-				last = now;
-
-				uint32 wantPerFaction = 10; // 10 Horde + 10 Alliance = 20 total
-
-				auto recycleBots = [&](uint32 teamId, uint32 want)
-				{
-					uint32 done = 0;
-
-					for (auto const& kv : playerBots)
-					{
-						Player* bot = kv.second;
-						if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
-							continue;
-
-						if (bot->GetTeamId() != teamId)
-							continue;
-
-						// Only recycle bots that are safe to “reset”
-						if (!bot->IsAlive() || bot->IsInCombat() || bot->InBattleground() || bot->InBattlegroundQueue())
-							continue;
-
-						Group* g = bot->GetGroup();
-						if (g) // don’t rip bots out of groups
-							continue;
-
-						if (bot->HasUnitState(UNIT_STATE_IN_FLIGHT) || bot->IsBeingTeleported())
-							continue;
-
-						// Optional: prefer recycling high-level bots so 19 population stays "real"
-						// (tune threshold as you like)
-						if (bot->GetLevel() < 10)
-							continue;
-
-						// Cooldown so we don’t recycle the same bot constantly
-						uint32 botId = bot->GetGUID().GetCounter();
-						if (GetEventValue(botId, "rtg_starter_recycled"))
-							continue;
-
-						SetEventValue(botId, "rtg_starter_recycled", 1, 1800); // 30 min recycle lockout
-
-						LOG_INFO("playerbots", "RTG: Starter-wave: recycling bot {} ({}:{}) to level 1",
-							bot->GetName().c_str(),
-							(bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H"),
-							bot->GetLevel());
-
-						RandomizeToLevel(bot, 1);
-						done++;
-
-						if (done >= want)
-							break;
-					}
-
-					return done;
-				};
-
-				uint32 aDone = recycleBots(TEAM_ALLIANCE, wantPerFaction);
-				uint32 hDone = recycleBots(TEAM_HORDE, wantPerFaction);
-
-				LOG_INFO("playerbots", "RTG: Starter-wave triggered by {} (lvl {}): recycled A={} H={}",
-					player->GetName().c_str(), player->GetLevel(), aDone, hDone);
-			}
-		}
-	}
+    {
+        players.push_back(player);
+        LOG_DEBUG("playerbots", "Including non-random bot player {} into random bot update", player->GetName().c_str());
+    }
 }
 
 void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
