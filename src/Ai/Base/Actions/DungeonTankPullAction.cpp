@@ -68,7 +68,7 @@ Unit* DungeonTankPullAction::PickPullTarget() const
             continue;
 
         // Avoid targets that are already in messy combat clusters
-		if (u->GetAttackers().size() >= 5)
+		if (u->getAttackers().size() >= 5)
 			continue;
 
         return u;
