@@ -163,8 +163,6 @@ public:
     std::map<uint32, std::map<uint32, std::map<TeamId, uint32>>> VisualBots;
     std::map<uint32, std::map<uint32, std::map<uint32, uint32>>> Supporters;
     std::map<TeamId, std::vector<uint32>> LfgDungeons;
-    std::map<TeamId, uint32> LfgQueuePlayers;
-    std::map<TeamId, uint32> LfgQueueLevels;
     void CheckBgQueue();
     void CheckLfgQueue();
     void CheckPlayers();

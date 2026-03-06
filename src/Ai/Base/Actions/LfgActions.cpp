@@ -122,13 +122,6 @@ bool LfgJoinAction::JoinLFG()
     if (!dungeons.size())
         return false;
 
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        uint32 targetLevel = sRandomPlayerbotMgr.RTG_GetGlobalEvent(bot->GetTeamId() == TEAM_ALLIANCE ? "rtg_lfg_level_a" : "rtg_lfg_level_h");
-        if (targetLevel && bot->GetLevel() != targetLevel)
-            return false;
-    }
-
     for (std::vector<uint32>::iterator i = dungeons.begin(); i != dungeons.end(); ++i)
     {
         LFGDungeonEntry const* dungeon = sLFGDungeonStore.LookupEntry(*i);
