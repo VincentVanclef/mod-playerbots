@@ -38,6 +38,41 @@
 #include "GuildMgr.h"
 #include "GuildTaskMgr.h"
 #include "LFGMgr.h"
+
+namespace
+{
+    static bool RTG_HasPrefix(std::string const& value, std::string const& prefix)
+    {
+        return value.rfind(prefix, 0) == 0;
+    }
+
+    static std::string RTG_MakeLfgAddData(unsigned int team, unsigned int level)
+    {
+        return std::string("rtg_lfg:") + std::to_string(team) + ":" + std::to_string(level);
+    }
+
+    static bool RTG_ParseLfgAddData(std::string const& data, unsigned int& team, unsigned int& level)
+    {
+        if (!RTG_HasPrefix(data, "rtg_lfg:"))
+            return false;
+
+        std::string payload = data.substr(8);
+        size_t sep = payload.find(':');
+        if (sep == std::string::npos)
+            return false;
+
+        try
+        {
+            team = static_cast<unsigned int>(std::stoul(payload.substr(0, sep)));
+            level = static_cast<unsigned int>(std::stoul(payload.substr(sep + 1)));
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+}
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
 #include "NewRpgStrategy.h"
@@ -630,30 +665,31 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 	}
 
     // ------------------------------------------------------------------
-    // RTG: event-driven population target
-    // When enabled, keep randombots offline unless there is active demand
-    // from BG/LFG queues. World population target becomes 0 unless
-    // AiPlayerbot.RTG.EventDriven.KeepWorldBots = 1.
+    // RTG: queue-driven population target
+    // Keep generic world bots out of the way and only log in temporary
+    // LFG queue-fill bots after the grace window matures. Battleground
+    // queue fill is intentionally disabled in RTG mode until stabilized.
     // ------------------------------------------------------------------
+    bool rtgLfgDemand = false;
+    bool rtgLfgReady = false;
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 baseWorld = sPlayerbotAIConfig.rtgKeepWorldBots ? maxAllowedBotCount : 0u;
-
-        bool lfgDemand = (GetEventValue(0, "rtg_lfg_start") != 0);
-
-        // Only start logging in RTG queue bots AFTER the grace window expires.
-        time_t now = time(nullptr);
         uint32 lfgStart = GetEventValue(0, "rtg_lfg_start");
-        bool lfgReady = lfgDemand && now >= (time_t)(lfgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+        uint32 lfgNeed = GetEventValue(0, "rtg_lfg_need");
 
-        uint32 lfgNeeded = GetEventValue(0, "rtg_lfg_needed");
-        uint32 eventTarget = lfgReady ? std::min<uint32>(lfgNeeded, sPlayerbotAIConfig.rtgEventMaxBots) : 0u;
+        rtgLfgDemand = (lfgStart != 0) && (lfgNeed != 0);
+        time_t now = time(nullptr);
+        rtgLfgReady = rtgLfgDemand && now >= static_cast<time_t>(lfgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
 
+        uint32 eventTarget = rtgLfgReady ? std::min<uint32>(lfgNeed, sPlayerbotAIConfig.rtgEventMaxBots) : 0u;
         maxAllowedBotCount = baseWorld + eventTarget;
 
-        // If there is no LFG demand at all, force target to 0 so bots log out naturally.
-        if (!lfgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
+        if (!rtgLfgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
             maxAllowedBotCount = 0;
+
+        SetEventValue(0, "rtg_target", maxAllowedBotCount, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
+        SetEventValue(0, "rtg_bg_start", 0, 0);
     }
 
     GetBots();
@@ -788,13 +824,43 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     }
 
 
+    // If RTG queue demand has vanished, aggressively clear temporary queue-fill bots
+    // that are not actually inside a dungeon run. This keeps idle leftovers from
+    // hanging around and interacting with unrelated update paths.
+    if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand)
+    {
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = kv.first.GetCounter();
+            std::string addData = GetEventData(botId, "add");
+            if (!RTG_HasPrefix(addData, "rtg_lfg:"))
+                continue;
+
+            Map* map = bot->GetMap();
+            if (map && (map->IsDungeon() || map->IsRaid()))
+                continue;
+
+            if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                continue;
+
+            SetEventValue(botId, "add", 0, 0);
+            currentBots.remove(botId);
+            LogoutPlayerBot(bot->GetGUID());
+        }
+    }
+
+
 // ---------------------------------------------------------
 // Seed replacement: keep open-world population steady even when
 // bots are "away" in BG/Arena or dungeon/raid instances.
 // These extra bots are temporary: when away-bots return, the
 // normal shrink logic will bring totals back down.
 // ---------------------------------------------------------
-if (sPlayerbotAIConfig.enabled) // sanity
+if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
 {
     uint32 openWorldBotCount = 0;
     uint32 awayBotCount = 0;
@@ -935,7 +1001,7 @@ if (sPlayerbotAIConfig.enabled) // sanity
 
     if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
     {
-        if (time(nullptr) > (BgCheckTimer + 35))
+        if (!sPlayerbotAIConfig.rtgEventDriven && time(nullptr) > (BgCheckTimer + 35))
             sRandomPlayerbotMgr.CheckBgQueue();
     }
 
@@ -1367,144 +1433,8 @@ bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
 // Phase 4 is reached if and only if the value of RandomBotAccountCount is lower than it should.
 uint32 RandomPlayerbotMgr::AddRandomBots()
 {
-    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+    uint32 maxAllowedBotCount = sPlayerbotAIConfig.rtgEventDriven ? GetEventValue(0, "rtg_target") : GetMaxAllowedBotCount();
     static time_t missingBotsTimer = 0;
-
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        uint32 lfgStart = GetEventValue(0, "rtg_lfg_start");
-        bool lfgReady = lfgStart && time(nullptr) >= (time_t)(lfgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
-        uint32 targetTeamValue = GetEventValue(0, "rtg_lfg_team");
-        TeamId targetTeam = targetTeamValue == TEAM_HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
-        uint32 targetLevel = GetEventValue(0, "rtg_lfg_level");
-        uint32 targetNeeded = GetEventValue(0, "rtg_lfg_needed");
-
-        if (lfgReady && targetLevel > 0 && targetNeeded > 0)
-        {
-            auto isMatchingRace = [&](uint8 race) -> bool
-            {
-                return targetTeam == TEAM_ALLIANCE ? IsAlliance(race) : !IsAlliance(race);
-            };
-
-            auto isProtectedFromLogout = [&](Player* bot) -> bool
-            {
-                if (!bot || !bot->IsInWorld())
-                    return true;
-
-                if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
-                    return true;
-
-                Map* map = bot->GetMap();
-                if (map && (map->IsDungeon() || map->IsRaid() || map->IsBattlegroundOrArena()))
-                    return true;
-
-                if (bot->GetGroup() || bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-                    return true;
-
-                return false;
-            };
-
-            uint32 matchingOnline = 0;
-            for (auto const& kv : playerBots)
-            {
-                Player* bot = kv.second;
-                if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
-                    continue;
-
-                if (bot->GetTeamId() == targetTeam && bot->GetLevel() == targetLevel)
-                {
-                    ++matchingOnline;
-                    continue;
-                }
-
-                if (!sPlayerbotAIConfig.rtgKeepWorldBots && !isProtectedFromLogout(bot))
-                {
-                    uint32 botId = bot->GetGUID().GetCounter();
-                    SetEventValue(botId, "add", 0, 0);
-                    currentBots.remove(botId);
-                    LogoutPlayerBot(bot->GetGUID());
-                }
-            }
-
-            uint32 shortage = targetNeeded > matchingOnline ? (targetNeeded - matchingOnline) : 0u;
-            shortage = std::min<uint32>(shortage, sPlayerbotAIConfig.randomBotsPerInterval);
-
-            if (shortage > 0)
-            {
-                struct CharacterInfo
-                {
-                    uint32 guid;
-                    uint8 rClass;
-                    uint8 rRace;
-                    uint8 level;
-                    uint32 accountId;
-                };
-
-                std::vector<CharacterInfo> candidates;
-                std::vector<uint32> accountsToUse = rndBotTypeAccounts;
-                std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
-                std::shuffle(accountsToUse.begin(), accountsToUse.end(), rng);
-
-                for (uint32 accountId : accountsToUse)
-                {
-                    QueryResult result = CharacterDatabase.Query(
-                        "SELECT guid, class, race, level FROM characters WHERE account = {} ORDER BY guid", accountId);
-                    if (!result)
-                        continue;
-
-                    do
-                    {
-                        Field* fields = result->Fetch();
-                        CharacterInfo info;
-                        info.guid = fields[0].Get<uint32>();
-                        info.rClass = fields[1].Get<uint8>();
-                        info.rRace = fields[2].Get<uint8>();
-                        info.level = fields[3].Get<uint8>();
-                        info.accountId = accountId;
-
-                        if (!isMatchingRace(info.rRace) || info.level != targetLevel)
-                            continue;
-
-                        candidates.push_back(info);
-                    } while (result->NextRow());
-                }
-
-                std::shuffle(candidates.begin(), candidates.end(), rng);
-
-                auto tryLoginBot = [&](const CharacterInfo& charInfo) -> bool
-                {
-                    if (GetEventValue(charInfo.guid, "add") ||
-                        GetEventValue(charInfo.guid, "logout") ||
-                        GetPlayerBot(charInfo.guid) ||
-                        std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
-                        (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT))
-                    {
-                        return false;
-                    }
-
-                    uint32 addTime = sPlayerbotAIConfig.enablePeriodicOnlineOffline
-                        ? urand(sPlayerbotAIConfig.minRandomBotInWorldTime, sPlayerbotAIConfig.maxRandomBotInWorldTime)
-                        : sPlayerbotAIConfig.permanentlyInWorldTime;
-
-                    SetEventValue(charInfo.guid, "add", 1, addTime);
-                    SetEventValue(charInfo.guid, "logout", 0, 0);
-                    currentBots.push_back(charInfo.guid);
-                    return true;
-                };
-
-                for (auto const& candidate : candidates)
-                {
-                    if (!shortage)
-                        break;
-
-                    if (tryLoginBot(candidate))
-                        --shortage;
-                }
-            }
-
-            return currentBots.size();
-        }
-    }
 
     if (currentBots.size() < maxAllowedBotCount)
     {
@@ -1599,7 +1529,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         }
 
         // Lambda to handle bot login logic
-        auto tryLoginBot = [&](const CharacterInfo& charInfo) -> bool
+        auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& addData = "") -> bool
         {
             if (GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "logout") ||
@@ -1615,12 +1545,59 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                         sPlayerbotAIConfig.maxRandomBotInWorldTime)
                                 : sPlayerbotAIConfig.permanentlyInWorldTime;
 
-            SetEventValue(charInfo.guid, "add", 1, add_time);
+            SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
             currentBots.push_back(charInfo.guid);
 
             return true;
         };
+
+        if (sPlayerbotAIConfig.rtgEventDriven)
+        {
+            uint32 targetTeam = GetEventValue(0, "rtg_lfg_team");
+            uint32 targetLevel = GetEventValue(0, "rtg_lfg_level");
+            std::string addData = RTG_MakeLfgAddData(targetTeam, targetLevel);
+
+            std::vector<CharacterInfo> matchingTeam;
+            for (auto const& charInfo : allCharacters)
+            {
+                bool isAlliance = IsAlliance(charInfo.rRace);
+                uint32 charTeam = isAlliance ? TEAM_ALLIANCE : TEAM_HORDE;
+                if (charTeam == targetTeam)
+                    matchingTeam.push_back(charInfo);
+            }
+
+            for (auto const& charInfo : matchingTeam)
+            {
+                if (!maxAllowedBotCount)
+                    break;
+
+                if (tryLoginBot(charInfo, addData))
+                    --maxAllowedBotCount;
+            }
+
+            if (maxAllowedBotCount)
+            {
+                if (missingBotsTimer == 0)
+                    missingBotsTimer = time(nullptr);
+
+                if (time(nullptr) - missingBotsTimer >= 10)
+                {
+                    int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
+                    uint32 moreAccountsNeeded = (maxAllowedBotCount + divisor - 1) / divisor;
+                    LOG_ERROR("playerbots",
+                              "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
+                              "{} more accounts needed.", moreAccountsNeeded);
+                    missingBotsTimer = 0;
+                }
+            }
+            else
+            {
+                missingBotsTimer = 0;
+            }
+
+            return currentBots.size();
+        }
 
         // PHASE 1: Log-in Alliance bots up to allowedAllianceCount
         for (auto const& charInfo : allianceChars)
@@ -2117,9 +2094,21 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                      bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount, bgInfo.bgInstanceCount, bgInfo.activeBgQueue);
         }
     }
-    // RTG: BG event-driven fill is intentionally disabled in this cleanup build.
+    // RTG: Event-driven start marker for BG queueing (grace window begins when first real player queues)
     if (sPlayerbotAIConfig.rtgEventDriven)
-        SetEventValue(0, "rtg_bg_start", 0, 0);
+    {
+        if (GetEventValue(0, "rtg_bg_any_real_queued"))
+        {
+            uint32 existing = GetEventValue(0, "rtg_bg_start");
+            uint32 now = (uint32)time(nullptr);
+            uint32 start = existing ? existing : now;
+            SetEventValue(0, "rtg_bg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        }
+        else
+        {
+            SetEventValue(0, "rtg_bg_start", 0, 0);
+        }
+    }
 
     LOG_DEBUG("playerbots", "BG Queue check finished");
 }
@@ -2132,17 +2121,15 @@ void RandomPlayerbotMgr::CheckLfgQueue()
     LOG_DEBUG("playerbots", "Checking LFG Queue...");
 
     bool anyRealLfgQueued = false;
-    TeamId rtgTargetTeam = TEAM_NEUTRAL;
-    uint32 rtgTargetLevel = 0;
-    uint32 rtgRealQueuedCount = 0;
+    uint32 targetTeam = TEAM_ALLIANCE;
+    uint32 targetLevel = 0;
+    uint32 queuedRealCount = 0;
 
-    // Clear LFG list
     LfgDungeons[TEAM_ALLIANCE].clear();
     LfgDungeons[TEAM_HORDE].clear();
 
-    for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
+    for (Player* player : players)
     {
-        Player* player = *i;
         if (!player || !player->IsInWorld())
             continue;
 
@@ -2150,55 +2137,57 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         ObjectGuid guid = group ? group->GetGUID() : player->GetGUID();
 
         lfg::LfgState gState = sLFGMgr->GetState(guid);
-        if (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON)
+        if (gState == lfg::LFG_STATE_NONE || gState >= lfg::LFG_STATE_DUNGEON)
+            continue;
+
+        anyRealLfgQueued = true;
+
+        if (!targetLevel)
         {
-            anyRealLfgQueued = true;
+            targetTeam = player->GetTeamId();
+            targetLevel = player->GetLevel();
+        }
 
-            if (rtgTargetLevel == 0)
-            {
-                rtgTargetTeam = player->GetTeamId();
-                rtgTargetLevel = player->GetLevel();
-            }
+        if (player->GetTeamId() == targetTeam && player->GetLevel() == targetLevel)
+            ++queuedRealCount;
 
-            if (player->GetTeamId() == rtgTargetTeam && player->GetLevel() == rtgTargetLevel)
-                ++rtgRealQueuedCount;
+        if (player->GetTeamId() != targetTeam)
+            continue;
 
-            lfg::LfgDungeonSet const& dList = sLFGMgr->GetSelectedDungeons(player->GetGUID());
-            for (lfg::LfgDungeonSet::const_iterator itr = dList.begin(); itr != dList.end(); ++itr)
-            {
-                lfg::LFGDungeonData const* dungeon = sLFGMgr->GetLFGDungeon(*itr);
-                if (!dungeon)
-                    continue;
+        lfg::LfgDungeonSet const& dList = sLFGMgr->GetSelectedDungeons(player->GetGUID());
+        for (lfg::LfgDungeonSet::const_iterator itr = dList.begin(); itr != dList.end(); ++itr)
+        {
+            lfg::LFGDungeonData const* dungeon = sLFGMgr->GetLFGDungeon(*itr);
+            if (!dungeon)
+                continue;
 
-                LfgDungeons[player->GetTeamId()].push_back(dungeon->id);
-            }
+            LfgDungeons[player->GetTeamId()].push_back(dungeon->id);
         }
     }
 
-    // RTG: Event-driven start marker for LFG queueing
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        if (anyRealLfgQueued)
+        if (anyRealLfgQueued && targetLevel)
         {
             uint32 existing = GetEventValue(0, "rtg_lfg_start");
-            uint32 now = (uint32)time(nullptr);
-            uint32 start = existing ? existing : now;
-            uint32 needed = 0;
-            if (rtgTargetLevel > 0 && rtgRealQueuedCount < 5)
-                needed = 5 - rtgRealQueuedCount;
-            needed = std::min<uint32>(needed, sPlayerbotAIConfig.rtgEventMaxBots);
+            uint32 now = static_cast<uint32>(time(nullptr));
+            uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
+            uint32 startTs = existing ? existing : now;
+            uint32 need = queuedRealCount >= 5 ? 0u : (5u - queuedRealCount);
 
-            SetEventValue(0, "rtg_lfg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
-            SetEventValue(0, "rtg_lfg_team", static_cast<uint32>(rtgTargetTeam), sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
-            SetEventValue(0, "rtg_lfg_level", rtgTargetLevel, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
-            SetEventValue(0, "rtg_lfg_needed", needed, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+            SetEventValue(0, "rtg_lfg_start", startTs, ttl);
+            SetEventValue(0, "rtg_lfg_team", targetTeam, ttl);
+            SetEventValue(0, "rtg_lfg_level", targetLevel, ttl);
+            SetEventValue(0, "rtg_lfg_need", std::min<uint32>(need, sPlayerbotAIConfig.rtgEventMaxBots), ttl,
+                          RTG_MakeLfgAddData(targetTeam, targetLevel));
         }
         else
         {
             SetEventValue(0, "rtg_lfg_start", 0, 0);
             SetEventValue(0, "rtg_lfg_team", 0, 0);
             SetEventValue(0, "rtg_lfg_level", 0, 0);
-            SetEventValue(0, "rtg_lfg_needed", 0, 0);
+            SetEventValue(0, "rtg_lfg_need", 0, 0);
+            SetEventValue(0, "rtg_target", 0, 0);
         }
     }
 
@@ -3524,22 +3513,32 @@ uint32 RandomPlayerbotMgr::GetTuningOrDefault(std::string const& key, uint32 def
 
 void RandomPlayerbotMgr::GetBots()
 {
-    uint32 target = GetMaxAllowedBotCount();
+    uint32 target = sPlayerbotAIConfig.rtgEventDriven ? GetEventValue(0, "rtg_target") : GetMaxAllowedBotCount();
 
-    // Prune stale entries (no "add" event anymore)
     for (auto it = currentBots.begin(); it != currentBots.end();)
     {
         if (!GetEventValue(*it, "add"))
+        {
             it = currentBots.erase(it);
-        else
-            ++it;
+            continue;
+        }
+
+        if (sPlayerbotAIConfig.rtgEventDriven)
+        {
+            std::string addData = GetEventData(*it, "add");
+            if (!RTG_HasPrefix(addData, "rtg_lfg:"))
+            {
+                it = currentBots.erase(it);
+                continue;
+            }
+        }
+
+        ++it;
     }
 
-    // If we already have enough candidates, stop
     if (currentBots.size() >= target)
         return;
 
-    // Fill up to target
     PlayerbotsDatabasePreparedStatement* stmt =
         PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_SEL_RANDOM_BOTS_BY_OWNER_AND_EVENT);
     stmt->SetData(0, 0);
@@ -3556,6 +3555,13 @@ void RandomPlayerbotMgr::GetBots()
 
             if (!GetEventValue(bot, "add"))
                 continue;
+
+            if (sPlayerbotAIConfig.rtgEventDriven)
+            {
+                std::string addData = GetEventData(bot, "add");
+                if (!RTG_HasPrefix(addData, "rtg_lfg:"))
+                    continue;
+            }
 
             if (already.insert(bot).second)
                 currentBots.push_back(bot);
@@ -3951,6 +3957,30 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         }
     }
 
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 desiredTeam = 0;
+        uint32 desiredLevel = 0;
+        if (RTG_ParseLfgAddData(GetEventData(bot->GetGUID().GetCounter(), "add"), desiredTeam, desiredLevel))
+        {
+            uint32 botTeam = bot->GetTeamId();
+            if (desiredTeam && botTeam != desiredTeam)
+            {
+                SetEventValue(bot->GetGUID().GetCounter(), "add", 0, 0);
+                currentBots.remove(bot->GetGUID().GetCounter());
+                LogoutPlayerBot(bot->GetGUID());
+                return;
+            }
+
+            if (desiredLevel && bot->GetLevel() != desiredLevel)
+            {
+                bot->GiveLevel(desiredLevel);
+                bot->InitStatsForLevel(true);
+                bot->SetUInt32Value(PLAYER_XP, 0);
+            }
+        }
+    }
+
     if (sPlayerbotAIConfig.randomBotFixedLevel)
     {
         bot->SetPlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
@@ -3960,6 +3990,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         bot->RemovePlayerFlag(PLAYER_FLAGS_NO_XP_GAIN);
     }
 }
+
 
 void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
 {

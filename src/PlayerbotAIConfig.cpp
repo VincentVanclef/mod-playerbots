@@ -185,13 +185,12 @@ bool PlayerbotAIConfig::Initialize()
     minRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MinRandomBots", 500);
     maxRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBots", 500);
 
-    // RTG: event-driven queue fill
+    // RTG: queue-driven bot population
     rtgEventDriven = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Enable", false);
     rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 180);
-    rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 8);
+    rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 60);
     rtgKeepWorldBots = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.KeepWorldBots", false);
 
-    // RTG: optional low-bracket caps
     rtgLowBracketCapsEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.LowBracketCaps.Enable", false);
     rtgLowBracketBotCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.Cap", 40);
     rtgLowBotsPerNewPlayer = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.PerNewPlayer", 20);
