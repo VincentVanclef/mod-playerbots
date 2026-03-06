@@ -133,6 +133,85 @@ void activateCheckLfgQueueThread()
     t.detach();
 }
 
+namespace
+{
+uint32 RTG_GetTeamQueueLevel(TeamId team)
+{
+    return sRandomPlayerbotMgr.RTG_GetGlobalEvent(team == TEAM_ALLIANCE ? "rtg_lfg_level_a" : "rtg_lfg_level_h");
+}
+
+uint32 RTG_GetTeamQueuePlayers(TeamId team)
+{
+    return sRandomPlayerbotMgr.RTG_GetGlobalEvent(team == TEAM_ALLIANCE ? "rtg_lfg_players_a" : "rtg_lfg_players_h");
+}
+
+bool RTG_IsQueueFillBot(uint32 botId)
+{
+    return sRandomPlayerbotMgr.RTG_GetEventValue(botId, "rtg_queue_fill") != 0;
+}
+
+bool RTG_IsEligibleLfgQueueFillBot(Player* bot)
+{
+    if (!bot || !bot->IsInWorld() || !sRandomPlayerbotMgr.IsRandomBot(bot))
+        return false;
+
+    if (!RTG_IsQueueFillBot(bot->GetGUID().GetCounter()))
+        return false;
+
+    uint32 targetLevel = RTG_GetTeamQueueLevel(bot->GetTeamId());
+    if (!targetLevel)
+        return false;
+
+    return bot->GetLevel() == targetLevel;
+}
+
+uint32 RTG_CountOnlineEligibleLfgQueueFillBots()
+{
+    uint32 count = 0;
+    for (auto const& kv : sRandomPlayerbotMgr.GetPlayerBots())
+    {
+        if (RTG_IsEligibleLfgQueueFillBot(kv.second))
+            ++count;
+    }
+    return count;
+}
+
+uint32 RTG_CountPendingLfgQueueFillBots(std::list<uint32> const& currentBots)
+{
+    uint32 count = 0;
+    for (uint32 botId : currentBots)
+    {
+        if (!RTG_IsQueueFillBot(botId))
+            continue;
+
+        Player* bot = sRandomPlayerbotMgr.GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId));
+        if (bot)
+        {
+            if (RTG_IsEligibleLfgQueueFillBot(bot))
+                ++count;
+            continue;
+        }
+
+        uint32 teamValue = sRandomPlayerbotMgr.RTG_GetEventValue(botId, "rtg_queue_team");
+        TeamId team = teamValue == TEAM_HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
+        uint32 targetLevel = RTG_GetTeamQueueLevel(team);
+        uint32 assignedLevel = sRandomPlayerbotMgr.RTG_GetEventValue(botId, "rtg_queue_level");
+        if (targetLevel && assignedLevel == targetLevel)
+            ++count;
+    }
+    return count;
+}
+
+uint32 RTG_GetNeededBotsForPlayers(uint32 players)
+{
+    if (!players)
+        return 0;
+
+    uint32 groups = (players + 4u) / 5u;
+    return groups * 5u - players;
+}
+}
+
 void CheckPlayersThread() { sRandomPlayerbotMgr.CheckPlayers(); }
 
 void activateCheckPlayersThread()
@@ -321,6 +400,32 @@ void RandomPlayerbotMgr::ForceBotCountRecheck()
 
 uint32 RandomPlayerbotMgr::GetMaxAllowedBotCount()
 {
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 target = 0;
+
+        if (sPlayerbotAIConfig.rtgKeepWorldBots)
+        {
+            sPlayerbotAIConfig.rtgEventDriven = false;
+            target = GetMaxAllowedBotCount();
+            sPlayerbotAIConfig.rtgEventDriven = true;
+        }
+
+        uint32 start = GetEventValue(0, "rtg_lfg_start");
+        time_t now = time(nullptr);
+        if (start && now >= static_cast<time_t>(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+        {
+            uint32 alliancePlayers = RTG_GetTeamQueuePlayers(TEAM_ALLIANCE);
+            uint32 hordePlayers = RTG_GetTeamQueuePlayers(TEAM_HORDE);
+            uint32 needed = RTG_GetNeededBotsForPlayers(alliancePlayers) + RTG_GetNeededBotsForPlayers(hordePlayers);
+            if (needed > sPlayerbotAIConfig.rtgEventMaxBots)
+                needed = sPlayerbotAIConfig.rtgEventMaxBots;
+            target += needed;
+        }
+
+        return target;
+    }
+
     // ---------------------------------------------------------
     // 1) Ratio-driven target (DB-driven ratio value)
     // ---------------------------------------------------------
@@ -746,6 +851,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     std::list<uint32> availableBots = currentBots;
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
+
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        availableBotCount = RTG_CountPendingLfgQueueFillBots(currentBots);
+        onlineBotCount = RTG_CountOnlineEligibleLfgQueueFillBots();
+    }
 
     // ------------------------------------------------------------------
     // RTG: event-driven shrink
@@ -1372,6 +1483,111 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
     uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
     static time_t missingBotsTimer = 0;
 
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 currentEligible = RTG_CountPendingLfgQueueFillBots(currentBots);
+        if (currentEligible >= maxAllowedBotCount)
+            return 0;
+
+        uint32 toAdd = std::min<uint32>(sPlayerbotAIConfig.randomBotsPerInterval, maxAllowedBotCount - currentEligible);
+        if (!toAdd)
+            return 0;
+
+        std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
+        std::vector<uint32> accountsToUse = rndBotTypeAccounts;
+
+        struct CharacterInfo { uint32 guid; uint8 rClass; uint8 rRace; uint32 accountId; };
+        std::vector<CharacterInfo> allCharacters;
+        for (uint32 accountId : accountsToUse)
+        {
+            CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
+            stmt->SetData(0, accountId);
+            PreparedQueryResult result = CharacterDatabase.Query(stmt);
+            if (!result)
+                continue;
+            do
+            {
+                Field* fields = result->Fetch();
+                CharacterInfo info;
+                info.guid = fields[0].Get<uint32>();
+                info.rClass = fields[1].Get<uint8>();
+                info.rRace = fields[2].Get<uint8>();
+                info.accountId = accountId;
+                allCharacters.push_back(info);
+            } while (result->NextRow());
+        }
+        std::shuffle(allCharacters.begin(), allCharacters.end(), rng);
+
+        uint32 allianceNeeded = RTG_GetNeededBotsForPlayers(RTG_GetTeamQueuePlayers(TEAM_ALLIANCE));
+        uint32 hordeNeeded = RTG_GetNeededBotsForPlayers(RTG_GetTeamQueuePlayers(TEAM_HORDE));
+        uint32 allianceOnline = 0;
+        uint32 hordeOnline = 0;
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!RTG_IsEligibleLfgQueueFillBot(bot))
+                continue;
+            if (bot->GetTeamId() == TEAM_ALLIANCE) ++allianceOnline; else ++hordeOnline;
+        }
+        uint32 alliancePending = 0;
+        uint32 hordePending = 0;
+        for (uint32 botId : currentBots)
+        {
+            if (!RTG_IsQueueFillBot(botId))
+                continue;
+            Player* bot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId));
+            if (bot)
+                continue;
+            TeamId team = RTG_GetEventValue(botId, "rtg_queue_team") == TEAM_HORDE ? TEAM_HORDE : TEAM_ALLIANCE;
+            uint32 assignedLevel = RTG_GetEventValue(botId, "rtg_queue_level");
+            uint32 targetLevel = RTG_GetTeamQueueLevel(team);
+            if (targetLevel && assignedLevel == targetLevel)
+            {
+                if (team == TEAM_ALLIANCE) ++alliancePending; else ++hordePending;
+            }
+        }
+        allianceNeeded = (allianceNeeded > (allianceOnline + alliancePending)) ? (allianceNeeded - (allianceOnline + alliancePending)) : 0;
+        hordeNeeded = (hordeNeeded > (hordeOnline + hordePending)) ? (hordeNeeded - (hordeOnline + hordePending)) : 0;
+
+        auto tryLoginBot = [&](const CharacterInfo& charInfo, TeamId requiredTeam) -> bool
+        {
+            if (GetEventValue(charInfo.guid, "add") || GetEventValue(charInfo.guid, "logout") || GetPlayerBot(charInfo.guid) ||
+                std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
+                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT))
+                return false;
+
+            TeamId charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
+            if (charTeam != requiredTeam)
+                return false;
+
+            uint32 add_time = sPlayerbotAIConfig.permanentlyInWorldTime;
+            SetEventValue(charInfo.guid, "add", 1, add_time);
+            SetEventValue(charInfo.guid, "logout", 0, 0);
+            SetEventValue(charInfo.guid, "rtg_queue_fill", 1, add_time);
+            SetEventValue(charInfo.guid, "rtg_queue_team", requiredTeam, add_time);
+            SetEventValue(charInfo.guid, "rtg_queue_level", RTG_GetTeamQueueLevel(requiredTeam), add_time);
+            currentBots.push_back(charInfo.guid);
+            return true;
+        };
+
+        uint32 added = 0;
+        for (auto const& charInfo : allCharacters)
+        {
+            if (added >= toAdd)
+                break;
+            if (allianceNeeded && tryLoginBot(charInfo, TEAM_ALLIANCE))
+            {
+                --allianceNeeded; ++added; continue;
+            }
+            if (hordeNeeded && tryLoginBot(charInfo, TEAM_HORDE))
+            {
+                --hordeNeeded; ++added; continue;
+            }
+        }
+
+        return added;
+    }
+
     if (currentBots.size() < maxAllowedBotCount)
     {
         // Calculate how many bots to add
@@ -1623,6 +1839,13 @@ std::vector<uint32> parseBrackets(const std::string& str)
 
 void RandomPlayerbotMgr::CheckBgQueue()
 {
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        SetEventValue(0, "rtg_bg_start", 0, 0);
+        LOG_DEBUG("playerbots", "RTG event-driven mode: BG queue fill disabled for stability");
+        return;
+    }
+
     if (!BgCheckTimer)
     {
         BgCheckTimer = time(nullptr);
@@ -1983,22 +2206,6 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                      bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount, bgInfo.bgInstanceCount, bgInfo.activeBgQueue);
         }
     }
-    // RTG: Event-driven start marker for BG queueing (grace window begins when first real player queues)
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        if (GetEventValue(0, "rtg_bg_any_real_queued"))
-        {
-            uint32 existing = GetEventValue(0, "rtg_bg_start");
-            uint32 now = (uint32)time(nullptr);
-            uint32 start = existing ? existing : now;
-            SetEventValue(0, "rtg_bg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
-        }
-        else
-        {
-            SetEventValue(0, "rtg_bg_start", 0, 0);
-        }
-    }
-
     LOG_DEBUG("playerbots", "BG Queue check finished");
 }
 
@@ -2014,6 +2221,10 @@ void RandomPlayerbotMgr::CheckLfgQueue()
     // Clear LFG list
     LfgDungeons[TEAM_ALLIANCE].clear();
     LfgDungeons[TEAM_HORDE].clear();
+    LfgQueuePlayers[TEAM_ALLIANCE] = 0;
+    LfgQueuePlayers[TEAM_HORDE] = 0;
+    LfgQueueLevels[TEAM_ALLIANCE] = 0;
+    LfgQueueLevels[TEAM_HORDE] = 0;
 
     for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
     {
@@ -2028,6 +2239,11 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON)
         {
             anyRealLfgQueued = true;
+            ++LfgQueuePlayers[player->GetTeamId()];
+            uint32 playerLevel = player->GetLevel();
+            uint32& teamLevel = LfgQueueLevels[player->GetTeamId()];
+            if (!teamLevel || playerLevel == 19 || playerLevel > teamLevel)
+                teamLevel = playerLevel;
 
             lfg::LfgDungeonSet const& dList = sLFGMgr->GetSelectedDungeons(player->GetGUID());
             for (lfg::LfgDungeonSet::const_iterator itr = dList.begin(); itr != dList.end(); ++itr)
@@ -2044,6 +2260,11 @@ void RandomPlayerbotMgr::CheckLfgQueue()
     // RTG: Event-driven start marker for LFG queueing
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
+        SetEventValue(0, "rtg_lfg_players_a", LfgQueuePlayers[TEAM_ALLIANCE], sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        SetEventValue(0, "rtg_lfg_players_h", LfgQueuePlayers[TEAM_HORDE], sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        SetEventValue(0, "rtg_lfg_level_a", LfgQueueLevels[TEAM_ALLIANCE], sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        SetEventValue(0, "rtg_lfg_level_h", LfgQueueLevels[TEAM_HORDE], sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+
         if (anyRealLfgQueued)
         {
             uint32 existing = GetEventValue(0, "rtg_lfg_start");
@@ -2054,6 +2275,10 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         else
         {
             SetEventValue(0, "rtg_lfg_start", 0, 0);
+            SetEventValue(0, "rtg_lfg_players_a", 0, 0);
+            SetEventValue(0, "rtg_lfg_players_h", 0, 0);
+            SetEventValue(0, "rtg_lfg_level_a", 0, 0);
+            SetEventValue(0, "rtg_lfg_level_h", 0, 0);
         }
     }
 
@@ -2162,6 +2387,18 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
 
     if (!player->IsInWorld())
         return false;
+
+    if (sPlayerbotAIConfig.rtgEventDriven && RTG_IsQueueFillBot(bot))
+    {
+        uint32 targetLevel = GetEventValue(bot, "rtg_queue_level");
+        if (targetLevel && player->GetLevel() != targetLevel)
+        {
+            PlayerbotFactory factory(player, targetLevel);
+            SetValue(player, "level", targetLevel);
+            factory.Randomize(false);
+            LOG_INFO("playerbots", "RTG queue bot #{} forced to level {}", bot, targetLevel);
+        }
+    }
 
     if (player->GetGroup() || player->HasUnitState(UNIT_STATE_IN_FLIGHT))
         return false;
