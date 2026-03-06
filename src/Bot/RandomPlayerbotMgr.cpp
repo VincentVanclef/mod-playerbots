@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <chrono>
 #include <sstream>
+#include <map>
 
 #include "AccountMgr.h"
 #include "AiFactory.h"
@@ -676,7 +677,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     {
         uint32 baseWorld = sPlayerbotAIConfig.rtgKeepWorldBots ? maxAllowedBotCount : 0u;
         uint32 lfgStart = GetEventValue(0, "rtg_lfg_start");
-        uint32 lfgNeed = GetEventValue(0, "rtg_lfg_need");
+        uint32 lfgNeed = GetEventValue(0, "rtg_lfg_need_total");
 
         rtgLfgDemand = (lfgStart != 0) && (lfgNeed != 0);
         time_t now = time(nullptr);
@@ -1554,29 +1555,101 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
-            uint32 targetTeam = GetEventValue(0, "rtg_lfg_team");
-            uint32 targetLevel = GetEventValue(0, "rtg_lfg_level");
-            std::string addData = RTG_MakeLfgAddData(targetTeam, targetLevel);
-
-            std::vector<CharacterInfo> matchingTeam;
-            for (auto const& charInfo : allCharacters)
+            struct RtgBucket
             {
-                bool isAlliance = IsAlliance(charInfo.rRace);
-                uint32 charTeam = isAlliance ? TEAM_ALLIANCE : TEAM_HORDE;
-                if (charTeam == targetTeam)
-                    matchingTeam.push_back(charInfo);
+                uint32 team = 0;
+                uint32 level = 0;
+                uint32 realQueued = 0;
+                uint32 existingQueuedBots = 0;
+                uint32 need = 0;
+            };
+
+            std::map<std::pair<uint32, uint32>, RtgBucket> buckets;
+
+            for (Player* player : players)
+            {
+                if (!player || !player->IsInWorld())
+                    continue;
+
+                Group* group = player->GetGroup();
+                ObjectGuid guid = group ? group->GetGUID() : player->GetGUID();
+                lfg::LfgState gState = sLFGMgr->GetState(guid);
+                if (gState == lfg::LFG_STATE_NONE || gState >= lfg::LFG_STATE_DUNGEON)
+                    continue;
+
+                auto key = std::make_pair(static_cast<uint32>(player->GetTeamId()), static_cast<uint32>(player->GetLevel()));
+                RtgBucket& bucket = buckets[key];
+                bucket.team = key.first;
+                bucket.level = key.second;
+                ++bucket.realQueued;
             }
 
-            for (auto const& charInfo : matchingTeam)
+            for (uint32 botId : currentBots)
             {
-                if (!maxAllowedBotCount)
+                if (!GetEventValue(botId, "add"))
+                    continue;
+
+                uint32 dataTeam = 0;
+                uint32 dataLevel = 0;
+                if (!RTG_ParseLfgAddData(GetEventData(botId, "add"), dataTeam, dataLevel))
+                    continue;
+
+                auto it = buckets.find(std::make_pair(dataTeam, dataLevel));
+                if (it != buckets.end())
+                    ++it->second.existingQueuedBots;
+            }
+
+            std::vector<RtgBucket> orderedBuckets;
+            orderedBuckets.reserve(buckets.size());
+            uint32 remainingCapacity = maxAllowedBotCount;
+            for (auto& kv : buckets)
+            {
+                RtgBucket& bucket = kv.second;
+                uint32 targetPlayers = ((bucket.realQueued + 4u) / 5u) * 5u;
+                uint32 shortage = targetPlayers > bucket.realQueued ? (targetPlayers - bucket.realQueued) : 0u;
+                bucket.need = shortage > bucket.existingQueuedBots ? (shortage - bucket.existingQueuedBots) : 0u;
+                if (bucket.need)
+                    orderedBuckets.push_back(bucket);
+            }
+
+            std::sort(orderedBuckets.begin(), orderedBuckets.end(), [](RtgBucket const& a, RtgBucket const& b)
+            {
+                if (a.need != b.need)
+                    return a.need > b.need;
+                if (a.realQueued != b.realQueued)
+                    return a.realQueued > b.realQueued;
+                if (a.team != b.team)
+                    return a.team < b.team;
+                return a.level > b.level;
+            });
+
+            for (RtgBucket const& bucket : orderedBuckets)
+            {
+                if (!remainingCapacity)
                     break;
 
-                if (tryLoginBot(charInfo, addData))
-                    --maxAllowedBotCount;
+                uint32 remainingNeed = bucket.need;
+                std::string addData = RTG_MakeLfgAddData(bucket.team, bucket.level);
+
+                for (auto const& charInfo : allCharacters)
+                {
+                    if (!remainingCapacity || !remainingNeed)
+                        break;
+
+                    bool isAlliance = IsAlliance(charInfo.rRace);
+                    uint32 charTeam = isAlliance ? TEAM_ALLIANCE : TEAM_HORDE;
+                    if (charTeam != bucket.team)
+                        continue;
+
+                    if (tryLoginBot(charInfo, addData))
+                    {
+                        --remainingCapacity;
+                        --remainingNeed;
+                    }
+                }
             }
 
-            if (maxAllowedBotCount)
+            if (remainingCapacity)
             {
                 if (missingBotsTimer == 0)
                     missingBotsTimer = time(nullptr);
@@ -1584,7 +1657,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (time(nullptr) - missingBotsTimer >= 10)
                 {
                     int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-                    uint32 moreAccountsNeeded = (maxAllowedBotCount + divisor - 1) / divisor;
+                    uint32 moreAccountsNeeded = (remainingCapacity + divisor - 1) / divisor;
                     LOG_ERROR("playerbots",
                               "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
                               "{} more accounts needed.", moreAccountsNeeded);
@@ -2167,19 +2240,57 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        if (anyRealLfgQueued && targetLevel)
+        std::map<std::pair<uint32, uint32>, uint32> queuedByBucket;
+        for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
+        {
+            Player* player = *i;
+            if (!player || !player->IsInWorld())
+                continue;
+
+            Group* group = player->GetGroup();
+            ObjectGuid guid = group ? group->GetGUID() : player->GetGUID();
+            lfg::LfgState gState = sLFGMgr->GetState(guid);
+            if (gState == lfg::LFG_STATE_NONE || gState >= lfg::LFG_STATE_DUNGEON)
+                continue;
+
+            queuedByBucket[std::make_pair(static_cast<uint32>(player->GetTeamId()), static_cast<uint32>(player->GetLevel()))]++;
+        }
+
+        uint32 totalNeed = 0;
+        uint32 selectedTeam = 0;
+        uint32 selectedLevel = 0;
+        uint32 selectedQueued = 0;
+        uint32 selectedNeed = 0;
+
+        for (auto const& kv : queuedByBucket)
+        {
+            uint32 realQueued = kv.second;
+            uint32 targetPlayers = ((realQueued + 4u) / 5u) * 5u;
+            uint32 need = targetPlayers > realQueued ? (targetPlayers - realQueued) : 0u;
+            totalNeed += need;
+
+            if (need > selectedNeed || (need == selectedNeed && realQueued > selectedQueued))
+            {
+                selectedTeam = kv.first.first;
+                selectedLevel = kv.first.second;
+                selectedQueued = realQueued;
+                selectedNeed = need;
+            }
+        }
+
+        if (anyRealLfgQueued && totalNeed)
         {
             uint32 existing = GetEventValue(0, "rtg_lfg_start");
             uint32 now = static_cast<uint32>(time(nullptr));
             uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
             uint32 startTs = existing ? existing : now;
-            uint32 need = queuedRealCount >= 5 ? 0u : (5u - queuedRealCount);
 
             SetEventValue(0, "rtg_lfg_start", startTs, ttl);
-            SetEventValue(0, "rtg_lfg_team", targetTeam, ttl);
-            SetEventValue(0, "rtg_lfg_level", targetLevel, ttl);
-            SetEventValue(0, "rtg_lfg_need", std::min<uint32>(need, sPlayerbotAIConfig.rtgEventMaxBots), ttl,
-                          RTG_MakeLfgAddData(targetTeam, targetLevel));
+            SetEventValue(0, "rtg_lfg_team", selectedTeam, ttl);
+            SetEventValue(0, "rtg_lfg_level", selectedLevel, ttl);
+            SetEventValue(0, "rtg_lfg_need", selectedNeed, ttl,
+                          RTG_MakeLfgAddData(selectedTeam, selectedLevel));
+            SetEventValue(0, "rtg_lfg_need_total", std::min<uint32>(totalNeed, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
         }
         else
         {
@@ -2187,6 +2298,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             SetEventValue(0, "rtg_lfg_team", 0, 0);
             SetEventValue(0, "rtg_lfg_level", 0, 0);
             SetEventValue(0, "rtg_lfg_need", 0, 0);
+            SetEventValue(0, "rtg_lfg_need_total", 0, 0);
             SetEventValue(0, "rtg_target", 0, 0);
         }
     }
