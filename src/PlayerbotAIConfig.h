@@ -105,7 +105,6 @@ public:
     uint32 rtgQueueGraceSeconds = 180;
     uint32 rtgEventMaxBots = 60;
     bool rtgKeepWorldBots = false; // if true, preserves normal world population target
-    uint32 rtgQueueBotLevel = 19;
 
     // RTG: Optional low-bracket recycle caps (only used if your recycle logic is enabled elsewhere)
     bool rtgLowBracketCapsEnable = false;
