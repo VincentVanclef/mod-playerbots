@@ -97,7 +97,7 @@ bool LfgJoinAction::JoinLFG()
     // ------------------------------------------------------------------
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent(\"rtg_lfg_start\");
+        uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_start");
         if (!start)
             return false;
 
