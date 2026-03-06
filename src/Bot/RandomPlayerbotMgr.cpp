@@ -47,31 +47,71 @@ namespace
         return value.rfind(prefix, 0) == 0;
     }
 
-    static std::string RTG_MakeLfgAddData(unsigned int team, unsigned int level)
+    static std::string RTG_MakeLfgAddData(unsigned int team, unsigned int level, unsigned int role = 0)
     {
-        return std::string("rtg_lfg:") + std::to_string(team) + ":" + std::to_string(level);
+        std::string data = std::string("rtg_lfg:") + std::to_string(team) + ":" + std::to_string(level);
+        if (role)
+            data += ":" + std::to_string(role);
+        return data;
     }
 
-    static bool RTG_ParseLfgAddData(std::string const& data, unsigned int& team, unsigned int& level)
+    static bool RTG_ParseLfgAddData(std::string const& data, unsigned int& team, unsigned int& level, unsigned int* role = nullptr)
     {
         if (!RTG_HasPrefix(data, "rtg_lfg:"))
             return false;
 
         std::string payload = data.substr(8);
-        size_t sep = payload.find(':');
-        if (sep == std::string::npos)
+        size_t sep1 = payload.find(':');
+        if (sep1 == std::string::npos)
             return false;
+
+        size_t sep2 = payload.find(':', sep1 + 1);
 
         try
         {
-            team = static_cast<unsigned int>(std::stoul(payload.substr(0, sep)));
-            level = static_cast<unsigned int>(std::stoul(payload.substr(sep + 1)));
+            team = static_cast<unsigned int>(std::stoul(payload.substr(0, sep1)));
+            if (sep2 == std::string::npos)
+            {
+                level = static_cast<unsigned int>(std::stoul(payload.substr(sep1 + 1)));
+                if (role)
+                    *role = 0;
+            }
+            else
+            {
+                level = static_cast<unsigned int>(std::stoul(payload.substr(sep1 + 1, sep2 - sep1 - 1)));
+                if (role)
+                    *role = static_cast<unsigned int>(std::stoul(payload.substr(sep2 + 1)));
+            }
             return true;
         }
         catch (...)
         {
             return false;
         }
+    }
+
+    static bool RTG_ClassCanRole(uint8 cls, uint32 role)
+    {
+        switch (role)
+        {
+            case PLAYER_ROLE_TANK:
+                return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_DEATH_KNIGHT;
+            case PLAYER_ROLE_HEALER:
+                return cls == CLASS_PRIEST || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_SHAMAN;
+            case PLAYER_ROLE_DAMAGE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static uint32 RTG_DefaultRoleForClass(uint8 cls)
+    {
+        if (RTG_ClassCanRole(cls, PLAYER_ROLE_HEALER))
+            return PLAYER_ROLE_HEALER;
+        if (RTG_ClassCanRole(cls, PLAYER_ROLE_TANK))
+            return PLAYER_ROLE_TANK;
+        return PLAYER_ROLE_DAMAGE;
     }
 }
 #include "MapMgr.h"
@@ -890,7 +930,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             std::string addData = GetEventData(botId, "add");
             uint32 desiredTeam = 0;
             uint32 desiredLevel = 0;
-            if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel))
+            uint32 desiredRole = 0;
+            if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole))
                 continue;
 
             Map* map = bot->GetMap();
@@ -915,6 +956,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
             if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
             {
+                if (desiredRole)
+                {
+                    uint32 actualRoles = sLFGMgr->GetRoles(bot->GetGUID());
+                    if ((actualRoles & desiredRole) == 0)
+                    {
+                        SetEventValue(botId, "add", 0, 0);
+                        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                        currentBots.remove(botId);
+                        rtgStaleQueueBots.push_back(bot->GetGUID());
+                        continue;
+                    }
+                }
                 SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                 continue;
             }
@@ -1646,6 +1699,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 realQueued = 0;
                 uint32 existingQueuedBots = 0;
                 uint32 need = 0;
+                uint32 tankCount = 0;
+                uint32 healCount = 0;
+                uint32 dpsCount = 0;
             };
 
             std::map<std::pair<uint32, uint32>, RtgBucket> buckets;
@@ -1666,6 +1722,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 bucket.team = key.first;
                 bucket.level = key.second;
                 ++bucket.realQueued;
+
+                uint32 roles = sLFGMgr->GetRoles(player->GetGUID());
+                if (roles & PLAYER_ROLE_TANK)
+                    ++bucket.tankCount;
+                else if (roles & PLAYER_ROLE_HEALER)
+                    ++bucket.healCount;
+                else
+                    ++bucket.dpsCount;
             }
 
             for (uint32 botId : currentBots)
@@ -1675,7 +1739,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 uint32 dataTeam = 0;
                 uint32 dataLevel = 0;
-                if (!RTG_ParseLfgAddData(GetEventData(botId, "add"), dataTeam, dataLevel))
+                uint32 desiredRole = 0;
+                if (!RTG_ParseLfgAddData(GetEventData(botId, "add"), dataTeam, dataLevel, &desiredRole))
                     continue;
 
                 auto it = buckets.find(std::make_pair(dataTeam, dataLevel));
@@ -1686,7 +1751,16 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!queuedBot)
                 {
                     if (GetEventValue(botId, "rtg_lfg_pending"))
+                    {
                         ++it->second.existingQueuedBots;
+                        uint32 roleToCount = desiredRole ? desiredRole : PLAYER_ROLE_DAMAGE;
+                        if (roleToCount == PLAYER_ROLE_TANK)
+                            ++it->second.tankCount;
+                        else if (roleToCount == PLAYER_ROLE_HEALER)
+                            ++it->second.healCount;
+                        else
+                            ++it->second.dpsCount;
+                    }
                     continue;
                 }
 
@@ -1700,12 +1774,28 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
                 {
                     ++it->second.existingQueuedBots;
+                    uint32 actualRoles = sLFGMgr->GetRoles(queuedBot->GetGUID());
+                    if (actualRoles & PLAYER_ROLE_TANK)
+                        ++it->second.tankCount;
+                    else if (actualRoles & PLAYER_ROLE_HEALER)
+                        ++it->second.healCount;
+                    else
+                        ++it->second.dpsCount;
                     SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                     continue;
                 }
 
                 if (GetEventValue(botId, "rtg_lfg_pending"))
+                {
                     ++it->second.existingQueuedBots;
+                    uint32 roleToCount = desiredRole ? desiredRole : PLAYER_ROLE_DAMAGE;
+                    if (roleToCount == PLAYER_ROLE_TANK)
+                        ++it->second.tankCount;
+                    else if (roleToCount == PLAYER_ROLE_HEALER)
+                        ++it->second.healCount;
+                    else
+                        ++it->second.dpsCount;
+                }
             }
 
             std::vector<RtgBucket> orderedBuckets;
@@ -1716,7 +1806,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 RtgBucket& bucket = kv.second;
                 uint32 targetPlayers = ((bucket.realQueued + 4u) / 5u) * 5u;
                 uint32 shortage = targetPlayers > bucket.realQueued ? (targetPlayers - bucket.realQueued) : 0u;
-                bucket.need = shortage > bucket.existingQueuedBots ? (shortage - bucket.existingQueuedBots) : 0u;
+                uint32 reserveNeed = shortage ? 1u : 0u;
+                uint32 expandedTarget = shortage + reserveNeed;
+                bucket.need = expandedTarget > bucket.existingQueuedBots ? (expandedTarget - bucket.existingQueuedBots) : 0u;
                 if (bucket.need)
                     orderedBuckets.push_back(bucket);
             }
@@ -1732,28 +1824,112 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return a.level > b.level;
             });
 
-            for (RtgBucket const& bucket : orderedBuckets)
+            for (RtgBucket bucket : orderedBuckets)
             {
                 if (!remainingCapacity)
                     break;
 
-                uint32 remainingNeed = bucket.need;
-                std::string addData = RTG_MakeLfgAddData(bucket.team, bucket.level);
+                uint32 targetGroups = (bucket.realQueued + 4u) / 5u;
+                uint32 targetTanks = targetGroups;
+                uint32 targetHeals = targetGroups;
+                uint32 targetDps = targetGroups * 3u;
 
-                for (auto const& charInfo : allCharacters)
+                auto missingForRole = [&](uint32 role) -> uint32
                 {
-                    if (!remainingCapacity || !remainingNeed)
-                        break;
+                    if (role == PLAYER_ROLE_TANK)
+                        return targetTanks > bucket.tankCount ? (targetTanks - bucket.tankCount) : 0u;
+                    if (role == PLAYER_ROLE_HEALER)
+                        return targetHeals > bucket.healCount ? (targetHeals - bucket.healCount) : 0u;
+                    return targetDps > bucket.dpsCount ? (targetDps - bucket.dpsCount) : 0u;
+                };
 
-                    bool isAlliance = IsAlliance(charInfo.rRace);
-                    uint32 charTeam = isAlliance ? TEAM_ALLIANCE : TEAM_HORDE;
-                    if (charTeam != bucket.team)
-                        continue;
+                uint32 reserveSpawned = 0;
+                uint32 reserveTarget = bucket.need > 0 ? 1u : 0u;
 
-                    if (tryLoginBot(charInfo, addData))
+                auto reserveRole = [&]() -> uint32
+                {
+                    uint32 targetGroups = (bucket.realQueued + 4u) / 5u;
+                    uint32 targetTanks = std::max<uint32>(1u, targetGroups);
+                    uint32 targetHeals = std::max<uint32>(1u, targetGroups);
+                    uint32 targetDps = std::max<uint32>(3u, targetGroups * 3u);
+
+                    double tankFill = static_cast<double>(bucket.tankCount) / static_cast<double>(targetTanks);
+                    double healFill = static_cast<double>(bucket.healCount) / static_cast<double>(targetHeals);
+                    double dpsFill = static_cast<double>(bucket.dpsCount) / static_cast<double>(targetDps);
+
+                    if (tankFill <= healFill && tankFill <= dpsFill)
+                        return PLAYER_ROLE_TANK;
+                    if (healFill <= tankFill && healFill <= dpsFill)
+                        return PLAYER_ROLE_HEALER;
+                    return PLAYER_ROLE_DAMAGE;
+                };
+
+                auto tryFillRole = [&](uint32 desiredRole) -> bool
+                {
+                    std::string addData = RTG_MakeLfgAddData(bucket.team, bucket.level, desiredRole);
+                    for (auto const& charInfo : allCharacters)
                     {
-                        --remainingCapacity;
-                        --remainingNeed;
+                        if (!remainingCapacity)
+                            return true;
+
+                        bool isAlliance = IsAlliance(charInfo.rRace);
+                        uint32 charTeam = isAlliance ? TEAM_ALLIANCE : TEAM_HORDE;
+                        if (charTeam != bucket.team)
+                            continue;
+
+                        if (!RTG_ClassCanRole(charInfo.rClass, desiredRole))
+                            continue;
+
+                        if (tryLoginBot(charInfo, addData))
+                        {
+                            --remainingCapacity;
+                            if (desiredRole == PLAYER_ROLE_TANK)
+                                ++bucket.tankCount;
+                            else if (desiredRole == PLAYER_ROLE_HEALER)
+                                ++bucket.healCount;
+                            else
+                                ++bucket.dpsCount;
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+
+                while (remainingCapacity)
+                {
+                    uint32 missTank = missingForRole(PLAYER_ROLE_TANK);
+                    uint32 missHeal = missingForRole(PLAYER_ROLE_HEALER);
+                    uint32 missDps = missingForRole(PLAYER_ROLE_DAMAGE);
+                    if (!missTank && !missHeal && !missDps)
+                    {
+                        if (reserveSpawned >= reserveTarget)
+                            break;
+
+                        if (!tryFillRole(reserveRole()))
+                            break;
+
+                        ++reserveSpawned;
+                        continue;
+                    }
+
+                    uint32 desiredRole = PLAYER_ROLE_DAMAGE;
+                    if (missTank)
+                        desiredRole = PLAYER_ROLE_TANK;
+                    else if (missHeal)
+                        desiredRole = PLAYER_ROLE_HEALER;
+
+                    if (!tryFillRole(desiredRole))
+                    {
+                        // Fallback to any remaining role to avoid stalling forever if a bucket has no ideal class left.
+                        bool added = false;
+                        if (desiredRole != PLAYER_ROLE_HEALER && missHeal)
+                            added = tryFillRole(PLAYER_ROLE_HEALER);
+                        if (!added && desiredRole != PLAYER_ROLE_TANK && missTank)
+                            added = tryFillRole(PLAYER_ROLE_TANK);
+                        if (!added && desiredRole != PLAYER_ROLE_DAMAGE && missDps)
+                            added = tryFillRole(PLAYER_ROLE_DAMAGE);
+                        if (!added)
+                            break;
                     }
                 }
             }
@@ -2375,7 +2551,9 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         {
             uint32 realQueued = kv.second;
             uint32 targetPlayers = ((realQueued + 4u) / 5u) * 5u;
-            uint32 need = targetPlayers > realQueued ? (targetPlayers - realQueued) : 0u;
+            uint32 exactNeed = targetPlayers > realQueued ? (targetPlayers - realQueued) : 0u;
+            uint32 reserveNeed = exactNeed ? 1u : 0u;
+            uint32 need = exactNeed + reserveNeed;
             totalNeed += need;
 
             if (need > selectedNeed || (need == selectedNeed && realQueued > selectedQueued))

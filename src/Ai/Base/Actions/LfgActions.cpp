@@ -16,6 +16,52 @@
 
 using namespace lfg;
 
+namespace
+{
+    static bool RTG_HasPrefix(std::string const& value, std::string const& prefix)
+    {
+        return value.rfind(prefix, 0) == 0;
+    }
+
+    static bool RTG_ParseLfgDesiredRole(std::string const& data, uint32& role)
+    {
+        role = 0;
+        if (!RTG_HasPrefix(data, "rtg_lfg:"))
+            return false;
+
+        size_t first = data.find(':');
+        size_t second = data.find(':', first + 1);
+        size_t third = data.find(':', second == std::string::npos ? std::string::npos : second + 1);
+        if (third == std::string::npos)
+            return false;
+
+        try
+        {
+            role = static_cast<uint32>(std::stoul(data.substr(third + 1)));
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    static bool RTG_ClassCanRole(uint8 cls, uint32 role)
+    {
+        switch (role)
+        {
+            case PLAYER_ROLE_TANK:
+                return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_DEATH_KNIGHT;
+            case PLAYER_ROLE_HEALER:
+                return cls == CLASS_PRIEST || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_SHAMAN;
+            case PLAYER_ROLE_DAMAGE:
+                return true;
+            default:
+                return false;
+        }
+    }
+}
+
 bool LfgJoinAction::Execute(Event event) { return JoinLFG(); }
 
 uint32 LfgJoinAction::GetRoles()
@@ -28,6 +74,14 @@ uint32 LfgJoinAction::GetRoles()
             return PLAYER_ROLE_HEALER;
         else
             return PLAYER_ROLE_DAMAGE;
+    }
+
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 desiredRole = 0;
+        if (RTG_ParseLfgDesiredRole(sRandomPlayerbotMgr.GetEventData(bot->GetGUID().GetCounter(), "add"), desiredRole) &&
+            desiredRole && RTG_ClassCanRole(bot->getClass(), desiredRole))
+            return desiredRole;
     }
 
     uint8 spec = AiFactory::GetPlayerSpecTab(bot);
