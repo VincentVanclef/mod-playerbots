@@ -1986,7 +1986,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     // RTG: Event-driven start marker for BG queueing (grace window begins when first real player queues)
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        if (anyRealQueued)
+        if (GetEventValue(0, "rtg_bg_any_real_queued"))
         {
             uint32 existing = GetEventValue(0, "rtg_bg_start");
             uint32 now = (uint32)time(nullptr);
