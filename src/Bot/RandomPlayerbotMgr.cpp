@@ -1504,9 +1504,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         if (!forceQueueLevel)
             return true;
 
-        if (!GetEventValue(botGuid, "rtg_queue_fill"))
-            return false;
-
         if (GetEventValue(botGuid, "rtg_force_level") == queueBotLevel)
             return true;
 
@@ -1653,14 +1650,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             SetEventValue(charInfo.guid, "logout", 0, 0);
 
             if (forceQueueLevel)
-            {
                 SetEventValue(charInfo.guid, "rtg_force_level", queueBotLevel, add_time + 600);
-                SetEventValue(charInfo.guid, "rtg_queue_fill", 1, add_time + 600);
-            }
-            else
-            {
-                SetEventValue(charInfo.guid, "rtg_queue_fill", 0, 0);
-            }
 
             currentBots.push_back(charInfo.guid);
 
@@ -1794,22 +1784,7 @@ std::vector<uint32> parseBrackets(const std::string& str)
 
     while (std::getline(ss, item, ','))
     {
-        item.erase(0, item.find_first_not_of(" 	
-"));
-        item.erase(item.find_last_not_of(" 	
-") + 1);
-
-        if (item.empty())
-            continue;
-
-        try
-        {
-            brackets.push_back(static_cast<uint32>(std::stoul(item)));
-        }
-        catch (...)
-        {
-            LOG_ERROR("playerbots", "Invalid battleground bracket token '{}' in auto-join config", item);
-        }
+        brackets.push_back(static_cast<uint32>(std::stoi(item)));
     }
 
     return brackets;
@@ -1871,14 +1846,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
             // Check if real player is able to create/join this queue
             BattlegroundTypeId bgTypeId = sBattlegroundMgr->BGTemplateId(queueTypeId);
-            Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-            if (!bgTemplate)
-            {
-                LOG_ERROR("playerbots", "Missing battleground template for queueTypeId {} bgTypeId {} while scanning real-player BG queue", uint32(queueTypeId), uint32(bgTypeId));
-                continue;
-            }
-
-            uint32 mapId = bgTemplate->GetMapId();
+            uint32 mapId = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId)->GetMapId();
             PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(mapId, player->GetLevel());
             if (!pvpDiff)
                 continue;
@@ -1968,14 +1936,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 continue;
 
             BattlegroundTypeId bgTypeId = sBattlegroundMgr->BGTemplateId(queueTypeId);
-            Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-            if (!bgTemplate)
-            {
-                LOG_ERROR("playerbots", "Missing battleground template for queueTypeId {} bgTypeId {} while scanning bot BG queue", uint32(queueTypeId), uint32(bgTypeId));
-                continue;
-            }
-
-            uint32 mapId = bgTemplate->GetMapId();
+            uint32 mapId = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId)->GetMapId();
             PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(mapId, bot->GetLevel());
             if (!pvpDiff)
                 continue;
@@ -3669,9 +3630,6 @@ void RandomPlayerbotMgr::GetBots()
     {
         if (!forceQueueLevel)
             return true;
-
-        if (!GetEventValue(botGuid, "rtg_queue_fill"))
-            return false;
 
         if (GetEventValue(botGuid, "rtg_force_level") == queueBotLevel)
             return true;
