@@ -791,6 +791,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     {
         uint32 over = onlineBotCount - maxAllowedBotCount;
         uint32 toLogout = std::min<uint32>(over, std::max<uint32>(1u, sPlayerbotAIConfig.randomBotsPerInterval));
+        std::vector<ObjectGuid> rtgShrinkLogout;
 
         for (auto const& kv : playerBots)
         {
@@ -819,9 +820,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             uint32 botId = botGuid.GetCounter();
             SetEventValue(botId, "add", 0, 0);
             currentBots.remove(botId);
-            LogoutPlayerBot(botGuid);
+            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+            rtgShrinkLogout.push_back(botGuid);
             --toLogout;
         }
+
+        for (ObjectGuid const& botGuid : rtgShrinkLogout)
+            LogoutPlayerBot(botGuid);
     }
 
 
@@ -830,6 +835,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     // hanging around and interacting with unrelated update paths.
     if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand)
     {
+        std::vector<ObjectGuid> rtgIdleLogout;
+
         for (auto const& kv : playerBots)
         {
             Player* bot = kv.second;
@@ -845,15 +852,90 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (map && (map->IsDungeon() || map->IsRaid()))
                 continue;
 
+            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+                continue;
+
+            if (bot->GetGroup())
+                continue;
+
+            if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                continue;
+
+            SetEventValue(botId, "add", 0, 0);
+            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+            currentBots.remove(botId);
+            rtgIdleLogout.push_back(bot->GetGUID());
+        }
+
+        for (ObjectGuid const& botGuid : rtgIdleLogout)
+            LogoutPlayerBot(botGuid);
+    }
+
+
+
+    // RTG: replace queue-fill bots that made it online but never actually joined LFG.
+    // Count only bots that are truly queued (or still within a short pending window)
+    // toward shortage satisfaction. Stale bots are logged out and replaced.
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        std::vector<ObjectGuid> rtgStaleQueueBots;
+
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = kv.first.GetCounter();
+            std::string addData = GetEventData(botId, "add");
+            uint32 desiredTeam = 0;
+            uint32 desiredLevel = 0;
+            if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel))
+                continue;
+
+            Map* map = bot->GetMap();
+            if (map && (map->IsDungeon() || map->IsRaid()))
+            {
+                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                continue;
+            }
+
+            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+                continue;
+
+            if (bot->GetTeamId() != desiredTeam || bot->GetLevel() != desiredLevel)
+            {
+                SetEventValue(botId, "add", 0, 0);
+                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                currentBots.remove(botId);
+                rtgStaleQueueBots.push_back(bot->GetGUID());
+                continue;
+            }
+
+            lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
+            if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
+            {
+                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                continue;
+            }
+
+            if (GetEventValue(botId, "rtg_lfg_pending"))
+                continue;
+
+            if (bot->GetGroup())
+                continue;
+
             if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                 continue;
 
             SetEventValue(botId, "add", 0, 0);
             currentBots.remove(botId);
-            LogoutPlayerBot(bot->GetGUID());
+            rtgStaleQueueBots.push_back(bot->GetGUID());
         }
-    }
 
+        for (ObjectGuid const& botGuid : rtgStaleQueueBots)
+            LogoutPlayerBot(botGuid);
+    }
 
 // ---------------------------------------------------------
 // Seed replacement: keep open-world population steady even when
@@ -1548,6 +1630,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
+            if (RTG_HasPrefix(addData, "rtg_lfg:"))
+                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 60, addData);
             currentBots.push_back(charInfo.guid);
 
             return true;
@@ -1595,7 +1679,32 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
 
                 auto it = buckets.find(std::make_pair(dataTeam, dataLevel));
-                if (it != buckets.end())
+                if (it == buckets.end())
+                    continue;
+
+                Player* queuedBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId));
+                if (!queuedBot)
+                {
+                    if (GetEventValue(botId, "rtg_lfg_pending"))
+                        ++it->second.existingQueuedBots;
+                    continue;
+                }
+
+                if (!queuedBot->IsInWorld())
+                    continue;
+
+                if (queuedBot->GetTeamId() != dataTeam || queuedBot->GetLevel() != dataLevel)
+                    continue;
+
+                lfg::LfgState botState = sLFGMgr->GetState(queuedBot->GetGUID());
+                if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
+                {
+                    ++it->second.existingQueuedBots;
+                    SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                    continue;
+                }
+
+                if (GetEventValue(botId, "rtg_lfg_pending"))
                     ++it->second.existingQueuedBots;
             }
 
@@ -4079,6 +4188,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             if (desiredTeam && botTeam != desiredTeam)
             {
                 SetEventValue(bot->GetGUID().GetCounter(), "add", 0, 0);
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
                 currentBots.remove(bot->GetGUID().GetCounter());
                 LogoutPlayerBot(bot->GetGUID());
                 return;
@@ -4090,6 +4200,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->InitStatsForLevel(true);
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
+
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 60, GetEventData(bot->GetGUID().GetCounter(), "add"));
         }
     }
 
