@@ -1370,6 +1370,29 @@ bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
 uint32 RandomPlayerbotMgr::AddRandomBots()
 {
     uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+
+    // RTG: event-driven target must also apply inside AddRandomBots().
+    // Otherwise bots never get marked for login when the normal/base target is 0.
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 baseWorld = sPlayerbotAIConfig.rtgKeepWorldBots ? maxAllowedBotCount : 0u;
+
+        bool bgDemand  = (GetEventValue(0, "rtg_bg_start")  != 0);
+        bool lfgDemand = (GetEventValue(0, "rtg_lfg_start") != 0);
+
+        time_t now = time(nullptr);
+        uint32 bgStart  = GetEventValue(0, "rtg_bg_start");
+        uint32 lfgStart = GetEventValue(0, "rtg_lfg_start");
+        bool bgReady  = bgDemand  && now >= (time_t)(bgStart  + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+        bool lfgReady = lfgDemand && now >= (time_t)(lfgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+
+        uint32 eventTarget = (bgReady || lfgReady) ? sPlayerbotAIConfig.rtgEventMaxBots : 0u;
+        maxAllowedBotCount = baseWorld + eventTarget;
+
+        if (!bgDemand && !lfgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
+            maxAllowedBotCount = 0;
+    }
+
     static time_t missingBotsTimer = 0;
 
     if (currentBots.size() < maxAllowedBotCount)
@@ -3380,6 +3403,28 @@ uint32 RandomPlayerbotMgr::GetTuningOrDefault(std::string const& key, uint32 def
 void RandomPlayerbotMgr::GetBots()
 {
     uint32 target = GetMaxAllowedBotCount();
+
+    // RTG: event-driven mode can intentionally keep the normal/base target at 0.
+    // In that case GetBots() still needs to track the event-driven desired target.
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 baseWorld = sPlayerbotAIConfig.rtgKeepWorldBots ? target : 0u;
+
+        bool bgDemand  = (GetEventValue(0, "rtg_bg_start")  != 0);
+        bool lfgDemand = (GetEventValue(0, "rtg_lfg_start") != 0);
+
+        time_t now = time(nullptr);
+        uint32 bgStart  = GetEventValue(0, "rtg_bg_start");
+        uint32 lfgStart = GetEventValue(0, "rtg_lfg_start");
+        bool bgReady  = bgDemand  && now >= (time_t)(bgStart  + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+        bool lfgReady = lfgDemand && now >= (time_t)(lfgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+
+        uint32 eventTarget = (bgReady || lfgReady) ? sPlayerbotAIConfig.rtgEventMaxBots : 0u;
+        target = baseWorld + eventTarget;
+
+        if (!bgDemand && !lfgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
+            target = 0;
+    }
 
     // Prune stale entries (no "add" event anymore)
     for (auto it = currentBots.begin(); it != currentBots.end();)
