@@ -1654,13 +1654,14 @@ void RandomPlayerbotMgr::CheckBgQueue()
     // Process real players and populate Battleground Data with player/queue count
     // Opens a queue for bots to join
     for (Player* player : players)
-    {
-        // Skip player if not currently in a queue
-        if (!player->InBattlegroundQueue())
-            continue;
+	{
+		if (!player || IsRandomBot(player))
+			continue;
 
+		if (!player->InBattlegroundQueue())
+			continue;
 
-        anyRealQueued = true;
+		anyRealQueued = true;
 
         Battleground* bg = player->GetBattleground();
         if (bg && bg->GetStatus() == STATUS_WAIT_LEAVE)
@@ -1985,7 +1986,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     // RTG: Event-driven start marker for BG queueing (grace window begins when first real player queues)
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        if (anyRealQueued)
+        if (GetEventValue(0, "rtg_bg_any_real_queued"))
         {
             uint32 existing = GetEventValue(0, "rtg_bg_start");
             uint32 now = (uint32)time(nullptr);
