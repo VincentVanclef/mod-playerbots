@@ -1890,10 +1890,8 @@ std::vector<uint32> parseBrackets(const std::string& str)
 
     while (std::getline(ss, item, ','))
     {
-        item.erase(0, item.find_first_not_of(" 	
-"));
-        item.erase(item.find_last_not_of(" 	
-") + 1);
+        item.erase(0, item.find_first_not_of(" \t\r\n"));
+		item.erase(item.find_last_not_of(" \t\r\n") + 1);
 
         if (item.empty())
             continue;
