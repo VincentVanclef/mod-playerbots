@@ -1849,6 +1849,22 @@ void RandomPlayerbotMgr::CheckBgQueue()
         }
     }
 
+    // RTG: Event-driven start marker for BG queueing (grace window begins when first real player queues)
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        if (anyRealQueued)
+        {
+            uint32 existing = GetEventValue(0, "rtg_bg_start");
+            uint32 now = (uint32)time(nullptr);
+            uint32 start = existing ? existing : now;
+            SetEventValue(0, "rtg_bg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        }
+        else
+        {
+            SetEventValue(0, "rtg_bg_start", 0, 0);
+        }
+    }
+
     // If enabled, wait for all bots to have logged in before queueing for Arena's / BG's
     if (sPlayerbotAIConfig.randomBotAutoJoinBG && playerBots.size() >= GetMaxAllowedBotCount())
     {
@@ -1983,22 +1999,6 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                      bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount, bgInfo.bgInstanceCount, bgInfo.activeBgQueue);
         }
     }
-    // RTG: Event-driven start marker for BG queueing (grace window begins when first real player queues)
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        if (anyRealQueued)
-        {
-            uint32 existing = GetEventValue(0, "rtg_bg_start");
-            uint32 now = (uint32)time(nullptr);
-            uint32 start = existing ? existing : now;
-            SetEventValue(0, "rtg_bg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
-        }
-        else
-        {
-            SetEventValue(0, "rtg_bg_start", 0, 0);
-        }
-    }
-
     LOG_DEBUG("playerbots", "BG Queue check finished");
 }
 
