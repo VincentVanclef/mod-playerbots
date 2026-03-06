@@ -210,6 +210,64 @@ uint32 GetRTGDesiredBotTarget(RandomPlayerbotMgr& mgr, uint32 normalTarget)
     return baseWorld + eventTarget;
 }
 
+struct RTGQueueLevelRule
+{
+    bool active = false;
+    uint32 minLevel = 0;
+    uint32 maxLevel = 0;
+    uint32 targetLevel = 0;
+};
+
+static bool RTG_IsQueuedForLfg(Player* player)
+{
+    if (!player || !player->IsInWorld())
+        return false;
+
+    Group* group = player->GetGroup();
+    ObjectGuid guid = group ? group->GetGUID() : player->GetGUID();
+    lfg::LfgState gState = sLFGMgr->GetState(guid);
+    return gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON;
+}
+
+static RTGQueueLevelRule GetRTGQueueLevelRule(RandomPlayerbotMgr& mgr)
+{
+    RTGQueueLevelRule rule;
+
+    if (!sPlayerbotAIConfig.rtgEventDriven || !RTG_IsQueueReady(mgr))
+        return rule;
+
+    uint32 chosenLevel = 0;
+
+    for (Player* player : mgr.GetPlayers())
+    {
+        if (!player || !player->IsInWorld() || mgr.IsRandomBot(player))
+            continue;
+
+        bool queued = player->InBattlegroundQueue() || RTG_IsQueuedForLfg(player);
+        if (!queued)
+            continue;
+
+        chosenLevel = std::max<uint32>(chosenLevel, player->GetLevel());
+    }
+
+    if (!chosenLevel)
+        chosenLevel = sPlayerbotAIConfig.rtgQueueBotLevel;
+
+    if (!chosenLevel)
+        return rule;
+
+    rule.active = true;
+    rule.targetLevel = chosenLevel;
+    rule.minLevel = chosenLevel;
+    rule.maxLevel = chosenLevel;
+    return rule;
+}
+
+static bool RTG_IsValidBgBracket(uint32 bracket)
+{
+    return bracket >= BG_BRACKET_ID_FIRST && bracket < MAX_BATTLEGROUND_BRACKETS;
+}
+
 uint32 GetRTGQueueBotLevel()
 {
     return sPlayerbotAIConfig.rtgQueueBotLevel;
@@ -1496,26 +1554,60 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
     static time_t missingBotsTimer = 0;
 
-    uint32 queueBotLevel = GetRTGQueueBotLevel();
-    bool forceQueueLevel = sPlayerbotAIConfig.rtgEventDriven && queueBotLevel > 0 && RTG_IsQueueReady(*this);
+    RTGQueueLevelRule queueRule = GetRTGQueueLevelRule(*this);
 
     auto isQueueEligibleBot = [&](uint32 botGuid) -> bool
     {
-        if (!forceQueueLevel)
+        if (!queueRule.active)
             return true;
 
         if (!GetEventValue(botGuid, "rtg_queue_fill"))
             return false;
 
-        if (GetEventValue(botGuid, "rtg_force_level") == queueBotLevel)
+        if (GetEventValue(botGuid, "rtg_force_level") == queueRule.targetLevel)
             return true;
 
         Player* onlineBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botGuid));
         if (!onlineBot)
             return false;
 
-        return onlineBot->GetLevel() == queueBotLevel;
+        uint32 level = onlineBot->GetLevel();
+        return level >= queueRule.minLevel && level <= queueRule.maxLevel;
     };
+
+    if (queueRule.active)
+    {
+        for (auto it = currentBots.begin(); it != currentBots.end();)
+        {
+            uint32 botId = *it;
+            if (!GetEventValue(botId, "rtg_queue_fill"))
+            {
+                ++it;
+                continue;
+            }
+
+            Player* onlineBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId));
+            if (!onlineBot)
+            {
+                ++it;
+                continue;
+            }
+
+            uint32 level = onlineBot->GetLevel();
+            if (level >= queueRule.minLevel && level <= queueRule.maxLevel)
+            {
+                ++it;
+                continue;
+            }
+
+            SetEventValue(botId, "add", 0, 0);
+            SetEventValue(botId, "logout", 1,
+                          urand(sPlayerbotAIConfig.minRandomBotInWorldTime,
+                                sPlayerbotAIConfig.maxRandomBotInWorldTime));
+            LogoutPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId));
+            it = currentBots.erase(it);
+        }
+    }
 
     uint32 activeBotCount = 0;
     for (uint32 botGuid : currentBots)
@@ -1609,7 +1701,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         for (auto const& charInfo : allCharacters)
         {
-            if (forceQueueLevel && charInfo.rClass == CLASS_DEATH_KNIGHT && queueBotLevel < sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
+            if (queueRule.active && charInfo.rClass == CLASS_DEATH_KNIGHT && queueRule.targetLevel < sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
                 continue;
 
             if (IsAlliance(charInfo.rRace))
@@ -1618,13 +1710,17 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 hordeChars.push_back(charInfo);
         }
 
-        if (forceQueueLevel)
+        if (queueRule.active)
         {
             auto prioritizeForcedLevel = [&](std::vector<CharacterInfo>& chars)
             {
                 std::stable_sort(chars.begin(), chars.end(), [&](CharacterInfo const& a, CharacterInfo const& b)
                 {
-                    return (a.level == queueBotLevel) && (b.level != queueBotLevel);
+                    bool aMatch = a.level >= queueRule.minLevel && a.level <= queueRule.maxLevel;
+                    bool bMatch = b.level >= queueRule.minLevel && b.level <= queueRule.maxLevel;
+                    if (aMatch != bMatch)
+                        return aMatch > bMatch;
+                    return a.level == queueRule.targetLevel && b.level != queueRule.targetLevel;
                 });
             };
 
@@ -1652,9 +1748,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             SetEventValue(charInfo.guid, "add", 1, add_time);
             SetEventValue(charInfo.guid, "logout", 0, 0);
 
-            if (forceQueueLevel)
+            if (queueRule.active)
             {
-                SetEventValue(charInfo.guid, "rtg_force_level", queueBotLevel, add_time + 600);
+                SetEventValue(charInfo.guid, "rtg_force_level", queueRule.targetLevel, add_time + 600);
                 SetEventValue(charInfo.guid, "rtg_queue_fill", 1, add_time + 600);
             }
             else
@@ -1794,8 +1890,10 @@ std::vector<uint32> parseBrackets(const std::string& str)
 
     while (std::getline(ss, item, ','))
     {
-        item.erase(0, item.find_first_not_of(" \t\r\n"));
-		item.erase(item.find_last_not_of(" \t\r\n") + 1);
+        item.erase(0, item.find_first_not_of(" 	
+"));
+        item.erase(item.find_last_not_of(" 	
+") + 1);
 
         if (item.empty())
             continue;
@@ -1864,7 +1962,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
         for (uint8 queueType = 0; queueType < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueType)
         {
             BattlegroundQueueTypeId queueTypeId = player->GetBattlegroundQueueTypeId(queueType);
-            if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+            if (queueTypeId == BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
                 continue;
 
             // Check if real player is able to create/join this queue
@@ -1962,7 +2060,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
         for (uint8 queueType = 0; queueType < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueType)
         {
             BattlegroundQueueTypeId queueTypeId = bot->GetBattlegroundQueueTypeId(queueType);
-            if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
+            if (queueTypeId == BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
                 continue;
 
             BattlegroundTypeId bgTypeId = sBattlegroundMgr->BGTemplateId(queueTypeId);
@@ -2099,16 +2197,25 @@ void RandomPlayerbotMgr::CheckBgQueue()
         // to help counter against potentional inconsistencies
         auto updateRatedArenaInstanceCount = [&](uint32 queueType, uint32 bracket, uint32 minCount)
         {
+            if (!RTG_IsValidBgBracket(bracket) || queueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+                return;
+
             if (BattlegroundData[queueType][bracket].activeRatedArenaQueue == 0 &&
                 BattlegroundData[queueType][bracket].ratedArenaInstanceCount < minCount &&
                 BattlegroundData[queueType][bracket].ratedArenaInstances.size() < minCount)
                 BattlegroundData[queueType][bracket].activeRatedArenaQueue = 1;
         };
 
-        auto updateBGInstanceCount = [&](uint32 queueType, std::vector<uint32> brackets, uint32 minCount)
+        auto updateBGInstanceCount = [&](uint32 queueType, std::vector<uint32> const& brackets, uint32 minCount)
         {
+            if (queueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+                return;
+
             for (uint32 bracket : brackets)
             {
+                if (!RTG_IsValidBgBracket(bracket))
+                    continue;
+
                 if (BattlegroundData[queueType][bracket].activeBgQueue == 0 &&
                     BattlegroundData[queueType][bracket].bgInstanceCount < minCount &&
                     BattlegroundData[queueType][bracket].bgInstances.size() < minCount)
@@ -3660,25 +3767,25 @@ void RandomPlayerbotMgr::GetBots()
             ++it;
     }
 
-    uint32 queueBotLevel = GetRTGQueueBotLevel();
-    bool forceQueueLevel = sPlayerbotAIConfig.rtgEventDriven && queueBotLevel > 0 && RTG_IsQueueReady(*this);
+    RTGQueueLevelRule queueRule = GetRTGQueueLevelRule(*this);
 
     auto isQueueEligibleBot = [&](uint32 botGuid) -> bool
     {
-        if (!forceQueueLevel)
+        if (!queueRule.active)
             return true;
 
         if (!GetEventValue(botGuid, "rtg_queue_fill"))
             return false;
 
-        if (GetEventValue(botGuid, "rtg_force_level") == queueBotLevel)
+        if (GetEventValue(botGuid, "rtg_force_level") == queueRule.targetLevel)
             return true;
 
         Player* onlineBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botGuid));
         if (!onlineBot)
             return false;
 
-        return onlineBot->GetLevel() == queueBotLevel;
+        uint32 level = onlineBot->GetLevel();
+        return level >= queueRule.minLevel && level <= queueRule.maxLevel;
     };
 
     uint32 activeBotCount = 0;
