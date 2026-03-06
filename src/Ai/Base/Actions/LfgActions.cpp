@@ -79,7 +79,7 @@ uint32 LfgJoinAction::GetRoles()
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 desiredRole = 0;
-        if (RTG_ParseLfgDesiredRole(sRandomPlayerbotMgr.GetEventData(bot->GetGUID().GetCounter(), "add"), desiredRole) &&
+        if (RTG_ParseLfgDesiredRole(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), desiredRole) &&
             desiredRole && RTG_ClassCanRole(bot->getClass(), desiredRole))
             return desiredRole;
     }

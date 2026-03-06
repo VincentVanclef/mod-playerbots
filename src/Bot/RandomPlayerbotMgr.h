@@ -210,6 +210,7 @@ public:
     {
         SetEventValue(0, key, value, ttlSeconds, data);
     }
+    std::string RTG_GetBotEventData(uint32 bot, std::string const& key) { return GetEventData(bot, key); }
 
 protected:
     void OnBotLoginInternal(Player* const bot) override;
