@@ -15,27 +15,6 @@
 #include "SharedDefines.h"
 #include "Unit.h"
 
-static bool RTG_ShouldSuppressHealerAttack(Player* bot, PlayerbotAI* botAI, Unit* target)
-{
-    if (!bot || !botAI)
-        return false;
-
-    if (!botAI->IsHeal(bot))
-        return false;
-
-    Map* map = bot->GetMap();
-    Group* group = bot->GetGroup();
-    bool inDungeonRun = (map && map->IsDungeon()) || (group && group->isLFGGroup());
-    if (!inDungeonRun)
-        return false;
-
-    // Healers may defend themselves if the target is directly attacking them.
-    if (target && target->GetVictim() == bot)
-        return false;
-
-    return true;
-}
-
 bool AttackAction::Execute(Event /*event*/)
 {
     Unit* target = GetTarget();
@@ -45,11 +24,41 @@ bool AttackAction::Execute(Event /*event*/)
     if (!target->IsInWorld())
         return false;
 
-    if (RTG_ShouldSuppressHealerAttack(bot, botAI, target))
+    Player* bot = GetBot();
+    if (bot && bot->GetPlayerbotAI())
     {
-        bot->AttackStop();
-        bot->SetTarget(ObjectGuid::Empty);
-        return false;
+        uint32 roles = sLFGMgr->GetRoles(bot->GetGUID());
+
+        if ((roles & lfg::PLAYER_ROLE_HEALER) != 0)
+        {
+            Group* group = bot->GetGroup();
+            Map* map = bot->GetMap();
+
+            bool inDungeonRun =
+                (group && group->isLFGGroup()) ||
+                (map && map->IsDungeon());
+
+            if (inDungeonRun)
+            {
+                Unit* victim = bot->GetVictim();
+
+                // healer should not initiate attacks in dungeon runs
+                // unless directly defending itself
+                if (!victim)
+                {
+                    bot->AttackStop();
+                    bot->SetTarget(ObjectGuid::Empty);
+                    return false;
+                }
+
+                if (victim->GetVictim() != bot)
+                {
+                    bot->AttackStop();
+                    bot->SetTarget(ObjectGuid::Empty);
+                    return false;
+                }
+            }
+        }
     }
 
     return Attack(target);
@@ -57,13 +66,7 @@ bool AttackAction::Execute(Event /*event*/)
 
 bool AttackMyTargetAction::Execute(Event /*event*/)
 {
-    if (RTG_ShouldSuppressHealerAttack(bot, botAI, botAI->GetUnit(GetMaster() ? GetMaster()->GetTarget() : ObjectGuid::Empty)))
-    {
-        bot->AttackStop();
-        bot->SetTarget(ObjectGuid::Empty);
-        return false;
-    }
-
+    Player* bot = GetBot();
     Player* master = GetMaster();
     if (!master)
         return false;
@@ -77,7 +80,43 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
         return false;
     }
 
-    botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({guid});
+    if (bot && bot->GetPlayerbotAI())
+    {
+        uint32 roles = sLFGMgr->GetRoles(bot->GetGUID());
+
+        if ((roles & lfg::PLAYER_ROLE_HEALER) != 0)
+        {
+            Group* group = bot->GetGroup();
+            Map* map = bot->GetMap();
+
+            bool inDungeonRun =
+                (group && group->isLFGGroup()) ||
+                (map && map->IsDungeon());
+
+            if (inDungeonRun)
+            {
+                Unit* victim = bot->GetVictim();
+
+                // healer should not initiate attacks in dungeon runs
+                // unless directly defending itself
+                if (!victim)
+                {
+                    bot->AttackStop();
+                    bot->SetTarget(ObjectGuid::Empty);
+                    return false;
+                }
+
+                if (victim->GetVictim() != bot)
+                {
+                    bot->AttackStop();
+                    bot->SetTarget(ObjectGuid::Empty);
+                    return false;
+                }
+            }
+        }
+    }
+
+    botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({ guid });
     bool result = Attack(botAI->GetUnit(guid));
     if (result)
         context->GetValue<ObjectGuid>("pull target")->Set(guid);
@@ -87,13 +126,6 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
 
 bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
-    if (RTG_ShouldSuppressHealerAttack(bot, botAI, target))
-    {
-        bot->AttackStop();
-        bot->SetTarget(ObjectGuid::Empty);
-        return false;
-    }
-
     Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
     bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
     
