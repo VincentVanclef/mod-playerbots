@@ -888,6 +888,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
                 continue;
 
+            lfg::LfgState lfgState = sLFGMgr->GetState(bot->GetGUID());
+            if (lfgState != lfg::LFG_STATE_NONE && lfgState < lfg::LFG_STATE_DUNGEON)
+                continue;
+
             uint32 botId = botGuid.GetCounter();
             if (GetEventValue(botId, "rtg_dungeon_active"))
                 continue;
@@ -938,6 +942,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
                 continue;
+
+            lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
+            if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
+            {
+                SetEventValue(botId, "rtg_lfg_pending", 1, 300, addData);
+                continue;
+            }
 
             if (bot->GetGroup())
                 continue;
@@ -1017,7 +1028,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
 
             if (GetEventValue(botId, "rtg_lfg_pending"))
+            {
+                SetEventValue(botId, "rtg_lfg_pending", 1, 300, addData);
                 continue;
+            }
 
             if (bot->GetGroup())
                 continue;
@@ -1771,7 +1785,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
             if (RTG_HasPrefix(addData, "rtg_lfg:"))
-                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 60, addData);
+                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 300, addData);
             currentBots.push_back(charInfo.guid);
 
             return true;
@@ -4470,7 +4484,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
 
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 60, GetEventData(bot->GetGUID().GetCounter(), "add"));
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 300, GetEventData(bot->GetGUID().GetCounter(), "add"));
         }
     }
 
