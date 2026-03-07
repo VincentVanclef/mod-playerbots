@@ -62,6 +62,13 @@ namespace
                 return false;
         }
     }
+	
+	static void RTG_ApplyDungeonDeserter(Player* bot)
+	{
+		uint32 const spellId = 71041; // Dungeon Deserter
+		if (bot && !bot->HasAura(spellId))
+			bot->CastSpell(bot, spellId, true);
+	}
 
     static uint32 RTG_ActualRoleForBot(Player* bot)
     {
@@ -151,7 +158,9 @@ bool LfgJoinAction::JoinLFG()
     }
 
     time_t now = time(nullptr);
-    auto attemptIt = rtgNextJoinAttempt.find(bot->GetGUID().GetCounter());
+    uint32 botId = bot->GetGUID().GetCounter();
+
+    auto attemptIt = rtgNextJoinAttempt.find(botId);
     if (attemptIt != rtgNextJoinAttempt.end() && now < attemptIt->second)
         return false;
 
@@ -216,13 +225,13 @@ bool LfgJoinAction::JoinLFG()
     // check role for console msg
     std::string _roles = "multiple roles";
     uint32 roleMask = GetRoles();
-    if (roleMask & PLAYER_ROLE_TANK)
+    if (roleMask & lfg::PLAYER_ROLE_TANK)
         _roles = "TANK";
 
-    if (roleMask & PLAYER_ROLE_HEALER)
+    if (roleMask & lfg::PLAYER_ROLE_HEALER)
         _roles = "HEAL";
 
-    if (roleMask & PLAYER_ROLE_DAMAGE)
+    if (roleMask & lfg::PLAYER_ROLE_DAMAGE)
         _roles = "DPS";
 
     LOG_INFO("playerbots", "Bot {} {}:{} <{}>: queues LFG, Dungeon as {} ({})", bot->GetGUID().ToString().c_str(),
@@ -241,22 +250,27 @@ bool LfgJoinAction::JoinLFG()
     *data << (bool)false;
     // Slots
     *data << (uint8)(list.size());
-    for (uint32 dungeon : list)
-        *data << (uint32)dungeon;
+    for (uint32 dungeonId : list)
+        *data << (uint32)dungeonId;
     // Needs
     *data << (uint8)3 << (uint8)0 << (uint8)0 << (uint8)0;
     *data << _gs;
     bot->GetSession()->QueuePacket(data);
 
+    // RTG retry timing:
+    // - fresh queued fill bots with no group should retry quickly
+    // - grouped/post-dungeon bots should retry more calmly
+    // - normal bots keep the default pacing
     uint32 retryDelay = 8;
     if (RTG_IsQueuedLfgBot(bot))
     {
-        // Fresh RTG queue-fill bots should react quickly once they are online.
-        // Post-dungeon party bots should be calmer to avoid role-check / requeue spam.
-        retryDelay = bot->GetGroup() ? 10 : 2;
+        if (bot->GetGroup())
+            retryDelay = 10;
+        else
+            retryDelay = 2;
     }
 
-    rtgNextJoinAttempt[bot->GetGUID().GetCounter()] = now + retryDelay;
+    rtgNextJoinAttempt[botId] = now + retryDelay;
 
     return true;
 }
@@ -362,17 +376,14 @@ bool LfgAcceptAction::Execute(Event event)
 
 bool LfgLeaveAction::Execute(Event event)
 {
-    // Don't leave if lfg strategy enabled
-    // if (botAI->HasStrategy("lfg", BOT_STATE_NON_COMBAT))
-    //    return false;
-
-    // Don't leave if already invited / in dungeon
     if (sLFGMgr->GetState(bot->GetGUID()) > LFG_STATE_QUEUED)
         return false;
 
+    if (RTG_IsQueuedLfgBot(bot))
+        RTG_ApplyDungeonDeserter(bot);
+
     WorldPacket* packet = new WorldPacket(CMSG_LFG_LEAVE);
     bot->GetSession()->QueuePacket(packet);
-    // sLFGMgr->LeaveLfg(bot->GetGUID());
     return true;
 }
 
