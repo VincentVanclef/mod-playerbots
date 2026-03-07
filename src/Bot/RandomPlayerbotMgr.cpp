@@ -179,21 +179,30 @@ namespace
 		if (addData.empty())
 			return false;
 
-		// Expected format examples:
-		// rtg_lfg:0:19
-		// rtg_lfg:0:19:8
-		// rtg_lfg:1:19:4
-		// team : level : role(optional)
+		// Expected format:
+		// rtg_lfg:team:level:role
 
-		std::vector<std::string> parts = Acore::Tokenize(addData, ':', true);
-		if (parts.size() < 3)
+		size_t p1 = addData.find(':');
+		if (p1 == std::string::npos)
 			return false;
 
-		if (parts[0] != "rtg_lfg")
+		size_t p2 = addData.find(':', p1 + 1);
+		if (p2 == std::string::npos)
 			return false;
 
-		if (parts.size() >= 4)
-			desiredRole = uint32(std::strtoul(parts[3].c_str(), nullptr, 10));
+		size_t p3 = addData.find(':', p2 + 1);
+		if (p3 == std::string::npos)
+			return false;
+
+		std::string prefix = addData.substr(0, p1);
+		if (prefix != "rtg_lfg")
+			return false;
+
+		std::string roleStr = addData.substr(p3 + 1);
+		if (roleStr.empty())
+			return false;
+
+		desiredRole = uint32(std::strtoul(roleStr.c_str(), nullptr, 10));
 
 		return true;
 	}
