@@ -3115,7 +3115,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
         {
             uint32 existing = GetEventValue(0, "rtg_bg_start");
             uint32 refillNow = static_cast<uint32>(time(nullptr));
-            uint32 start = existing ? existing : now;
+            uint32 start = existing ? existing : refillNow;
             SetEventValue(0, "rtg_bg_start", start, ttl);
         }
         else
@@ -3249,7 +3249,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             if (it == requests.end())
             {
                 requests[owner] = refill;
-                SetEventValue(owner, "rtg_lfg_start", refillNow > sPlayerbotAIConfig.rtgQueueGraceSeconds ? refillNow - sPlayerbotAIConfig.rtgQueueGraceSeconds : refillNow, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120, RTG_MakeLfgAddData(refill.team, refill.level, 0, refill.owner));
+                SetEventValue(owner, "rtg_lfg_start", now > sPlayerbotAIConfig.rtgQueueGraceSeconds ? now - sPlayerbotAIConfig.rtgQueueGraceSeconds : now, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120, RTG_MakeLfgAddData(refill.team, refill.level, 0, refill.owner));
             }
             else
             {
@@ -3261,7 +3261,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             }
         }
 
-        uint32 now = static_cast<uint32>(time(nullptr));
+        uint32 solverNow = static_cast<uint32>(time(nullptr));
         uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
         uint32 desiredHelperTotal = 0;
         bool anyReady = false;
@@ -3271,7 +3271,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         {
             QueueRequest const& req = kv.second;
             uint32 existingStart = GetEventValue(req.owner, "rtg_lfg_start");
-            uint32 startTs = existingStart ? existingStart : now;
+            uint32 startTs = existingStart ? existingStart : solverNow;
             SetEventValue(req.owner, "rtg_lfg_start", startTs, ttl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
 
             uint32 helperNeed = 0;
