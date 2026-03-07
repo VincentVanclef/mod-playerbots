@@ -63,11 +63,17 @@ namespace
         }
     }
 	
-	static void RTG_ApplyDungeonDeserter(Player* bot)
+	static void RTG_ClearQueuePenaltyAuras(Player* bot)
 	{
-		uint32 const spellId = 71041; // Dungeon Deserter
-		if (bot && !bot->HasAura(spellId))
-			bot->CastSpell(bot, spellId, true);
+		if (!bot)
+			return;
+
+		static uint32 const penaltySpells[] = {71041, 71328};
+		for (uint32 spellId : penaltySpells)
+		{
+			if (bot->HasAura(spellId))
+				bot->RemoveAurasDueToSpell(spellId);
+		}
 	}
 
     static uint32 RTG_ActualRoleForBot(Player* bot)
@@ -148,6 +154,9 @@ uint32 LfgJoinAction::GetRoles()
 bool LfgJoinAction::JoinLFG()
 {
     static std::unordered_map<uint32, time_t> rtgNextJoinAttempt;
+
+    if (sRandomPlayerbotMgr.IsRandomBot(bot))
+        RTG_ClearQueuePenaltyAuras(bot);
 
     // check if already in lfg
     LfgState state = sLFGMgr->GetState(bot->GetGUID());
@@ -380,7 +389,7 @@ bool LfgLeaveAction::Execute(Event event)
         return false;
 
     if (RTG_IsQueuedLfgBot(bot))
-        RTG_ApplyDungeonDeserter(bot);
+        RTG_ClearQueuePenaltyAuras(bot);
 
     WorldPacket* packet = new WorldPacket(CMSG_LFG_LEAVE);
     bot->GetSession()->QueuePacket(packet);
