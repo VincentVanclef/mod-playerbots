@@ -17,14 +17,41 @@
 #include "SpellMgr.h"
 #include "Unit.h"
 
-void PossibleTargetsValue::FindUnits(std::list<Unit*>& targets)
+namespace
 {
-    Acore::AnyUnfriendlyUnitInObjectRangeCheck u_check(bot, bot, range);
-    Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(bot, targets, u_check);
-    Cell::VisitObjects(bot, searcher, range);
+float RTG_GetPossibleTargetRange(Player* bot, PlayerbotAI* botAI, float baseRange)
+{
+    if (!bot || !botAI)
+        return baseRange;
+
+    // Stay means hold position and do not proactively search for pull targets.
+    if (botAI->HasStrategy("stay", BOT_STATE_NON_COMBAT))
+        return 0.0f;
+
+    // Tanks may proactively look farther ahead only while following.
+    if (botAI->IsTank(bot) && botAI->HasStrategy("follow", BOT_STATE_NON_COMBAT))
+        return std::max(baseRange, 150.0f);
+
+    return baseRange;
+}
 }
 
-bool PossibleTargetsValue::AcceptUnit(Unit* unit) { return AttackersValue::IsPossibleTarget(unit, bot, range); }
+void PossibleTargetsValue::FindUnits(std::list<Unit*>& targets)
+{
+    float const effectiveRange = RTG_GetPossibleTargetRange(bot, botAI, range);
+    if (effectiveRange <= 0.0f)
+        return;
+
+    Acore::AnyUnfriendlyUnitInObjectRangeCheck u_check(bot, bot, effectiveRange);
+    Acore::UnitListSearcher<Acore::AnyUnfriendlyUnitInObjectRangeCheck> searcher(bot, targets, u_check);
+    Cell::VisitObjects(bot, searcher, effectiveRange);
+}
+
+bool PossibleTargetsValue::AcceptUnit(Unit* unit)
+{
+    float const effectiveRange = RTG_GetPossibleTargetRange(bot, botAI, range);
+    return effectiveRange > 0.0f && AttackersValue::IsPossibleTarget(unit, bot, effectiveRange);
+}
 
 void PossibleTriggersValue::FindUnits(std::list<Unit*>& targets)
 {

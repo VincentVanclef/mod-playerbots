@@ -41,6 +41,11 @@ bool AttackAnythingAction::isUseful()
     if (botAI->HasStrategy("stay", BOT_STATE_NON_COMBAT))
         return false;
 
+    // RTG: tanks should only auto-pull while explicitly following.
+    // When parked on stay or otherwise not following, keep them passive.
+    if (botAI->IsTank(bot) && !botAI->HasStrategy("follow", BOT_STATE_NON_COMBAT))
+        return false;
+
     if (bot->IsInCombat())
         return false;
 
