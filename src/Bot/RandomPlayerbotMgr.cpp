@@ -114,43 +114,63 @@ namespace
         return lfg::PLAYER_ROLE_DAMAGE;
     }
 
-    static uint32 RTG_ActualRoleForBot(Player* bot)
-    {
-        uint8 spec = AiFactory::GetPlayerSpecTab(bot);
-        switch (bot->getClass())
-        {
-            case CLASS_DRUID:
-                if (spec == DRUID_TAB_RESTORATION)
-                    return lfg::PLAYER_ROLE_HEALER;
-                if (spec == DRUID_TAB_FERAL)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_PALADIN:
-                if (spec == PALADIN_TAB_HOLY)
-                    return lfg::PLAYER_ROLE_HEALER;
-                if (spec == PALADIN_TAB_PROTECTION)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_PRIEST:
-                if (spec == PRIEST_TAB_SHADOW)
-                    return lfg::PLAYER_ROLE_DAMAGE;
-                return lfg::PLAYER_ROLE_HEALER;
-            case CLASS_SHAMAN:
-                if (spec == SHAMAN_TAB_RESTORATION)
-                    return lfg::PLAYER_ROLE_HEALER;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_WARRIOR:
-                if (spec == WARRIOR_TAB_PROTECTION)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_DEATH_KNIGHT:
-                if (spec == DEATH_KNIGHT_TAB_BLOOD)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            default:
-                return lfg::PLAYER_ROLE_DAMAGE;
-        }
-    }
+    static uint32 RTG_GetActualSpecRole(Player* bot)
+	{
+		if (!bot)
+			return lfg::PLAYER_ROLE_DAMAGE;
+
+		uint8 cls = bot->getClass();
+		uint32 spec = bot->GetActiveSpec();
+
+		// If your helper returns a talent tab index for the active spec, use that.
+		// 3.3.5 tab indexes:
+		// Druid: 0 Balance, 1 Feral, 2 Restoration
+		// Paladin: 0 Holy, 1 Protection, 2 Retribution
+		// Priest: 0 Discipline, 1 Holy, 2 Shadow
+		// Shaman: 0 Elemental, 1 Enhancement, 2 Restoration
+		// Warrior: 0 Arms, 1 Fury, 2 Protection
+		// Death Knight: 0 Blood, 1 Frost, 2 Unholy
+
+		switch (cls)
+		{
+			case CLASS_DRUID:
+				if (spec == 2) // Restoration
+					return lfg::PLAYER_ROLE_HEALER;
+				if (spec == 1) // Feral
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			case CLASS_PALADIN:
+				if (spec == 0) // Holy
+					return lfg::PLAYER_ROLE_HEALER;
+				if (spec == 1) // Protection
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			case CLASS_PRIEST:
+				if (spec == 2) // Shadow
+					return lfg::PLAYER_ROLE_DAMAGE;
+				return lfg::PLAYER_ROLE_HEALER;
+
+			case CLASS_SHAMAN:
+				if (spec == 2) // Restoration
+					return lfg::PLAYER_ROLE_HEALER;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			case CLASS_WARRIOR:
+				if (spec == 2) // Protection
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			case CLASS_DEATH_KNIGHT:
+				if (spec == 0) // Blood
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			default:
+				return lfg::PLAYER_ROLE_DAMAGE;
+		}
+	}
 }
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
@@ -906,271 +926,329 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     // If event-driven mode is on and we're above target (often 0), mark a few
     // bots for logout quickly so they go offline when not needed.
     // ------------------------------------------------------------------
-    if (sPlayerbotAIConfig.rtgEventDriven && onlineBotCount > maxAllowedBotCount)
-    {
-        uint32 over = onlineBotCount - maxAllowedBotCount;
-        uint32 toLogout = std::min<uint32>(over, std::max<uint32>(1u, sPlayerbotAIConfig.randomBotsPerInterval));
-        std::vector<ObjectGuid> rtgShrinkLogout;
+	if (sPlayerbotAIConfig.rtgEventDriven && onlineBotCount > maxAllowedBotCount)
+	{
+		uint32 over = onlineBotCount - maxAllowedBotCount;
+		uint32 toLogout = std::min<uint32>(over, std::max<uint32>(1u, sPlayerbotAIConfig.randomBotsPerInterval));
+		std::vector<ObjectGuid> rtgShrinkLogout;
 
-        for (auto const& kv : playerBots)
-        {
-            if (!toLogout)
-                break;
+		for (auto const& kv : playerBots)
+		{
+			if (!toLogout)
+				break;
 
-            ObjectGuid botGuid = kv.first;
-            Player* bot = kv.second;
-            if (!bot || !bot->IsInWorld())
-                continue;
+			ObjectGuid botGuid = kv.first;
+			Player* bot = kv.second;
+			if (!bot || !bot->IsInWorld())
+				continue;
 
-            // Don't disrupt active gameplay
-            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
-                continue;
+			uint32 botId = botGuid.GetCounter();
 
-            lfg::LfgState lfgState = sLFGMgr->GetState(bot->GetGUID());
-            if (lfgState != lfg::LFG_STATE_NONE && lfgState < lfg::LFG_STATE_DUNGEON)
-                continue;
+			// Never shrink active BG participants
+			if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+				continue;
 
-            uint32 botId = botGuid.GetCounter();
-            if (GetEventValue(botId, "rtg_dungeon_active"))
-                continue;
+			// Never shrink bots that are actively queued for LFG or already in dungeon state
+			lfg::LfgState lfgState = sLFGMgr->GetState(bot->GetGUID());
+			if (lfgState != lfg::LFG_STATE_NONE)
+				continue;
 
-            if (Group* grp = bot->GetGroup())
-            {
-                if (grp->isLFGGroup())
-                {
-                    SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-                    continue;
-                }
-            }
+			if (GetEventValue(botId, "rtg_dungeon_active"))
+				continue;
 
-            Map* map = bot->GetMap();
-            if (map && (map->IsDungeon() || map->IsRaid()))
-                continue;
+			Group* grp = bot->GetGroup();
+			if (grp)
+			{
+				if (grp->isLFGGroup())
+				{
+					SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+					continue;
+				}
 
-            if (bot->GetGroup())
-            {
-                if (bot->GetGroup()->isLFGGroup())
-                {
-                    SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-                    continue;
-                }
+				// Keep grouped bots alive longer for wipe/recovery transitions
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				continue;
+			}
 
-                // RTG: if the bot is still grouped during post-queue cleanup,
-                // keep it around longer to survive wipe/recovery transitions.
-                SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-                continue;
-            }
+			Map* map = bot->GetMap();
+			if (map && (map->IsDungeon() || map->IsRaid()))
+				continue;
 
-            if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-                continue;
+			if (bot->isDead() || bot->GetCorpse())
+				continue;
 
-            SetEventValue(botId, "add", 0, 0);
-            currentBots.remove(botId);
-            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-            rtgShrinkLogout.push_back(botGuid);
-            --toLogout;
-        }
+			if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+				continue;
 
-        for (ObjectGuid const& botGuid : rtgShrinkLogout)
-            LogoutPlayerBot(botGuid);
-    }
+			SetEventValue(botId, "add", 0, 0);
+			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+			currentBots.remove(botId);
+			rtgShrinkLogout.push_back(botGuid);
+			--toLogout;
+		}
+
+		for (ObjectGuid const& botGuid : rtgShrinkLogout)
+			LogoutPlayerBot(botGuid.GetCounter());
+	}
 
 
-    // If RTG queue demand has vanished, aggressively clear temporary queue-fill bots
-    // that are not actually inside a dungeon run. This keeps idle leftovers from
-    // hanging around and interacting with unrelated update paths.
-    if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand)
-    {
-        std::vector<ObjectGuid> rtgIdleLogout;
+	// If RTG queue demand has vanished, clear temporary queue-fill bots
+	// that are not actually inside a dungeon run or actively queued.
+	if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand)
+	{
+		std::vector<ObjectGuid> rtgIdleLogout;
+		std::vector<ObjectGuid> rtgStaleQueueBots;
 
-        for (auto const& kv : playerBots)
-        {
-            Player* bot = kv.second;
-            if (!bot || !bot->IsInWorld())
-                continue;
+		for (auto const& kv : playerBots)
+		{
+			ObjectGuid botGuid = kv.first;
+			Player* bot = kv.second;
+			if (!bot || !bot->IsInWorld())
+				continue;
 
-            uint32 botId = kv.first.GetCounter();
-            std::string addData = GetEventData(botId, "add");
-            if (!RTG_HasPrefix(addData, "rtg_lfg:"))
-                continue;
+			uint32 botId = botGuid.GetCounter();
+			std::string addData = GetEventData(botId, "add");
+			if (!RTG_HasPrefix(addData, "rtg_lfg:"))
+				continue;
 
-            Map* map = bot->GetMap();
-            if (map && (map->IsDungeon() || map->IsRaid()))
-                continue;
+			Map* map = bot->GetMap();
+			if (map && (map->IsDungeon() || map->IsRaid()))
+			{
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				continue;
+			}
 
-            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
-                continue;
+			if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+				continue;
 
-            if (desiredRole)
-            {
-                uint32 actualRole = RTG_ActualRoleForBot(bot);
-                if (actualRole != desiredRole)
-                {
-                    SetEventValue(botId, "add", 0, 0);
-                    SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                    currentBots.remove(botId);
-                    rtgStaleQueueBots.push_back(bot->GetGUID());
-                    continue;
-                }
-            }
+			uint32 desiredRole = 0;
+			RTG_ParseLfgDesiredRole(addData, desiredRole);
 
-            lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
-            if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
-            {
-                SetEventValue(botId, "rtg_lfg_pending", 1, 300, addData);
-                continue;
-            }
+			if (desiredRole)
+			{
+				uint32 actualRole = RTG_ActualRoleForBot(bot);
+				if (actualRole != desiredRole)
+				{
+					SetEventValue(botId, "add", 0, 0);
+					SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+					currentBots.remove(botId);
+					rtgStaleQueueBots.push_back(botGuid);
+					continue;
+				}
+			}
 
-            if (bot->GetGroup())
-            {
-                if (bot->GetGroup()->isLFGGroup())
-                {
-                    SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-                    continue;
-                }
-                continue;
-            }
+			lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
 
-            if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-                continue;
+			// If the bot is queued, leave it alone and refresh patience
+			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
+			{
+				SetEventValue(botId, "rtg_lfg_pending", 1, 300, addData);
+				continue;
+			}
 
-            SetEventValue(botId, "add", 0, 0);
-            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-            currentBots.remove(botId);
-            rtgIdleLogout.push_back(bot->GetGUID());
-        }
+			Group* grp = bot->GetGroup();
+			if (grp)
+			{
+				if (grp->isLFGGroup())
+				{
+					SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+					continue;
+				}
 
-        for (ObjectGuid const& botGuid : rtgIdleLogout)
-            LogoutPlayerBot(botGuid);
-    }
+				// grouped but not LFG group - preserve a bit longer
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				continue;
+			}
+
+			if (bot->isDead() || bot->GetCorpse())
+			{
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				continue;
+			}
+
+			if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+				continue;
+
+			SetEventValue(botId, "add", 0, 0);
+			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+			currentBots.remove(botId);
+			rtgIdleLogout.push_back(botGuid);
+		}
+
+		for (ObjectGuid const& guid : rtgStaleQueueBots)
+		{
+			if (Player* staleBot = GetPlayerBot(guid))
+				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
+
+			LogoutPlayerBot(guid.GetCounter());
+		}
+
+		for (ObjectGuid const& botGuid : rtgIdleLogout)
+			LogoutPlayerBot(botGuid.GetCounter());
+	}
 
 
+	// RTG: replace queue-fill bots that made it online but never actually joined LFG.
+	// Count only bots that are truly queued (or still within a pending window)
+	// toward shortage satisfaction. Stale bots are logged out and replaced.
+	if (sPlayerbotAIConfig.rtgEventDriven)
+	{
+		std::vector<ObjectGuid> rtgStaleQueueBots;
 
-    // RTG: replace queue-fill bots that made it online but never actually joined LFG.
-    // Count only bots that are truly queued (or still within a short pending window)
-    // toward shortage satisfaction. Stale bots are logged out and replaced.
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        std::vector<ObjectGuid> rtgStaleQueueBots;
+		for (auto const& kv : playerBots)
+		{
+			ObjectGuid botGuid = kv.first;
+			Player* bot = kv.second;
+			if (!bot || !bot->IsInWorld())
+				continue;
 
-        for (auto const& kv : playerBots)
-        {
-            Player* bot = kv.second;
-            if (!bot || !bot->IsInWorld())
-                continue;
+			uint32 botId = botGuid.GetCounter();
+			std::string addData = GetEventData(botId, "add");
 
-            uint32 botId = kv.first.GetCounter();
-            std::string addData = GetEventData(botId, "add");
-            uint32 desiredTeam = 0;
-            uint32 desiredLevel = 0;
-            uint32 desiredRole = 0;
-            if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole))
-                continue;
+			uint32 desiredTeam = 0;
+			uint32 desiredLevel = 0;
+			uint32 desiredRole = 0;
+			if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole))
+				continue;
 
-            Map* map = bot->GetMap();
-            if (map && (map->IsDungeon() || map->IsRaid()))
-            {
-                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                continue;
-            }
+			Map* map = bot->GetMap();
+			if (map && (map->IsDungeon() || map->IsRaid()))
+			{
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				continue;
+			}
 
-            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
-                continue;
+			if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+				continue;
 
-            if (bot->GetTeamId() != desiredTeam || bot->GetLevel() != desiredLevel)
-            {
-                SetEventValue(botId, "add", 0, 0);
-                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                currentBots.remove(botId);
-                rtgStaleQueueBots.push_back(bot->GetGUID());
-                continue;
-            }
+			Group* grp = bot->GetGroup();
+			if (grp && grp->isLFGGroup())
+			{
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				continue;
+			}
 
-            lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
-            if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
-            {
-                if (desiredRole)
-                {
-                    uint32 actualRoles = sLFGMgr->GetRoles(bot->GetGUID());
-                    if ((actualRoles & desiredRole) == 0)
-                    {
-                        SetEventValue(botId, "add", 0, 0);
-                        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                        currentBots.remove(botId);
-                        rtgStaleQueueBots.push_back(bot->GetGUID());
-                        continue;
-                    }
-                }
-                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                continue;
-            }
+			if (bot->GetTeamId() != desiredTeam || bot->GetLevel() != desiredLevel)
+			{
+				SetEventValue(botId, "add", 0, 0);
+				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				currentBots.remove(botId);
+				rtgStaleQueueBots.push_back(botGuid);
+				continue;
+			}
 
-            if (GetEventValue(botId, "rtg_lfg_pending"))
-            {
-                SetEventValue(botId, "rtg_lfg_pending", 1, 300, addData);
-                continue;
-            }
+			lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
 
-            if (bot->GetGroup())
-                continue;
+			// If the bot is actively queued, do not recycle it
+			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
+			{
+				if (desiredRole)
+				{
+					uint32 actualRoles = sLFGMgr->GetRoles(bot->GetGUID());
+					if ((actualRoles & desiredRole) == 0)
+					{
+						SetEventValue(botId, "add", 0, 0);
+						SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+						currentBots.remove(botId);
+						rtgStaleQueueBots.push_back(botGuid);
+						continue;
+					}
+				}
 
-            if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-                continue;
+				SetEventValue(botId, "rtg_lfg_pending", 1, 300, addData);
+				continue;
+			}
 
-            SetEventValue(botId, "add", 0, 0);
-            currentBots.remove(botId);
-            rtgStaleQueueBots.push_back(bot->GetGUID());
-        }
+			// Pending bots get more patience
+			if (GetEventValue(botId, "rtg_lfg_pending"))
+			{
+				SetEventValue(botId, "rtg_lfg_pending", 1, 300, addData);
+				continue;
+			}
 
-        for (ObjectGuid const& botGuid : rtgStaleQueueBots)
-            LogoutPlayerBot(botGuid);
-    }
+			if (grp)
+			{
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				continue;
+			}
 
-    // RTG: cleanup finished/abandoned dungeon-session bots only after they are
-    // truly out of the run for a while. This preserves bots through wipes.
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        uint32 now = NowSeconds();
-        std::vector<ObjectGuid> rtgFinishedDungeonLogout;
+			if (bot->isDead() || bot->GetCorpse())
+			{
+				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				continue;
+			}
 
-        for (auto const& kv : playerBots)
-        {
-            Player* bot = kv.second;
-            if (!bot || !bot->IsInWorld())
-                continue;
+			if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+				continue;
 
-            uint32 botId = kv.first.GetCounter();
-            uint32 activeSince = GetEventValue(botId, "rtg_dungeon_active");
-            if (!activeSince)
-                continue;
+			SetEventValue(botId, "add", 0, 0);
+			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+			currentBots.remove(botId);
+			rtgStaleQueueBots.push_back(botGuid);
+		}
 
-            Map* map = bot->GetMap();
-            Group* group = bot->GetGroup();
-            bool stillInRun = (map && (map->IsDungeon() || map->IsRaid())) ||
-                              (group && group->isLFGGroup()) ||
-                              bot->isDead() || bot->IsInCombat() || bot->IsBeingTeleported() ||
-                              bot->HasUnitState(UNIT_STATE_IN_FLIGHT) ||
-                              bot->GetCorpse() ||
-                              (group && !group->GetMemberSlots().empty());
-            if (stillInRun)
-            {
-                SetEventValue(botId, "rtg_dungeon_active", now, 7200);
-                continue;
-            }
+		for (ObjectGuid const& botGuid : rtgStaleQueueBots)
+		{
+			if (Player* staleBot = GetPlayerBot(botGuid))
+				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
 
-            if (now <= activeSince + 300)
-                continue;
+			LogoutPlayerBot(botGuid.GetCounter());
+		}
+	}
 
-            SetEventValue(botId, "rtg_dungeon_active", 0, 0);
-            SetEventValue(botId, "add", 0, 0);
-            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-            currentBots.remove(botId);
-            rtgFinishedDungeonLogout.push_back(bot->GetGUID());
-        }
 
-        for (ObjectGuid const& botGuid : rtgFinishedDungeonLogout)
-            LogoutPlayerBot(botGuid);
-    }
+	// RTG: cleanup finished/abandoned dungeon-session bots only after they are
+	// truly out of the run for a while. This preserves bots through wipes.
+	if (sPlayerbotAIConfig.rtgEventDriven)
+	{
+		uint32 now = NowSeconds();
+		std::vector<ObjectGuid> rtgFinishedDungeonLogout;
+
+		for (auto const& kv : playerBots)
+		{
+			ObjectGuid botGuid = kv.first;
+			Player* bot = kv.second;
+			if (!bot || !bot->IsInWorld())
+				continue;
+
+			uint32 botId = botGuid.GetCounter();
+			uint32 activeSince = GetEventValue(botId, "rtg_dungeon_active");
+			if (!activeSince)
+				continue;
+
+			Map* map = bot->GetMap();
+			Group* group = bot->GetGroup();
+
+			bool stillInRun =
+				(map && (map->IsDungeon() || map->IsRaid())) ||
+				(group && group->isLFGGroup()) ||
+				bot->isDead() ||
+				bot->GetCorpse() ||
+				bot->IsInCombat() ||
+				bot->IsBeingTeleported() ||
+				bot->HasUnitState(UNIT_STATE_IN_FLIGHT);
+
+			if (stillInRun)
+			{
+				SetEventValue(botId, "rtg_dungeon_active", now, 7200);
+				continue;
+			}
+
+			if (now <= activeSince + 300)
+				continue;
+
+			SetEventValue(botId, "rtg_dungeon_active", 0, 0);
+			SetEventValue(botId, "add", 0, 0);
+			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+			currentBots.remove(botId);
+			rtgFinishedDungeonLogout.push_back(botGuid);
+		}
+
+		for (ObjectGuid const& botGuid : rtgFinishedDungeonLogout)
+			LogoutPlayerBot(botGuid.GetCounter());
+	}
 
 // ---------------------------------------------------------
 // Seed replacement: keep open-world population steady even when
