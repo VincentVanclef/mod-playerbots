@@ -60,6 +60,13 @@ namespace
 bool BGJoinAction::Execute(Event event)
 {
     uint32 queueType = AI_VALUE(uint32, "bg type");
+    if (!queueType)
+    {
+        uint32 assignedQueueType = 0;
+        if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType)
+            queueType = assignedQueueType;
+    }
+
     if (!queueType)  // force join to fill bg
     {
         if (bgList.empty())
