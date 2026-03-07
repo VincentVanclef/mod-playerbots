@@ -113,6 +113,44 @@ namespace
             return lfg::PLAYER_ROLE_TANK;
         return lfg::PLAYER_ROLE_DAMAGE;
     }
+
+    static uint32 RTG_ActualRoleForBot(Player* bot)
+    {
+        uint8 spec = AiFactory::GetPlayerSpecTab(bot);
+        switch (bot->getClass())
+        {
+            case CLASS_DRUID:
+                if (spec == DRUID_TAB_RESTORATION)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (spec == DRUID_TAB_FERAL)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PALADIN:
+                if (spec == PALADIN_TAB_HOLY)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (spec == PALADIN_TAB_PROTECTION)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PRIEST:
+                if (spec == PRIEST_TAB_SHADOW)
+                    return lfg::PLAYER_ROLE_DAMAGE;
+                return lfg::PLAYER_ROLE_HEALER;
+            case CLASS_SHAMAN:
+                if (spec == SHAMAN_TAB_RESTORATION)
+                    return lfg::PLAYER_ROLE_HEALER;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_WARRIOR:
+                if (spec == WARRIOR_TAB_PROTECTION)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_DEATH_KNIGHT:
+                if (spec == DEATH_KNIGHT_TAB_BLOOD)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            default:
+                return lfg::PLAYER_ROLE_DAMAGE;
+        }
+    }
 }
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
@@ -896,12 +934,32 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (GetEventValue(botId, "rtg_dungeon_active"))
                 continue;
 
+            if (Group* grp = bot->GetGroup())
+            {
+                if (grp->isLFGGroup())
+                {
+                    SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+                    continue;
+                }
+            }
+
             Map* map = bot->GetMap();
             if (map && (map->IsDungeon() || map->IsRaid()))
                 continue;
 
             if (bot->GetGroup())
+            {
+                if (bot->GetGroup()->isLFGGroup())
+                {
+                    SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+                    continue;
+                }
+
+                // RTG: if the bot is still grouped during post-queue cleanup,
+                // keep it around longer to survive wipe/recovery transitions.
+                SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
                 continue;
+            }
 
             if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                 continue;
@@ -943,6 +1001,19 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
                 continue;
 
+            if (desiredRole)
+            {
+                uint32 actualRole = RTG_ActualRoleForBot(bot);
+                if (actualRole != desiredRole)
+                {
+                    SetEventValue(botId, "add", 0, 0);
+                    SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                    currentBots.remove(botId);
+                    rtgStaleQueueBots.push_back(bot->GetGUID());
+                    continue;
+                }
+            }
+
             lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
             if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
             {
@@ -951,7 +1022,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
 
             if (bot->GetGroup())
+            {
+                if (bot->GetGroup()->isLFGGroup())
+                {
+                    SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+                    continue;
+                }
                 continue;
+            }
 
             if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                 continue;
@@ -1070,7 +1148,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             Group* group = bot->GetGroup();
             bool stillInRun = (map && (map->IsDungeon() || map->IsRaid())) ||
                               (group && group->isLFGGroup()) ||
-                              bot->isDead() || bot->IsInCombat() || bot->IsBeingTeleported();
+                              bot->isDead() || bot->IsInCombat() || bot->IsBeingTeleported() ||
+                              bot->HasUnitState(UNIT_STATE_IN_FLIGHT) ||
+                              bot->GetCorpse() ||
+                              (group && !group->GetMemberSlots().empty());
             if (stillInRun)
             {
                 SetEventValue(botId, "rtg_dungeon_active", now, 7200);
@@ -1889,7 +1970,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (GetEventValue(botId, "rtg_lfg_pending"))
                 {
                     ++it->second.existingQueuedBots;
-                    uint32 roleToCount = desiredRole ? desiredRole : lfg::PLAYER_ROLE_DAMAGE;
+                    uint32 roleToCount = RTG_ActualRoleForBot(queuedBot);
+                    if (desiredRole && roleToCount != desiredRole)
+                        roleToCount = desiredRole;
                     if (roleToCount == lfg::PLAYER_ROLE_TANK)
                         ++it->second.tankCount;
                     else if (roleToCount == lfg::PLAYER_ROLE_HEALER)

@@ -14,6 +14,8 @@
 #include "World.h"
 #include "WorldPacket.h"
 
+#include <unordered_map>
+
 using namespace lfg;
 
 namespace
@@ -50,15 +52,65 @@ namespace
     {
         switch (role)
         {
-            case PLAYER_ROLE_TANK:
+            case lfg::PLAYER_ROLE_TANK:
                 return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_DEATH_KNIGHT;
-            case PLAYER_ROLE_HEALER:
+            case lfg::PLAYER_ROLE_HEALER:
                 return cls == CLASS_PRIEST || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_SHAMAN;
-            case PLAYER_ROLE_DAMAGE:
+            case lfg::PLAYER_ROLE_DAMAGE:
                 return true;
             default:
                 return false;
         }
+    }
+
+    static uint32 RTG_ActualRoleForBot(Player* bot)
+    {
+        uint8 spec = AiFactory::GetPlayerSpecTab(bot);
+        switch (bot->getClass())
+        {
+            case CLASS_DRUID:
+                if (spec == DRUID_TAB_RESTORATION)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (spec == DRUID_TAB_FERAL)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PALADIN:
+                if (spec == PALADIN_TAB_HOLY)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (spec == PALADIN_TAB_PROTECTION)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PRIEST:
+                if (spec == PRIEST_TAB_SHADOW)
+                    return lfg::PLAYER_ROLE_DAMAGE;
+                return lfg::PLAYER_ROLE_HEALER;
+            case CLASS_SHAMAN:
+                if (spec == SHAMAN_TAB_RESTORATION)
+                    return lfg::PLAYER_ROLE_HEALER;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_WARRIOR:
+                if (spec == WARRIOR_TAB_PROTECTION)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_DEATH_KNIGHT:
+                if (spec == DEATH_KNIGHT_TAB_BLOOD)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            default:
+                return lfg::PLAYER_ROLE_DAMAGE;
+        }
+    }
+
+    static bool RTG_IsQueuedLfgBot(Player* bot)
+    {
+        return RTG_HasPrefix(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), "rtg_lfg:");
+    }
+
+    static void RTG_ApplyDungeonDeserter(Player* bot)
+    {
+        uint32 const spellId = 71041; // Dungeon Deserter
+        if (bot && !bot->HasAura(spellId))
+            bot->CastSpell(bot, spellId, true);
     }
 }
 
@@ -69,80 +121,46 @@ uint32 LfgJoinAction::GetRoles()
     if (!sRandomPlayerbotMgr.IsRandomBot(bot))
     {
         if (botAI->IsTank(bot))
-            return PLAYER_ROLE_TANK;
+            return lfg::PLAYER_ROLE_TANK;
         if (botAI->IsHeal(bot))
-            return PLAYER_ROLE_HEALER;
-        else
-            return PLAYER_ROLE_DAMAGE;
+            return lfg::PLAYER_ROLE_HEALER;
+        return lfg::PLAYER_ROLE_DAMAGE;
     }
+
+    uint32 actualRole = RTG_ActualRoleForBot(bot);
 
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 desiredRole = 0;
-        if (RTG_ParseLfgDesiredRole(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), desiredRole) &&
-            desiredRole && RTG_ClassCanRole(bot->getClass(), desiredRole))
-            return desiredRole;
+        if (RTG_ParseLfgDesiredRole(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), desiredRole) && desiredRole)
+        {
+            if (desiredRole != actualRole)
+            {
+                LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, using actual role", bot->GetGUID().ToString().c_str(),
+                         bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), desiredRole, actualRole);
+            }
+        }
     }
 
-    uint8 spec = AiFactory::GetPlayerSpecTab(bot);
-    switch (bot->getClass())
-    {
-        case CLASS_DRUID:
-            if (spec == 2)
-                return PLAYER_ROLE_HEALER;
-            else if (spec == 1 && bot->HasAura(16931) /* thick hide */)
-                return PLAYER_ROLE_TANK;
-            else
-                return PLAYER_ROLE_DAMAGE;
-            break;
-        case CLASS_PALADIN:
-            if (spec == 1)
-                return PLAYER_ROLE_TANK;
-            else if (!spec)
-                return PLAYER_ROLE_HEALER;
-            else
-                return PLAYER_ROLE_DAMAGE;
-            break;
-        case CLASS_PRIEST:
-            if (spec != 2)
-                return PLAYER_ROLE_HEALER;
-            else
-                return PLAYER_ROLE_DAMAGE;
-            break;
-        case CLASS_SHAMAN:
-            if (spec == 2)
-                return PLAYER_ROLE_HEALER;
-            else
-                return PLAYER_ROLE_DAMAGE;
-            break;
-        case CLASS_WARRIOR:
-            if (spec == 2)
-                return PLAYER_ROLE_TANK;
-            else
-                return PLAYER_ROLE_DAMAGE;
-            break;
-        case CLASS_DEATH_KNIGHT:
-            if (spec == 0)
-                return PLAYER_ROLE_TANK;
-            else
-                return PLAYER_ROLE_DAMAGE;
-            break;
-
-        default:
-            return PLAYER_ROLE_DAMAGE;
-            break;
-    }
-
-    return PLAYER_ROLE_DAMAGE;
+    return actualRole;
 }
 
 bool LfgJoinAction::JoinLFG()
 {
+    static std::unordered_map<uint32, time_t> rtgNextJoinAttempt;
+
     // check if already in lfg
     LfgState state = sLFGMgr->GetState(bot->GetGUID());
     if (state != LFG_STATE_NONE)
+    {
+        rtgNextJoinAttempt.erase(bot->GetGUID().GetCounter());
         return false;
+    }
 
+    time_t now = time(nullptr);
+    auto attemptIt = rtgNextJoinAttempt.find(bot->GetGUID().GetCounter());
+    if (attemptIt != rtgNextJoinAttempt.end() && now < attemptIt->second)
+        return false;
 
     // ------------------------------------------------------------------
     // RTG: Event-driven LFG grace
@@ -155,7 +173,6 @@ bool LfgJoinAction::JoinLFG()
         if (!start)
             return false;
 
-        time_t now = time(nullptr);
         if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
             return false;
     }
@@ -237,6 +254,7 @@ bool LfgJoinAction::JoinLFG()
     *data << (uint8)3 << (uint8)0 << (uint8)0 << (uint8)0;
     *data << _gs;
     bot->GetSession()->QueuePacket(data);
+    rtgNextJoinAttempt[bot->GetGUID().GetCounter()] = now + (RTG_IsQueuedLfgBot(bot) ? 15 : 8);
 
     return true;
 }
@@ -272,13 +290,15 @@ bool LfgAcceptAction::Execute(Event event)
     // Try accept if already stored
     if (id)
     {
-        if (bot->IsInCombat() || bot->isDead())
+        if (!RTG_IsQueuedLfgBot(bot) && (bot->IsInCombat() || bot->isDead()))
         {
             WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
             *packet << id << false;
             bot->GetSession()->QueuePacket(packet);
             return true;
         }
+        if (RTG_IsQueuedLfgBot(bot))
+            bot->CombatStop(true);
 
         botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
         bot->ClearUnitState(UNIT_STATE_ALL_STATE);
@@ -307,13 +327,15 @@ bool LfgAcceptAction::Execute(Event event)
 
         if (id)
         {
-            if (bot->IsInCombat() || bot->isDead())
+            if (!RTG_IsQueuedLfgBot(bot) && (bot->IsInCombat() || bot->isDead()))
             {
                 WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
                 *packet << id << false;
                 bot->GetSession()->QueuePacket(packet);
                 return true;
             }
+            if (RTG_IsQueuedLfgBot(bot))
+                bot->CombatStop(true);
 
             botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
             bot->ClearUnitState(UNIT_STATE_ALL_STATE);
@@ -345,6 +367,9 @@ bool LfgLeaveAction::Execute(Event event)
     // Don't leave if already invited / in dungeon
     if (sLFGMgr->GetState(bot->GetGUID()) > LFG_STATE_QUEUED)
         return false;
+
+    if (RTG_IsQueuedLfgBot(bot))
+        RTG_ApplyDungeonDeserter(bot);
 
     WorldPacket* packet = new WorldPacket(CMSG_LFG_LEAVE);
     bot->GetSession()->QueuePacket(packet);
