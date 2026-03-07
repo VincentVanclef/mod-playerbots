@@ -212,17 +212,42 @@ namespace
 		if (!bot)
 			return lfg::PLAYER_ROLE_DAMAGE;
 
+		uint8 spec = AiFactory::GetPlayerSpecTab(bot);
 		switch (bot->getClass())
 		{
-			case CLASS_WARRIOR:
-			case CLASS_DEATH_KNIGHT:
-				return lfg::PLAYER_ROLE_TANK;
+			case CLASS_DRUID:
+				if (spec == DRUID_TAB_RESTORATION)
+					return lfg::PLAYER_ROLE_HEALER;
+				if (spec == DRUID_TAB_FERAL)
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			case CLASS_PALADIN:
+				if (spec == PALADIN_TAB_HOLY)
+					return lfg::PLAYER_ROLE_HEALER;
+				if (spec == PALADIN_TAB_PROTECTION)
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
 
 			case CLASS_PRIEST:
-			case CLASS_PALADIN:
-			case CLASS_SHAMAN:
-			case CLASS_DRUID:
+				if (spec == PRIEST_TAB_SHADOW)
+					return lfg::PLAYER_ROLE_DAMAGE;
 				return lfg::PLAYER_ROLE_HEALER;
+
+			case CLASS_SHAMAN:
+				if (spec == SHAMAN_TAB_RESTORATION)
+					return lfg::PLAYER_ROLE_HEALER;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			case CLASS_WARRIOR:
+				if (spec == WARRIOR_TAB_PROTECTION)
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
+
+			case CLASS_DEATH_KNIGHT:
+				if (spec == DEATH_KNIGHT_TAB_BLOOD)
+					return lfg::PLAYER_ROLE_TANK;
+				return lfg::PLAYER_ROLE_DAMAGE;
 
 			default:
 				return lfg::PLAYER_ROLE_DAMAGE;
@@ -4683,7 +4708,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
     {
         uint32 desiredTeam = 0;
         uint32 desiredLevel = 0;
-        if (RTG_ParseLfgAddData(GetEventData(bot->GetGUID().GetCounter(), "add"), desiredTeam, desiredLevel))
+        uint32 desiredRole = 0;
+        if (RTG_ParseLfgAddData(GetEventData(bot->GetGUID().GetCounter(), "add"), desiredTeam, desiredLevel, &desiredRole))
         {
             uint32 botTeam = bot->GetTeamId();
             if (desiredTeam && botTeam != desiredTeam)
@@ -4702,7 +4728,30 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
 
+            if (desiredRole)
+            {
+                uint32 actualRole = RTG_ActualRoleForBot(bot);
+                if (actualRole != desiredRole)
+                {
+                    LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual role {} on login, recycling immediately",
+                             bot->GetGUID().ToString().c_str(), bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(),
+                             bot->GetName().c_str(), desiredRole, actualRole);
+                    SetEventValue(bot->GetGUID().GetCounter(), "add", 0, 0);
+                    SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
+                    currentBots.remove(bot->GetGUID().GetCounter());
+                    LogoutPlayerBot(bot->GetGUID());
+                    return;
+                }
+            }
+
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 300, GetEventData(bot->GetGUID().GetCounter(), "add"));
+
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            {
+                botAI->ChangeStrategy("+lfg", BOT_STATE_NON_COMBAT);
+                botAI->ResetStrategies();
+                botAI->Reset();
+            }
         }
     }
 
