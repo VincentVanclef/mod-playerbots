@@ -45,7 +45,7 @@ static bool RTG_GroupNeedsUrgentHealing(Player* bot)
     for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
     {
         Player* member = ref->GetSource();
-        if (!member || !member->IsInWorld() || member->IsDead())
+        if (!member || !member->IsInWorld() || member->isDead())
             continue;
 
         if (member->GetHealthPct() < 95.0f)
