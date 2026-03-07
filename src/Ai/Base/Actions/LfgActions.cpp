@@ -105,13 +105,6 @@ namespace
     {
         return RTG_HasPrefix(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), "rtg_lfg:");
     }
-
-    static void RTG_ApplyDungeonDeserter(Player* bot)
-    {
-        uint32 const spellId = 71041; // Dungeon Deserter
-        if (bot && !bot->HasAura(spellId))
-            bot->CastSpell(bot, spellId, true);
-    }
 }
 
 bool LfgJoinAction::Execute(Event event) { return JoinLFG(); }
@@ -254,7 +247,16 @@ bool LfgJoinAction::JoinLFG()
     *data << (uint8)3 << (uint8)0 << (uint8)0 << (uint8)0;
     *data << _gs;
     bot->GetSession()->QueuePacket(data);
-    rtgNextJoinAttempt[bot->GetGUID().GetCounter()] = now + (RTG_IsQueuedLfgBot(bot) ? 15 : 8);
+
+    uint32 retryDelay = 8;
+    if (RTG_IsQueuedLfgBot(bot))
+    {
+        // Fresh RTG queue-fill bots should react quickly once they are online.
+        // Post-dungeon party bots should be calmer to avoid role-check / requeue spam.
+        retryDelay = bot->GetGroup() ? 10 : 2;
+    }
+
+    rtgNextJoinAttempt[bot->GetGUID().GetCounter()] = now + retryDelay;
 
     return true;
 }
@@ -367,9 +369,6 @@ bool LfgLeaveAction::Execute(Event event)
     // Don't leave if already invited / in dungeon
     if (sLFGMgr->GetState(bot->GetGUID()) > LFG_STATE_QUEUED)
         return false;
-
-    if (RTG_IsQueuedLfgBot(bot))
-        RTG_ApplyDungeonDeserter(bot);
 
     WorldPacket* packet = new WorldPacket(CMSG_LFG_LEAVE);
     bot->GetSession()->QueuePacket(packet);
