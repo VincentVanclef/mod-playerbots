@@ -171,6 +171,54 @@ namespace
 				return lfg::PLAYER_ROLE_DAMAGE;
 		}
 	}
+	
+	static bool RTG_ParseLfgDesiredRole(std::string const& addData, uint32& desiredRole)
+	{
+		desiredRole = 0;
+
+		if (addData.empty())
+			return false;
+
+		// Expected format examples:
+		// rtg_lfg:0:19
+		// rtg_lfg:0:19:8
+		// rtg_lfg:1:19:4
+		// team : level : role(optional)
+
+		std::vector<std::string> parts = Acore::Tokenize(addData, ':', true);
+		if (parts.size() < 3)
+			return false;
+
+		if (parts[0] != "rtg_lfg")
+			return false;
+
+		if (parts.size() >= 4)
+			desiredRole = uint32(std::strtoul(parts[3].c_str(), nullptr, 10));
+
+		return true;
+	}
+	
+	static uint32 RTG_ActualRoleForBot(Player* bot)
+	{
+		if (!bot)
+			return lfg::PLAYER_ROLE_DAMAGE;
+
+		switch (bot->getClass())
+		{
+			case CLASS_WARRIOR:
+			case CLASS_DEATH_KNIGHT:
+				return lfg::PLAYER_ROLE_TANK;
+
+			case CLASS_PRIEST:
+			case CLASS_PALADIN:
+			case CLASS_SHAMAN:
+			case CLASS_DRUID:
+				return lfg::PLAYER_ROLE_HEALER;
+
+			default:
+				return lfg::PLAYER_ROLE_DAMAGE;
+		}
+	}
 }
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
@@ -988,7 +1036,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		}
 
 		for (ObjectGuid const& botGuid : rtgShrinkLogout)
-			LogoutPlayerBot(botGuid.GetCounter());
+			LogoutPlayerBot(botGuid);
 	}
 
 
@@ -1080,11 +1128,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (Player* staleBot = GetPlayerBot(guid))
 				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
 
-			LogoutPlayerBot(guid.GetCounter());
+			LogoutPlayerBot(guid);
 		}
 
 		for (ObjectGuid const& botGuid : rtgIdleLogout)
-			LogoutPlayerBot(botGuid.GetCounter());
+			LogoutPlayerBot(botGuid);
 	}
 
 
@@ -1194,7 +1242,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (Player* staleBot = GetPlayerBot(botGuid))
 				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
 
-			LogoutPlayerBot(botGuid.GetCounter());
+			LogoutPlayerBot(botGuid);
 		}
 	}
 
@@ -1247,7 +1295,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		}
 
 		for (ObjectGuid const& botGuid : rtgFinishedDungeonLogout)
-			LogoutPlayerBot(botGuid.GetCounter());
+			LogoutPlayerBot(botGuid);
 	}
 
 // ---------------------------------------------------------
