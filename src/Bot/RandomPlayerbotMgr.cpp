@@ -3016,6 +3016,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     {
         uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
         uint32 rtgBgNeedTotal = 0;
+        bool anyRealBgQueued = false;
 
         for (auto const& queueTypePair : BattlegroundData)
         {
@@ -3035,6 +3036,9 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                 if (!bgInfo.activeBgQueue || !bgInfo.minLevel)
                     continue;
 
+                if (bgInfo.bgAlliancePlayerCount || bgInfo.bgHordePlayerCount)
+                    anyRealBgQueued = true;
+
                 uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
                 uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
                 if (allianceCurrent < teamSize)
@@ -3044,10 +3048,10 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             }
         }
 
-        SetEventValue(0, "rtg_bg_any_real_queued", anyRealQueued ? 1u : 0u, ttl);
+        SetEventValue(0, "rtg_bg_any_real_queued", anyRealBgQueued ? 1u : 0u, ttl);
         SetEventValue(0, "rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
 
-        if (anyRealQueued && rtgBgNeedTotal)
+        if (anyRealBgQueued && rtgBgNeedTotal)
         {
             uint32 existing = GetEventValue(0, "rtg_bg_start");
             uint32 now = static_cast<uint32>(time(nullptr));
