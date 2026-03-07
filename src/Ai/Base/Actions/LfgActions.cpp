@@ -181,10 +181,11 @@ bool LfgJoinAction::JoinLFG()
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_start");
-        if (!start)
+        bool isAssignedHelper = RTG_IsQueuedLfgBot(bot);
+        if (!start && !isAssignedHelper)
             return false;
 
-        if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+        if (start && now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds) && !isAssignedHelper)
             return false;
     }
 
@@ -270,13 +271,13 @@ bool LfgJoinAction::JoinLFG()
     // - fresh queued fill bots with no group should retry quickly
     // - grouped/post-dungeon bots should retry more calmly
     // - normal bots keep the default pacing
-    uint32 retryDelay = 8;
+    uint32 retryDelay = 6;
     if (RTG_IsQueuedLfgBot(bot))
     {
         if (bot->GetGroup())
             retryDelay = 10;
         else
-            retryDelay = 2;
+            retryDelay = 1;
     }
 
     rtgNextJoinAttempt[botId] = now + retryDelay;

@@ -1153,7 +1153,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			// If the bot is queued, leave it alone and refresh patience
 			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
 			{
-				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 90, addData);
 				continue;
 			}
 
@@ -1207,7 +1207,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     {
         std::vector<ObjectGuid> rtgStaleQueueBots;
         uint32 const now = NowSeconds();
-        uint32 const queueAssistPendingWindow = 15;
+        uint32 const queueAssistPendingWindow = 45;
 
         for (auto const& kv : playerBots)
         {
@@ -1310,7 +1310,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     {
         std::vector<ObjectGuid> rtgBgLogout;
         uint32 const now = NowSeconds();
-        uint32 const queueAssistPendingWindow = 15;
+        uint32 const queueAssistPendingWindow = 35;
 
         for (auto const& kv : playerBots)
         {
@@ -2126,9 +2126,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
             if (RTG_HasPrefix(addData, "rtg_lfg:"))
-                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
+                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 90, addData);
             else if (RTG_HasPrefix(addData, "rtg_bg:"))
-                SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 45, addData);
+                SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 90, addData);
             currentBots.push_back(charInfo.guid);
 
             return true;
@@ -2171,7 +2171,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             std::map<std::tuple<uint32, uint32, uint32>, RtgLfgBucket> lfgBuckets;
             std::map<std::pair<uint32, uint32>, uint32> bgQueueTotals;
             uint32 rtgNow = static_cast<uint32>(time(nullptr));
-            uint32 const queueAssistPendingWindow = 15;
+            uint32 const queueAssistPendingWindow = 45;
             std::map<std::tuple<uint32, uint32, uint32>, RtgBgBucket> bgBuckets;
             std::map<std::pair<uint32, uint32>, BattlegroundBracketId> bgBrackets;
             std::map<std::pair<uint32, uint32>, uint32> bgTeamSizes;
@@ -3189,7 +3189,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
     bool anyRealLfgDemand = false;
     uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
     uint32 now = static_cast<uint32>(time(nullptr));
-    uint32 const queueAssistPendingWindow = 15;
+    uint32 const queueAssistPendingWindow = 45;
     std::map<std::tuple<uint32, uint32, uint32>, RtgLfgBucket> buckets;
 
     for (Player* player : players)
@@ -5142,7 +5142,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_queue_login", NowSeconds(), 600, addData);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 90, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 botAI->Reset();
@@ -5157,7 +5157,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_queue_login", NowSeconds(), 600, addData);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 45, addData);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 90, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 botAI->Reset();

@@ -291,19 +291,21 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     // Keep bots from queueing unless real players have initiated queues,
     // and respect the grace window so real players get first shot.
     // ------------------------------------------------------------------
+    uint32 assignedQueueType = 0;
+    bool hasAssignedQueue = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType;
+
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_bg_start");
-        if (!start)
+        if (!start && !hasAssignedQueue)
             return false;
 
         time_t now = time(nullptr);
-        if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+        if (start && now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds) && !hasAssignedQueue)
             return false;
     }
 
-    uint32 assignedQueueType = 0;
-    if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != uint32(queueTypeId))
+    if (hasAssignedQueue && assignedQueueType != uint32(queueTypeId))
         return false;
 
     TeamId teamId = bot->GetTeamId();
@@ -440,6 +442,22 @@ bool BGJoinAction::isUseful()
 
     bgList.clear();
     ratedList.clear();
+
+    if (isRtgBgBot && assignedQueueType)
+    {
+        BattlegroundQueueTypeId assignedId = BattlegroundQueueTypeId(assignedQueueType);
+        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(assignedId);
+        Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        if (bg)
+        {
+            PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bg->GetMapId(), bot->GetLevel());
+            if (pvpDiff && canJoinBg(assignedId, pvpDiff->GetBracketId()))
+            {
+                bgList.push_back(assignedId);
+                return true;
+            }
+        }
+    }
 
     for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
     {
