@@ -15,6 +15,47 @@
 #include "SharedDefines.h"
 #include "Unit.h"
 
+namespace
+{
+static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
+{
+    if (!bot || !botAI)
+        return false;
+
+    if (!botAI->IsHeal(bot))
+        return false;
+
+    Group* group = bot->GetGroup();
+    Map* map = bot->GetMap();
+    return (group && group->isLFGGroup()) || (map && map->IsDungeon());
+}
+
+static bool RTG_GroupNeedsUrgentHealing(Player* bot)
+{
+    if (!bot)
+        return false;
+
+    if (bot->GetHealthPct() < 95.0f)
+        return true;
+
+    Group* group = bot->GetGroup();
+    if (!group)
+        return false;
+
+    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+    {
+        Player* member = ref->GetSource();
+        if (!member || !member->IsInWorld() || member->IsDead())
+            continue;
+
+        if (member->GetHealthPct() < 95.0f)
+            return true;
+    }
+
+    return false;
+}
+}
+
 bool AttackAction::Execute(Event /*event*/)
 {
     Unit* target = GetTarget();
@@ -23,6 +64,19 @@ bool AttackAction::Execute(Event /*event*/)
 
     if (!target->IsInWorld())
         return false;
+
+    if (RTG_IsPassiveDungeonHealer(bot, botAI))
+    {
+        // Healers should not engage unless directly attacked. Keep them focused on heals.
+        if (target->GetVictim() != bot || RTG_GroupNeedsUrgentHealing(bot))
+        {
+            bot->AttackStop();
+            bot->SetTarget(ObjectGuid::Empty);
+            bot->SetSelection(ObjectGuid::Empty);
+            context->GetValue<Unit*>("current target")->Set(nullptr);
+            return false;
+        }
+    }
 
     return Attack(target);
 }
@@ -86,6 +140,13 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
             botAI->TellError(std::string(target->GetName()) + " is no longer in the world.");
 
         return false;
+    }
+
+    if (RTG_IsPassiveDungeonHealer(bot, botAI))
+    {
+        // Strict healer rule for dungeon/LFG bots: do not initiate combat unless being hit directly.
+        if (target->GetVictim() != bot || RTG_GroupNeedsUrgentHealing(bot))
+            return false;
     }
 
     // Check if bot OR target is in prohibited zone/area (skip for duels)

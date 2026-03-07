@@ -15,6 +15,22 @@
 #include "PvpTriggers.h"
 #include "ServerFacade.h"
 
+namespace
+{
+static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
+{
+    if (!bot || !botAI)
+        return false;
+
+    if (!botAI->IsHeal(bot))
+        return false;
+
+    Group* group = bot->GetGroup();
+    Map* map = bot->GetMap();
+    return (group && group->isLFGGroup()) || (map && map->IsDungeon());
+}
+}
+
 bool AttackEnemyPlayerAction::isUseful()
 {
     if (PlayerHasFlag::IsCapturingFlag(bot))
@@ -39,6 +55,10 @@ bool AttackAnythingAction::isUseful()
         return false;
 
     if (botAI->HasStrategy("stay", BOT_STATE_NON_COMBAT))
+        return false;
+
+    // Dungeon healers should stay passive and not acquire offensive targets on their own.
+    if (RTG_IsPassiveDungeonHealer(bot, botAI))
         return false;
 
     // RTG: tanks should only auto-pull while explicitly following.

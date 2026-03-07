@@ -24,6 +24,22 @@
 #include "Player.h"
 #include "Corpse.h"
 
+namespace
+{
+static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
+{
+    if (!bot || !botAI)
+        return false;
+
+    if (!botAI->IsHeal(bot))
+        return false;
+
+    Group* group = bot->GetGroup();
+    Map* map = bot->GetMap();
+    return (group && group->isLFGGroup()) || (map && map->IsDungeon());
+}
+}
+
 bool LowManaTrigger::IsActive()
 {
     return AI_VALUE2(bool, "has mana", "self target") &&
