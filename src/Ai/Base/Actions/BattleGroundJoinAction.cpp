@@ -12,6 +12,48 @@
 #include "GroupMgr.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
+
+namespace
+{
+    static bool RTG_ParseBgBotAssignment(std::string const& data, uint32& team, uint32& level, uint32& queueType)
+    {
+        if (data.rfind("rtg_bg:", 0) != 0)
+            return false;
+
+        std::string payload = data.substr(7);
+        size_t sep1 = payload.find(':');
+        size_t sep2 = payload.find(':', sep1 == std::string::npos ? sep1 : sep1 + 1);
+        if (sep1 == std::string::npos || sep2 == std::string::npos)
+            return false;
+
+        try
+        {
+            team = static_cast<uint32>(std::stoul(payload.substr(0, sep1)));
+            level = static_cast<uint32>(std::stoul(payload.substr(sep1 + 1, sep2 - sep1 - 1)));
+            queueType = static_cast<uint32>(std::stoul(payload.substr(sep2 + 1)));
+            return true;
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    static bool RTG_GetAssignedBgQueue(Player* bot, uint32& queueType)
+    {
+        queueType = 0;
+        if (!bot)
+            return false;
+
+        uint32 team = 0, level = 0;
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+        if (!RTG_ParseBgBotAssignment(addData, team, level, queueType))
+            return false;
+
+        return true;
+    }
+}
+
 #include "PositionValue.h"
 #include "UpdateTime.h"
 
@@ -214,6 +256,8 @@ bool BGJoinAction::canJoinBg(BattlegroundQueueTypeId queueTypeId, BattlegroundBr
 
     // check if the bracket exists for the bot's level for the specific Battleground/Arena type
     Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+    if (!bg)
+        return false;
     uint32 mapId = bg->GetMapId();
     PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(mapId, bot->GetLevel());
     if (!pvpDiff)
@@ -250,6 +294,10 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
         if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
             return false;
     }
+
+    uint32 assignedQueueType = 0;
+    if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != uint32(queueTypeId))
+        return false;
 
     TeamId teamId = bot->GetTeamId();
     uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
@@ -346,15 +394,11 @@ bool BGJoinAction::isUseful()
     if (bot->InBattlegroundQueue())
         return false;
 
-    bool isRtgBgFillBot = false;
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
-        isRtgBgFillBot = addData.rfind("rtg_bg:", 0) == 0;
-    }
+    uint32 assignedQueueType = 0;
+    bool isRtgBgBot = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType);
 
-    // do not try right after login (currently not working)
-    if (!isRtgBgFillBot && (time(nullptr) - bot->GetInGameTime()) < 120)
+    // do not try right after login unless this bot was explicitly brought online for BG assistance
+    if (!isRtgBgBot && (time(nullptr) - bot->GetInGameTime()) < 120)
         return false;
 
     // check level
@@ -435,6 +479,10 @@ bool BGJoinAction::JoinQueue(uint32 type)
 
     uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
     uint32 TeamSize = bg->GetMaxPlayersPerTeam();
+    uint32 assignedQueueType = 0;
+    if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != uint32(queueTypeId))
+        return false;
+
     TeamId teamId = bot->GetTeamId();
 
     // check if already in queue
@@ -593,6 +641,10 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
     BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
     Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bg)
+        return false;
+
+    uint32 assignedQueueType = 0;
+    if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != uint32(queueTypeId))
         return false;
 
     TeamId teamId = bot->GetTeamId();
