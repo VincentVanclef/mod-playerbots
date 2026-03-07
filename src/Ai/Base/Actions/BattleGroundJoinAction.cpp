@@ -346,8 +346,15 @@ bool BGJoinAction::isUseful()
     if (bot->InBattlegroundQueue())
         return false;
 
+    bool isRtgBgFillBot = false;
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        std::string addData = sRandomPlayerbotMgr.GetEventData(bot->GetGUID().GetCounter(), "add");
+        isRtgBgFillBot = addData.rfind("rtg_bg:", 0) == 0;
+    }
+
     // do not try right after login (currently not working)
-    if ((time(nullptr) - bot->GetInGameTime()) < 120)
+    if (!isRtgBgFillBot && (time(nullptr) - bot->GetInGameTime()) < 120)
         return false;
 
     // check level
