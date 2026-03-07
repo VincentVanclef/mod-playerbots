@@ -1190,7 +1190,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		for (ObjectGuid const& guid : rtgStaleQueueBots)
 		{
 			if (Player* staleBot = GetPlayerBot(guid))
-				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
+				staleBot->RemoveAurasDueToSpell(71041);
+                staleBot->RemoveAurasDueToSpell(71328); // clear RDF queue penalties for helper bots
 
 			LogoutPlayerBot(guid);
 		}
