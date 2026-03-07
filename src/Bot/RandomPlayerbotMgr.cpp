@@ -39,6 +39,7 @@
 #include "GuildMgr.h"
 #include "GuildTaskMgr.h"
 #include "LFGMgr.h"
+#include "PlayerbotAI.h"
 
 namespace
 {

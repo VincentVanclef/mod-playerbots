@@ -24,39 +24,34 @@ bool AttackAction::Execute(Event /*event*/)
     if (!target->IsInWorld())
         return false;
 
-    Player* bot = GetBot();
-    if (bot && bot->GetPlayerbotAI())
+    Player* bot = botAI ? botAI->GetBot() : nullptr;
+    if (bot && botAI->IsHeal(bot))
     {
-        uint32 roles = sLFGMgr->GetRoles(bot->GetGUID());
+        Group* group = bot->GetGroup();
+        Map* map = bot->GetMap();
 
-        if ((roles & lfg::PLAYER_ROLE_HEALER) != 0)
+        bool inDungeonRun =
+            (group && group->isLFGGroup()) ||
+            (map && map->IsDungeon());
+
+        if (inDungeonRun)
         {
-            Group* group = bot->GetGroup();
-            Map* map = bot->GetMap();
+            Unit* victim = bot->GetVictim();
 
-            bool inDungeonRun =
-                (group && group->isLFGGroup()) ||
-                (map && map->IsDungeon());
-
-            if (inDungeonRun)
+            // healer should not initiate attacks in dungeon runs
+            // unless directly defending itself
+            if (!victim)
             {
-                Unit* victim = bot->GetVictim();
+                bot->AttackStop();
+                bot->SetTarget(ObjectGuid::Empty);
+                return false;
+            }
 
-                // healer should not initiate attacks in dungeon runs
-                // unless directly defending itself
-                if (!victim)
-                {
-                    bot->AttackStop();
-                    bot->SetTarget(ObjectGuid::Empty);
-                    return false;
-                }
-
-                if (victim->GetVictim() != bot)
-                {
-                    bot->AttackStop();
-                    bot->SetTarget(ObjectGuid::Empty);
-                    return false;
-                }
+            if (victim->GetVictim() != bot)
+            {
+                bot->AttackStop();
+                bot->SetTarget(ObjectGuid::Empty);
+                return false;
             }
         }
     }
@@ -66,7 +61,7 @@ bool AttackAction::Execute(Event /*event*/)
 
 bool AttackMyTargetAction::Execute(Event /*event*/)
 {
-    Player* bot = GetBot();
+    Player* bot = botAI ? botAI->GetBot() : nullptr;
     Player* master = GetMaster();
     if (!master)
         return false;
@@ -80,38 +75,33 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
         return false;
     }
 
-    if (bot && bot->GetPlayerbotAI())
+    if (bot && botAI->IsHeal(bot))
     {
-        uint32 roles = sLFGMgr->GetRoles(bot->GetGUID());
+        Group* group = bot->GetGroup();
+        Map* map = bot->GetMap();
 
-        if ((roles & lfg::PLAYER_ROLE_HEALER) != 0)
+        bool inDungeonRun =
+            (group && group->isLFGGroup()) ||
+            (map && map->IsDungeon());
+
+        if (inDungeonRun)
         {
-            Group* group = bot->GetGroup();
-            Map* map = bot->GetMap();
+            Unit* victim = bot->GetVictim();
 
-            bool inDungeonRun =
-                (group && group->isLFGGroup()) ||
-                (map && map->IsDungeon());
-
-            if (inDungeonRun)
+            // healer should not initiate attacks in dungeon runs
+            // unless directly defending itself
+            if (!victim)
             {
-                Unit* victim = bot->GetVictim();
+                bot->AttackStop();
+                bot->SetTarget(ObjectGuid::Empty);
+                return false;
+            }
 
-                // healer should not initiate attacks in dungeon runs
-                // unless directly defending itself
-                if (!victim)
-                {
-                    bot->AttackStop();
-                    bot->SetTarget(ObjectGuid::Empty);
-                    return false;
-                }
-
-                if (victim->GetVictim() != bot)
-                {
-                    bot->AttackStop();
-                    bot->SetTarget(ObjectGuid::Empty);
-                    return false;
-                }
+            if (victim->GetVictim() != bot)
+            {
+                bot->AttackStop();
+                bot->SetTarget(ObjectGuid::Empty);
+                return false;
             }
         }
     }

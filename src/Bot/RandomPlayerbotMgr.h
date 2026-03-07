@@ -232,9 +232,11 @@ private:
     bool _isBotInitializing = true;
     bool _isBotLogging = true;
     NewRpgStatistic rpgStasticTotal;
+public:
+    std::string GetEventData(uint32 bot, std::string const& event);
+private:
     CachedEvent* FindEvent(uint32 bot, std::string const& event);
     uint32 GetEventValue(uint32 bot, std::string const& event);
-    std::string GetEventData(uint32 bot, std::string const& event);
     uint32 SetEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn,
                          std::string const& data = "");
     void GetBots();
