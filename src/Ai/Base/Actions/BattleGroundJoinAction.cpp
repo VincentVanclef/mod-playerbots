@@ -349,7 +349,7 @@ bool BGJoinAction::isUseful()
     bool isRtgBgFillBot = false;
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        std::string addData = sRandomPlayerbotMgr.GetEventData(bot->GetGUID().GetCounter(), "add");
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
         isRtgBgFillBot = addData.rfind("rtg_bg:", 0) == 0;
     }
 

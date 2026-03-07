@@ -39,7 +39,6 @@
 #include "GuildMgr.h"
 #include "GuildTaskMgr.h"
 #include "LFGMgr.h"
-#include "PlayerbotAI.h"
 
 namespace
 {
@@ -245,42 +244,17 @@ namespace
 		if (!bot)
 			return lfg::PLAYER_ROLE_DAMAGE;
 
-		uint8 spec = AiFactory::GetPlayerSpecTab(bot);
 		switch (bot->getClass())
 		{
-			case CLASS_DRUID:
-				if (spec == DRUID_TAB_RESTORATION)
-					return lfg::PLAYER_ROLE_HEALER;
-				if (spec == DRUID_TAB_FERAL)
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
-
-			case CLASS_PALADIN:
-				if (spec == PALADIN_TAB_HOLY)
-					return lfg::PLAYER_ROLE_HEALER;
-				if (spec == PALADIN_TAB_PROTECTION)
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
+			case CLASS_WARRIOR:
+			case CLASS_DEATH_KNIGHT:
+				return lfg::PLAYER_ROLE_TANK;
 
 			case CLASS_PRIEST:
-				if (spec == PRIEST_TAB_SHADOW)
-					return lfg::PLAYER_ROLE_DAMAGE;
-				return lfg::PLAYER_ROLE_HEALER;
-
+			case CLASS_PALADIN:
 			case CLASS_SHAMAN:
-				if (spec == SHAMAN_TAB_RESTORATION)
-					return lfg::PLAYER_ROLE_HEALER;
-				return lfg::PLAYER_ROLE_DAMAGE;
-
-			case CLASS_WARRIOR:
-				if (spec == WARRIOR_TAB_PROTECTION)
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
-
-			case CLASS_DEATH_KNIGHT:
-				if (spec == DEATH_KNIGHT_TAB_BLOOD)
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
+			case CLASS_DRUID:
+				return lfg::PLAYER_ROLE_HEALER;
 
 			default:
 				return lfg::PLAYER_ROLE_DAMAGE;
@@ -1115,7 +1089,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
 	// If RTG queue demand has vanished, clear temporary queue-fill bots
 	// that are not actually inside a dungeon run or actively queued.
-	if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand && !rtgBgDemand)
+	if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand)
 	{
 		std::vector<ObjectGuid> rtgIdleLogout;
 		std::vector<ObjectGuid> rtgStaleQueueBots;
@@ -2759,13 +2733,26 @@ void RandomPlayerbotMgr::CheckBgQueue()
             if (queueTypeId == BATTLEGROUND_QUEUE_NONE)
                 continue;
 
-            BattlegroundTypeId bgTypeId = sBattlegroundMgr->BGTemplateId(queueTypeId);
-            uint32 mapId = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId)->GetMapId();
+            if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+                continue;
+
+            BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
+            if (bgTypeId == BATTLEGROUND_TYPE_NONE)
+                continue;
+
+            Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+            if (!bgTemplate)
+                continue;
+
+            uint32 mapId = bgTemplate->GetMapId();
             PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(mapId, bot->GetLevel());
             if (!pvpDiff)
                 continue;
 
             BattlegroundBracketId bracketId = pvpDiff->GetBracketId();
+            if (bracketId < BG_BRACKET_ID_FIRST || bracketId >= MAX_BATTLEGROUND_BRACKETS)
+                continue;
+
             BattlegroundData[queueTypeId][bracketId].minLevel = pvpDiff->minLevel;
             BattlegroundData[queueTypeId][bracketId].maxLevel = pvpDiff->maxLevel;
 
@@ -2976,11 +2963,11 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                      bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount, bgInfo.bgInstanceCount, bgInfo.activeBgQueue);
         }
     }
-    // RTG: Event-driven BG queue marker + demand snapshot.
+    // RTG: Event-driven BG queue snapshot for temporary BG fill bots
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        uint32 totalNeed = 0;
         bool anyRealQueued = false;
+        uint32 totalNeed = 0;
 
         for (auto const& queueTypePair : BattlegroundData)
         {
@@ -3014,19 +3001,21 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             }
         }
 
-        SetEventValue(0, "rtg_bg_any_real_queued", anyRealQueued ? 1u : 0u, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
-        SetEventValue(0, "rtg_bg_need_total", totalNeed, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
+        uint32 ttl = std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+        SetEventValue(0, "rtg_bg_any_real_queued", anyRealQueued ? 1u : 0u, ttl);
+        SetEventValue(0, "rtg_bg_need_total", totalNeed, ttl);
 
         if (anyRealQueued && totalNeed)
         {
             uint32 existing = GetEventValue(0, "rtg_bg_start");
             uint32 now = (uint32)time(nullptr);
             uint32 start = existing ? existing : now;
-            SetEventValue(0, "rtg_bg_start", start, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120);
+            SetEventValue(0, "rtg_bg_start", start, ttl);
         }
         else
         {
             SetEventValue(0, "rtg_bg_start", 0, 0);
+            SetEventValue(0, "rtg_bg_need_total", 0, 0);
         }
     }
 
@@ -4934,7 +4923,6 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
                 currentBots.remove(bot->GetGUID().GetCounter());
-                LogoutPlayerBot(bot->GetGUID());
                 return;
             }
 
@@ -4947,34 +4935,40 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             if (isRtgLfg && desiredRole)
             {
-                uint32 actualRole = RTG_ActualRoleForBot(bot);
+                uint32 actualRole = RTG_GetActualSpecRole(bot);
                 if (actualRole != desiredRole)
                 {
-                    LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual role {} on login, recycling immediately",
-                             bot->GetGUID().ToString().c_str(), bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(),
-                             bot->GetName().c_str(), desiredRole, actualRole);
+                    LOG_INFO("playerbots",
+                             "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual role {} on login, clearing RTG assignment (deferred recycle)",
+                             bot->GetGUID().ToString().c_str(),
+                             bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H",
+                             bot->GetLevel(),
+                             bot->GetName().c_str(),
+                             desiredRole,
+                             actualRole);
+
                     SetEventValue(bot->GetGUID().GetCounter(), "add", 0, 0);
                     SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
                     SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
                     currentBots.remove(bot->GetGUID().GetCounter());
-                    LogoutPlayerBot(bot->GetGUID());
                     return;
                 }
             }
 
             if (isRtgLfg)
-                SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 300, addData);
-            else
-                SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 300, addData);
-
-            if (isRtgLfg)
             {
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 300, addData);
+
                 if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
                 {
                     botAI->ChangeStrategy("+lfg", BOT_STATE_NON_COMBAT);
                     botAI->ResetStrategies();
                     botAI->Reset();
                 }
+            }
+            else
+            {
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 300, addData);
             }
         }
     }
