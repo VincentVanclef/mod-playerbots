@@ -736,6 +736,38 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     GetBots();
 
     // ------------------------------------------------------------------
+    // RTG dungeon-session pinning
+    // Once an RTG LFG bot has successfully transitioned into a dungeon run,
+    // keep it protected from normal queue cleanup. This prevents wipes or
+    // transient regrouping states from causing the bot to leave party/logout.
+    // ------------------------------------------------------------------
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 now = NowSeconds();
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = kv.first.GetCounter();
+            std::string addData = GetEventData(botId, "add");
+            if (!RTG_HasPrefix(addData, "rtg_lfg:"))
+                continue;
+
+            Map* map = bot->GetMap();
+            Group* group = bot->GetGroup();
+            lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
+            bool inDungeonRun = (map && (map->IsDungeon() || map->IsRaid())) ||
+                                (group && group->isLFGGroup()) ||
+                                (state == lfg::LFG_STATE_DUNGEON);
+
+            if (inDungeonRun)
+                SetEventValue(botId, "rtg_dungeon_active", now, 7200);
+        }
+    }
+
+    // ------------------------------------------------------------------
     // RTG policy: bots must not remain grouped in the open world.
     // - Allow groups ONLY while inside Dungeon Finder instances (LFG groups)
     //   or inside Battleground/Arena (BG groups).
@@ -751,10 +783,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
                 continue;
 
+            uint32 botId = bot->GetGUID().GetCounter();
+            bool rtgDungeonActive = sPlayerbotAIConfig.rtgEventDriven && GetEventValue(botId, "rtg_dungeon_active");
             Group* group = bot->GetGroup();
             if (!group)
             {
-                SetEventValue(bot->GetGUID().GetCounter(), "rtg_group_noreal", 0, 0);
+                if (rtgDungeonActive)
+                    continue;
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
                 continue;
             }
 
@@ -793,7 +829,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 }
             }
 
-            uint32 botId = bot->GetGUID().GetCounter();
+            if (rtgDungeonActive)
+            {
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
+                continue;
+            }
+
             if (hasRealOnline)
             {
                 SetEventValue(botId, "rtg_group_noreal", 0, 0);
@@ -847,6 +888,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
                 continue;
 
+            uint32 botId = botGuid.GetCounter();
+            if (GetEventValue(botId, "rtg_dungeon_active"))
+                continue;
+
             Map* map = bot->GetMap();
             if (map && (map->IsDungeon() || map->IsRaid()))
                 continue;
@@ -857,7 +902,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                 continue;
 
-            uint32 botId = botGuid.GetCounter();
             SetEventValue(botId, "add", 0, 0);
             currentBots.remove(botId);
             SetEventValue(botId, "rtg_lfg_pending", 0, 0);
@@ -987,6 +1031,49 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         }
 
         for (ObjectGuid const& botGuid : rtgStaleQueueBots)
+            LogoutPlayerBot(botGuid);
+    }
+
+    // RTG: cleanup finished/abandoned dungeon-session bots only after they are
+    // truly out of the run for a while. This preserves bots through wipes.
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 now = NowSeconds();
+        std::vector<ObjectGuid> rtgFinishedDungeonLogout;
+
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = kv.first.GetCounter();
+            uint32 activeSince = GetEventValue(botId, "rtg_dungeon_active");
+            if (!activeSince)
+                continue;
+
+            Map* map = bot->GetMap();
+            Group* group = bot->GetGroup();
+            bool stillInRun = (map && (map->IsDungeon() || map->IsRaid())) ||
+                              (group && group->isLFGGroup()) ||
+                              bot->isDead() || bot->IsInCombat() || bot->IsBeingTeleported();
+            if (stillInRun)
+            {
+                SetEventValue(botId, "rtg_dungeon_active", now, 7200);
+                continue;
+            }
+
+            if (now <= activeSince + 300)
+                continue;
+
+            SetEventValue(botId, "rtg_dungeon_active", 0, 0);
+            SetEventValue(botId, "add", 0, 0);
+            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+            currentBots.remove(botId);
+            rtgFinishedDungeonLogout.push_back(bot->GetGUID());
+        }
+
+        for (ObjectGuid const& botGuid : rtgFinishedDungeonLogout)
             LogoutPlayerBot(botGuid);
     }
 
@@ -1804,21 +1891,26 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             for (auto& kv : buckets)
             {
                 RtgBucket& bucket = kv.second;
-                uint32 targetPlayers = ((bucket.realQueued + 4u) / 5u) * 5u;
-                uint32 shortage = targetPlayers > bucket.realQueued ? (targetPlayers - bucket.realQueued) : 0u;
-                uint32 reserveNeed = shortage ? 1u : 0u;
-                uint32 expandedTarget = shortage + reserveNeed;
-                bucket.need = expandedTarget > bucket.existingQueuedBots ? (expandedTarget - bucket.existingQueuedBots) : 0u;
+                // RTG instance-solver style pooling:
+                // treat each real queued player as its own queue instance and allow
+                // up to 10 temporary candidates per instance so role resolution can happen quickly.
+                // existingQueuedBots already includes pending and queued RTG bots reserved for this bucket.
+                uint32 candidateTarget = bucket.realQueued * 10u;
+                if (candidateTarget > sPlayerbotAIConfig.rtgEventMaxBots)
+                    candidateTarget = sPlayerbotAIConfig.rtgEventMaxBots;
+                bucket.need = candidateTarget > bucket.existingQueuedBots ? (candidateTarget - bucket.existingQueuedBots) : 0u;
                 if (bucket.need)
                     orderedBuckets.push_back(bucket);
             }
 
+            // Best-effort ordering: buckets with more queued real players get solved first.
+            // This is not exact FIFO by queue timestamp, but it prioritizes the heaviest active instances first.
             std::sort(orderedBuckets.begin(), orderedBuckets.end(), [](RtgBucket const& a, RtgBucket const& b)
             {
-                if (a.need != b.need)
-                    return a.need > b.need;
                 if (a.realQueued != b.realQueued)
                     return a.realQueued > b.realQueued;
+                if (a.need != b.need)
+                    return a.need > b.need;
                 if (a.team != b.team)
                     return a.team < b.team;
                 return a.level > b.level;
@@ -2550,13 +2642,12 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         for (auto const& kv : queuedByBucket)
         {
             uint32 realQueued = kv.second;
-            uint32 targetPlayers = ((realQueued + 4u) / 5u) * 5u;
-            uint32 exactNeed = targetPlayers > realQueued ? (targetPlayers - realQueued) : 0u;
-            uint32 reserveNeed = exactNeed ? 1u : 0u;
-            uint32 need = exactNeed + reserveNeed;
+            uint32 need = realQueued * 10u;
+            if (need > sPlayerbotAIConfig.rtgEventMaxBots)
+                need = sPlayerbotAIConfig.rtgEventMaxBots;
             totalNeed += need;
 
-            if (need > selectedNeed || (need == selectedNeed && realQueued > selectedQueued))
+            if (realQueued > selectedQueued || (realQueued == selectedQueued && need > selectedNeed))
             {
                 selectedTeam = kv.first.first;
                 selectedLevel = kv.first.second;
