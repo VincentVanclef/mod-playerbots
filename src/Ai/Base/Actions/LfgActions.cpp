@@ -63,14 +63,18 @@ namespace
         }
     }
 	
-    static void RTG_ClearLfgQueuePenaltyAuras(Player* bot)
-    {
-        if (!bot)
-            return;
+	static void RTG_ClearQueuePenaltyAuras(Player* bot)
+	{
+		if (!bot)
+			return;
 
-        bot->RemoveAurasDueToSpell(71041); // Dungeon Deserter
-        bot->RemoveAurasDueToSpell(71328); // LFG Requeue cooldown
-    }
+		static uint32 const penaltySpells[] = {71041, 71328};
+		for (uint32 spellId : penaltySpells)
+		{
+			if (bot->HasAura(spellId))
+				bot->RemoveAurasDueToSpell(spellId);
+		}
+	}
 
     static uint32 RTG_ActualRoleForBot(Player* bot)
     {
@@ -151,6 +155,9 @@ bool LfgJoinAction::JoinLFG()
 {
     static std::unordered_map<uint32, time_t> rtgNextJoinAttempt;
 
+    if (sRandomPlayerbotMgr.IsRandomBot(bot))
+        RTG_ClearQueuePenaltyAuras(bot);
+
     // check if already in lfg
     LfgState state = sLFGMgr->GetState(bot->GetGUID());
     if (state != LFG_STATE_NONE)
@@ -165,9 +172,6 @@ bool LfgJoinAction::JoinLFG()
     auto attemptIt = rtgNextJoinAttempt.find(botId);
     if (attemptIt != rtgNextJoinAttempt.end() && now < attemptIt->second)
         return false;
-
-    if (RTG_IsQueuedLfgBot(bot))
-        RTG_ClearLfgQueuePenaltyAuras(bot);
 
     // ------------------------------------------------------------------
     // RTG: Event-driven LFG grace
@@ -385,7 +389,7 @@ bool LfgLeaveAction::Execute(Event event)
         return false;
 
     if (RTG_IsQueuedLfgBot(bot))
-        RTG_ApplyDungeonDeserter(bot);
+        RTG_ClearQueuePenaltyAuras(bot);
 
     WorldPacket* packet = new WorldPacket(CMSG_LFG_LEAVE);
     bot->GetSession()->QueuePacket(packet);
