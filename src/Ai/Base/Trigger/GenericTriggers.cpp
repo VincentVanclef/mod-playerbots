@@ -24,8 +24,6 @@
 #include "Player.h"
 #include "Corpse.h"
 
-namespace
-{
 static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
 {
     if (!bot || !botAI)
@@ -34,10 +32,9 @@ static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
     if (!botAI->IsHeal(bot))
         return false;
 
-    Group* group = bot->GetGroup();
     Map* map = bot->GetMap();
-    return (group && group->isLFGGroup()) || (map && map->IsDungeon());
-}
+    Group* group = bot->GetGroup();
+    return (map && map->IsDungeon()) || (group && group->isLFGGroup());
 }
 
 bool LowManaTrigger::IsActive()
@@ -397,6 +394,9 @@ bool GenericBoostTrigger::IsActive()
 
 bool HealerShouldAttackTrigger::IsActive()
 {
+    if (RTG_IsPassiveDungeonHealer(bot, botAI))
+        return false;
+
     // nobody can help me
     if (botAI->GetNearGroupMemberCount(sPlayerbotAIConfig.sightDistance) <= 1)
         return true;

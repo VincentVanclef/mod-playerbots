@@ -15,9 +15,7 @@
 #include "SharedDefines.h"
 #include "Unit.h"
 
-namespace
-{
-static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
+static bool RTG_ShouldSuppressHealerAttack(Player* bot, PlayerbotAI* botAI, Unit* target)
 {
     if (!bot || !botAI)
         return false;
@@ -25,35 +23,17 @@ static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
     if (!botAI->IsHeal(bot))
         return false;
 
-    Group* group = bot->GetGroup();
     Map* map = bot->GetMap();
-    return (group && group->isLFGGroup()) || (map && map->IsDungeon());
-}
-
-static bool RTG_GroupNeedsUrgentHealing(Player* bot)
-{
-    if (!bot)
-        return false;
-
-    if (bot->GetHealthPct() < 95.0f)
-        return true;
-
     Group* group = bot->GetGroup();
-    if (!group)
+    bool inDungeonRun = (map && map->IsDungeon()) || (group && group->isLFGGroup());
+    if (!inDungeonRun)
         return false;
 
-    for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-    {
-        Player* member = ref->GetSource();
-        if (!member || !member->IsInWorld() || member->isDead())
-            continue;
+    // Healers may defend themselves if the target is directly attacking them.
+    if (target && target->GetVictim() == bot)
+        return false;
 
-        if (member->GetHealthPct() < 95.0f)
-            return true;
-    }
-
-    return false;
-}
+    return true;
 }
 
 bool AttackAction::Execute(Event /*event*/)
@@ -65,17 +45,11 @@ bool AttackAction::Execute(Event /*event*/)
     if (!target->IsInWorld())
         return false;
 
-    if (RTG_IsPassiveDungeonHealer(bot, botAI))
+    if (RTG_ShouldSuppressHealerAttack(bot, botAI, target))
     {
-        // Healers should not engage unless directly attacked. Keep them focused on heals.
-        if (target->GetVictim() != bot || RTG_GroupNeedsUrgentHealing(bot))
-        {
-            bot->AttackStop();
-            bot->SetTarget(ObjectGuid::Empty);
-            bot->SetSelection(ObjectGuid::Empty);
-            context->GetValue<Unit*>("current target")->Set(nullptr);
-            return false;
-        }
+        bot->AttackStop();
+        bot->SetTarget(ObjectGuid::Empty);
+        return false;
     }
 
     return Attack(target);
@@ -83,6 +57,13 @@ bool AttackAction::Execute(Event /*event*/)
 
 bool AttackMyTargetAction::Execute(Event /*event*/)
 {
+    if (RTG_ShouldSuppressHealerAttack(bot, botAI, botAI->GetUnit(GetMaster() ? GetMaster()->GetTarget() : ObjectGuid::Empty)))
+    {
+        bot->AttackStop();
+        bot->SetTarget(ObjectGuid::Empty);
+        return false;
+    }
+
     Player* master = GetMaster();
     if (!master)
         return false;
@@ -106,6 +87,13 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
 
 bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
+    if (RTG_ShouldSuppressHealerAttack(bot, botAI, target))
+    {
+        bot->AttackStop();
+        bot->SetTarget(ObjectGuid::Empty);
+        return false;
+    }
+
     Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
     bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
     
@@ -140,13 +128,6 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
             botAI->TellError(std::string(target->GetName()) + " is no longer in the world.");
 
         return false;
-    }
-
-    if (RTG_IsPassiveDungeonHealer(bot, botAI))
-    {
-        // Strict healer rule for dungeon/LFG bots: do not initiate combat unless being hit directly.
-        if (target->GetVictim() != bot || RTG_GroupNeedsUrgentHealing(bot))
-            return false;
     }
 
     // Check if bot OR target is in prohibited zone/area (skip for duels)

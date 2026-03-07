@@ -15,9 +15,7 @@
 #include "PvpTriggers.h"
 #include "ServerFacade.h"
 
-namespace
-{
-static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
+static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI, Unit* target = nullptr)
 {
     if (!bot || !botAI)
         return false;
@@ -25,10 +23,16 @@ static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI)
     if (!botAI->IsHeal(bot))
         return false;
 
-    Group* group = bot->GetGroup();
     Map* map = bot->GetMap();
-    return (group && group->isLFGGroup()) || (map && map->IsDungeon());
-}
+    Group* group = bot->GetGroup();
+    bool inDungeonRun = (map && map->IsDungeon()) || (group && group->isLFGGroup());
+    if (!inDungeonRun)
+        return false;
+
+    if (target && target->GetVictim() == bot)
+        return false;
+
+    return true;
 }
 
 bool AttackEnemyPlayerAction::isUseful()
@@ -51,14 +55,13 @@ bool AttackAnythingAction::isUseful()
     if (!bot || !botAI)  // Prevents invalid accesses
         return false;
 
+    if (RTG_IsPassiveDungeonHealer(bot, botAI))
+        return false;
+
     if (!botAI->AllowActivity(GRIND_ACTIVITY))  // Bot cannot be active
         return false;
 
     if (botAI->HasStrategy("stay", BOT_STATE_NON_COMBAT))
-        return false;
-
-    // Dungeon healers should stay passive and not acquire offensive targets on their own.
-    if (RTG_IsPassiveDungeonHealer(bot, botAI))
         return false;
 
     // RTG: tanks should only auto-pull while explicitly following.
@@ -135,6 +138,14 @@ bool DropTargetAction::Execute(Event event)
 
 bool AttackAnythingAction::Execute(Event event)
 {
+    Unit* target = GetTarget();
+    if (RTG_IsPassiveDungeonHealer(bot, botAI, target))
+    {
+        bot->AttackStop();
+        bot->SetTarget(ObjectGuid::Empty);
+        return false;
+    }
+
     bool result = AttackAction::Execute(event);
     if (result)
     {
@@ -157,6 +168,9 @@ bool AttackAnythingAction::isPossible() { return AttackAction::isPossible() && G
 bool DpsAssistAction::isUseful()
 {
     if (PlayerHasFlag::IsCapturingFlag(bot))
+        return false;
+
+    if (RTG_IsPassiveDungeonHealer(bot, botAI))
         return false;
 
     return true;
@@ -202,6 +216,9 @@ bool AttackRtiTargetAction::Execute(Event event)
 bool AttackRtiTargetAction::isUseful()
 {
     if (botAI->ContainsStrategy(STRATEGY_TYPE_HEAL))
+        return false;
+
+    if (RTG_IsPassiveDungeonHealer(bot, botAI))
         return false;
 
     return true;
