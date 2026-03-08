@@ -69,9 +69,6 @@ namespace
         return value.rfind(prefix, 0) == 0;
     }
 
-
-    static constexpr uint32 RTG_LFG_STARTUP_GRACE_SECONDS = 90;
-
     static std::string RTG_MakeLfgAddData(unsigned int team, unsigned int level, unsigned int role = 0, unsigned int owner = 0)
     {
         std::string data = std::string("rtg_lfg:") + std::to_string(team) + ":" + std::to_string(level);
@@ -985,10 +982,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG_HasPrefix(addData, "rtg_lfg:"))
                 continue;
 
-            uint32 freshSince = GetEventValue(botId, "rtg_lfg_fresh");
-            if (freshSince && NowSeconds() <= freshSince + RTG_LFG_STARTUP_GRACE_SECONDS)
-                continue;
-
             Map* map = bot->GetMap();
             Group* group = bot->GetGroup();
             lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
@@ -1019,20 +1012,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             uint32 botId = bot->GetGUID().GetCounter();
             bool rtgDungeonActive = sPlayerbotAIConfig.rtgEventDriven && GetEventValue(botId, "rtg_dungeon_active");
-            std::string addData = GetEventData(botId, "add");
-            bool rtgFreshLfgHelper = false;
-            if (sPlayerbotAIConfig.rtgEventDriven && RTG_HasPrefix(addData, "rtg_lfg:"))
-            {
-                uint32 freshSince = GetEventValue(botId, "rtg_lfg_fresh");
-                rtgFreshLfgHelper = freshSince && now <= freshSince + RTG_LFG_STARTUP_GRACE_SECONDS;
-            }
-
             Group* group = bot->GetGroup();
-            if (rtgFreshLfgHelper)
-            {
-                SetEventValue(botId, "rtg_group_noreal", 0, 0);
-                continue;
-            }
             if (!group)
             {
                 if (rtgDungeonActive)
@@ -1231,7 +1211,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			// If the bot is queued, leave it alone and refresh patience
 			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
 			{
-				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
 				continue;
 			}
 
@@ -1346,14 +1326,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					}
 				}
 
-				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
 				continue;
 			}
 
 			// Pending bots get more patience
 			if (GetEventValue(botId, "rtg_lfg_pending"))
 			{
-				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
 				continue;
 			}
 
@@ -1416,7 +1396,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (GetEventValue(botId, "rtg_bg_pending"))
             {
-                SetEventValue(botId, "rtg_bg_pending", 1, 45, addData);
+                SetEventValue(botId, "rtg_bg_pending", 1, 20, addData);
                 continue;
             }
 
@@ -1659,13 +1639,15 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
 
     if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
     {
-        if (!sPlayerbotAIConfig.rtgEventDriven && time(nullptr) > (BgCheckTimer + 35))
+        uint32 bgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 35u;
+        if (time(nullptr) > (BgCheckTimer + bgCheckInterval))
             sRandomPlayerbotMgr.CheckBgQueue();
     }
 
     if (sPlayerbotAIConfig.randomBotJoinLfg /* && !players.empty()*/)
     {
-        if (time(nullptr) > (LfgCheckTimer + 30))
+        uint32 lfgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 30u;
+        if (time(nullptr) > (LfgCheckTimer + lfgCheckInterval))
             sRandomPlayerbotMgr.CheckLfgQueue();
     }
 
@@ -2229,12 +2211,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
             if (RTG_HasPrefix(addData, "rtg_lfg:"))
-            {
-                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
-                SetEventValue(charInfo.guid, "rtg_lfg_fresh", NowSeconds(), RTG_LFG_STARTUP_GRACE_SECONDS + 30);
-            }
+                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 20, addData);
             else if (RTG_HasPrefix(addData, "rtg_bg:"))
-                SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 45, addData);
+                SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 20, addData);
             currentBots.push_back(charInfo.guid);
 
             return true;
@@ -2838,19 +2817,15 @@ std::vector<uint32> parseBrackets(const std::string& str)
 
 void RandomPlayerbotMgr::CheckBgQueue()
 {
+    uint32 bgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 35u;
+
     if (!BgCheckTimer)
-    {
         BgCheckTimer = time(nullptr);
-        return;  // Exit immediately after initializing the timer
-    }
 
     if (time(nullptr) < BgCheckTimer)
-    {
-        return;  // No need to proceed if the current time is less than the timer
-    }
+        return;
 
-    // Update the timer to the current time
-    BgCheckTimer = time(nullptr);
+    BgCheckTimer = time(nullptr) + bgCheckInterval;
 
     LOG_DEBUG("playerbots", "Checking BG Queue...");
 
@@ -3293,7 +3268,8 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
 
 void RandomPlayerbotMgr::CheckLfgQueue()
 {
-    if (!LfgCheckTimer || time(nullptr) > (LfgCheckTimer + 30))
+    uint32 lfgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 30u;
+    if (!LfgCheckTimer || time(nullptr) > (LfgCheckTimer + lfgCheckInterval))
         LfgCheckTimer = time(nullptr);
 
     LOG_DEBUG("playerbots", "Checking LFG Queue...");
@@ -5180,8 +5156,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
 
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_fresh", NowSeconds(), RTG_LFG_STARTUP_GRACE_SECONDS + 30);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 20, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
         }
         else if (RTG_ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
@@ -5193,7 +5168,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
 
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 45, addData);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 20, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
         }
     }

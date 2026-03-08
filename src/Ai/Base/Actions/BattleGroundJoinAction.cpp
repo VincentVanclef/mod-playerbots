@@ -377,6 +377,16 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
     uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
+    bool realPlayersQueued = (bgAlliancePlayerCount || bgHordePlayerCount);
+
+    if (assignedHelper)
+    {
+        uint32 myCount = (teamId == TEAM_ALLIANCE) ? (bgAllianceBotCount + bgAlliancePlayerCount) : (bgHordeBotCount + bgHordePlayerCount);
+        if (myCount < TeamSize)
+            return true;
+
+        return realPlayersQueued;
+    }
 
     if (teamId == TEAM_ALLIANCE)
     {
@@ -726,6 +736,16 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
     uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
     uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
+    bool realPlayersQueued = (bgAlliancePlayerCount || bgHordePlayerCount);
+
+    if (assignedHelper)
+    {
+        uint32 myCount = (teamId == TEAM_ALLIANCE) ? (bgAllianceBotCount + bgAlliancePlayerCount) : (bgHordeBotCount + bgHordePlayerCount);
+        if (myCount < TeamSize)
+            return true;
+
+        return realPlayersQueued;
+    }
 
     if (teamId == TEAM_ALLIANCE)
     {
