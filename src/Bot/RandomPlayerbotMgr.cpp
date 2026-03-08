@@ -134,14 +134,21 @@ namespace
         return lfg::PLAYER_ROLE_DAMAGE;
     }
 
-    static uint32 RTG_GetActualSpecRole(Player* bot)
+    static uint8 RTG_DefaultSpecTabForClass(uint8 cls)
     {
-        if (!bot)
-            return lfg::PLAYER_ROLE_DAMAGE;
+        switch (cls)
+        {
+            case CLASS_MAGE: return MAGE_TAB_FROST;
+            case CLASS_PALADIN: return PALADIN_TAB_RETRIBUTION;
+            case CLASS_PRIEST: return PRIEST_TAB_HOLY;
+            case CLASS_WARLOCK: return WARLOCK_TAB_DEMONOLOGY;
+            case CLASS_SHAMAN: return SHAMAN_TAB_ELEMENTAL;
+            default: return 0;
+        }
+    }
 
-        uint8 cls = bot->getClass();
-        uint8 specTab = AiFactory::GetPlayerSpecTab(bot);
-
+    static uint32 RTG_RoleForClassSpecTab(uint8 cls, uint8 specTab)
+    {
         switch (cls)
         {
             case CLASS_DRUID:
@@ -150,37 +157,98 @@ namespace
                 if (specTab == DRUID_TAB_FERAL)
                     return lfg::PLAYER_ROLE_TANK;
                 return lfg::PLAYER_ROLE_DAMAGE;
-
             case CLASS_PALADIN:
                 if (specTab == PALADIN_TAB_HOLY)
                     return lfg::PLAYER_ROLE_HEALER;
                 if (specTab == PALADIN_TAB_PROTECTION)
                     return lfg::PLAYER_ROLE_TANK;
                 return lfg::PLAYER_ROLE_DAMAGE;
-
             case CLASS_PRIEST:
-                if (specTab == PRIEST_TAB_SHADOW)
-                    return lfg::PLAYER_ROLE_DAMAGE;
-                return lfg::PLAYER_ROLE_HEALER;
-
+                return specTab == PRIEST_TAB_SHADOW ? lfg::PLAYER_ROLE_DAMAGE : lfg::PLAYER_ROLE_HEALER;
             case CLASS_SHAMAN:
-                if (specTab == SHAMAN_TAB_RESTORATION)
-                    return lfg::PLAYER_ROLE_HEALER;
-                return lfg::PLAYER_ROLE_DAMAGE;
-
+                return specTab == SHAMAN_TAB_RESTORATION ? lfg::PLAYER_ROLE_HEALER : lfg::PLAYER_ROLE_DAMAGE;
             case CLASS_WARRIOR:
-                if (specTab == WARRIOR_TAB_PROTECTION)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-
+                return specTab == WARRIOR_TAB_PROTECTION ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
             case CLASS_DEATH_KNIGHT:
-                if (specTab == DEATH_KNIGHT_TAB_BLOOD)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-
+                return specTab == DEATH_KNIGHT_TAB_BLOOD ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
             default:
                 return lfg::PLAYER_ROLE_DAMAGE;
         }
+    }
+
+    static bool RTG_GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
+    {
+        specTab = RTG_DefaultSpecTabForClass(cls);
+
+        QueryResult specResult = CharacterDatabase.Query("SELECT activeSpec FROM characters WHERE guid = {}", guid);
+        uint8 activeSpec = 0;
+        if (specResult)
+            activeSpec = specResult->Fetch()[0].Get<uint8>();
+
+        uint32 activeMask = (1u << activeSpec);
+        uint32 const* talentTabIds = GetTalentTabPages(cls);
+        if (!talentTabIds)
+            return true;
+
+        std::map<uint8, uint32> tabs = {{0, 0}, {1, 0}, {2, 0}};
+        QueryResult talentResult = CharacterDatabase.Query("SELECT spell, specMask FROM character_talent WHERE guid = {}", guid);
+        if (!talentResult)
+            return true;
+
+        do
+        {
+            Field* fields = talentResult->Fetch();
+            uint32 spellId = fields[0].Get<uint32>();
+            uint8 specMask = fields[1].Get<uint8>();
+            if ((activeMask & specMask) == 0)
+                continue;
+
+            TalentSpellPos const* talentPos = GetTalentSpellPos(spellId);
+            if (!talentPos)
+                continue;
+            TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentPos->talent_id);
+            if (!talentInfo)
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            uint32 rank = spellInfo ? spellInfo->GetRank() : 1u;
+            if (talentInfo->TalentTab == talentTabIds[0])
+                tabs[0] += rank;
+            else if (talentInfo->TalentTab == talentTabIds[1])
+                tabs[1] += rank;
+            else if (talentInfo->TalentTab == talentTabIds[2])
+                tabs[2] += rank;
+        } while (talentResult->NextRow());
+
+        if ((tabs[0] + tabs[1] + tabs[2]) == 0)
+            return true;
+
+        specTab = 0;
+        uint32 maxPoints = tabs[0];
+        for (uint8 i = 1; i < 3; ++i)
+        {
+            if (tabs[i] > maxPoints)
+            {
+                maxPoints = tabs[i];
+                specTab = i;
+            }
+        }
+        return true;
+    }
+
+    static uint32 RTG_GetOfflineSpecRole(ObjectGuid::LowType guid, uint8 cls)
+    {
+        uint8 specTab = 0;
+        RTG_GetOfflineSpecTab(guid, cls, specTab);
+        return RTG_RoleForClassSpecTab(cls, specTab);
+    }
+
+    static uint32 RTG_GetActualSpecRole(Player* bot)
+    {
+        if (!bot)
+            return lfg::PLAYER_ROLE_DAMAGE;
+
+        return RTG_RoleForClassSpecTab(bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
     }
 
 	static bool RTG_ParseLfgDesiredRole(std::string const& addData, uint32& desiredRole)
@@ -2006,10 +2074,33 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
     uint32 maxAllowedBotCount = sPlayerbotAIConfig.rtgEventDriven ? GetEventValue(0, "rtg_target") : GetMaxAllowedBotCount();
     static time_t missingBotsTimer = 0;
 
-    if (currentBots.size() < maxAllowedBotCount)
+    uint32 botsToAddThisInterval = 0;
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 rtgManagedNeed = std::min<uint32>(GetEventValue(0, "rtg_lfg_need_total") + GetEventValue(0, "rtg_bg_need_total"), sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 rtgManagedOnline = 0;
+        for (uint32 botId : currentBots)
+        {
+            std::string addData = GetEventData(botId, "add");
+            if (RTG_IsQueueManagedAddData(addData) || GetEventValue(botId, "rtg_dungeon_active") || GetEventValue(botId, "rtg_bg_pending") || GetEventValue(botId, "rtg_lfg_pending"))
+                ++rtgManagedOnline;
+        }
+
+        if (rtgManagedNeed > rtgManagedOnline)
+            botsToAddThisInterval = rtgManagedNeed - rtgManagedOnline;
+
+        uint32 targetGap = maxAllowedBotCount > currentBots.size() ? (maxAllowedBotCount - currentBots.size()) : 0u;
+        if (targetGap > botsToAddThisInterval)
+            botsToAddThisInterval = targetGap;
+    }
+
+    if ((sPlayerbotAIConfig.rtgEventDriven && botsToAddThisInterval > 0) || (!sPlayerbotAIConfig.rtgEventDriven && currentBots.size() < maxAllowedBotCount))
     {
         // Calculate how many bots to add
-        maxAllowedBotCount -= currentBots.size();
+        if (sPlayerbotAIConfig.rtgEventDriven)
+            maxAllowedBotCount = botsToAddThisInterval;
+        else
+            maxAllowedBotCount -= currentBots.size();
         maxAllowedBotCount = std::min(sPlayerbotAIConfig.randomBotsPerInterval, maxAllowedBotCount);
 
         // Single RNG instance for all shuffling
@@ -2471,10 +2562,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
                     if (charTeam != bucket.team)
                         continue;
-                    if (!RTG_ClassCanRole(charInfo.rClass, desiredRole))
+                    if (RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass) != desiredRole)
                         continue;
                     if (!tryLoginBot(charInfo, addData))
                         continue;
+
+                    LOG_INFO("playerbots", "[RTG][LFG] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
 
                     --capacity;
                     --remainingCapacity;
@@ -2537,6 +2630,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
+                    LOG_INFO("playerbots", "[RTG][BG] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
                     --capacity;
                     --remainingCapacity;
                     ++bucket.assignedExtra;
