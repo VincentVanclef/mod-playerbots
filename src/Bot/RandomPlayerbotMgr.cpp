@@ -4,7 +4,7 @@
  */
 
 #include "RandomPlayerbotMgr.h"
-
+#include "PlayerbotAI.h" 
 #include <WorldSessionMgr.h>
 #include "unordered_set"
 #include <algorithm>
