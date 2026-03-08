@@ -19,7 +19,7 @@ HealPaladinStrategy::HealPaladinStrategy(PlayerbotAI* botAI) : GenericPaladinStr
 
 std::vector<NextAction> HealPaladinStrategy::getDefaultActions()
 {
-    return { NextAction("judgement of light", ACTION_DEFAULT) };
+    return {};
 }
 
 void HealPaladinStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
@@ -103,6 +103,17 @@ void HealPaladinStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
         }
     )
 );
+
+    triggers.push_back(
+        new TriggerNode(
+            "protect party member",
+            {
+                NextAction("holy shock on party", ACTION_EMERGENCY + 4),
+                NextAction("holy light on party", ACTION_EMERGENCY + 3),
+                NextAction("flash of light on party", ACTION_EMERGENCY + 2)
+            }
+        )
+    );
 
     triggers.push_back(
         new TriggerNode(

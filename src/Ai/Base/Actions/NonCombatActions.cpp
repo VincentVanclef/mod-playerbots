@@ -7,9 +7,53 @@
 
 #include "Event.h"
 #include "Playerbots.h"
+#include "Player.h"
+
+namespace
+{
+    static bool RTG_ShouldDelayDungeonHealerDrink(Player* bot, PlayerbotAI* botAI)
+    {
+        if (!bot || !botAI || !botAI->IsHeal(bot))
+            return false;
+
+        Group* group = bot->GetGroup();
+        Map* map = bot->GetMap();
+        if (!group || (!group->isLFGGroup() && (!map || !map->IsDungeon())))
+            return false;
+
+        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+        {
+            Player* member = ref->GetSource();
+            if (!member || member == bot || !member->IsAlive())
+                continue;
+
+            if (member->IsInCombat())
+                return true;
+        }
+
+        Unit* mainTank = botAI->GetAiObjectContext()->GetValue<Unit*>("main tank")->Get();
+        if (!mainTank || !mainTank->IsAlive())
+            return false;
+
+        float dist = bot->GetDistance(mainTank);
+        if (dist > 30.0f)
+            return true;
+
+        if (mainTank->isMoving() && dist > 12.0f)
+            return true;
+
+        if (botAI->GetNearGroupMemberCount(15.0f) <= 1 && dist > 15.0f)
+            return true;
+
+        return false;
+    }
+}
 
 bool DrinkAction::Execute(Event event)
 {
+    if (RTG_ShouldDelayDungeonHealerDrink(bot, botAI))
+        return false;
+
     if (botAI->HasCheat(BotCheatMask::food))
     {
         // if (bot->IsNonMeleeSpellCast(true))
@@ -51,7 +95,8 @@ bool DrinkAction::isUseful()
 {
     return UseItemAction::isUseful() &&
         AI_VALUE2(bool, "has mana", "self target") &&
-        AI_VALUE2(uint8, "mana", "self target") < 100;
+        AI_VALUE2(uint8, "mana", "self target") < 100 &&
+        !RTG_ShouldDelayDungeonHealerDrink(bot, botAI);
 }
 
 bool DrinkAction::isPossible()

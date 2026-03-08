@@ -112,66 +112,56 @@ namespace
             return lfg::PLAYER_ROLE_TANK;
         return lfg::PLAYER_ROLE_DAMAGE;
     }
-
     static uint32 RTG_GetActualSpecRole(Player* bot)
-	{
-		if (!bot)
-			return lfg::PLAYER_ROLE_DAMAGE;
+    {
+        if (!bot)
+            return lfg::PLAYER_ROLE_DAMAGE;
 
-		uint8 cls = bot->getClass();
-		uint32 spec = bot->GetActiveSpec();
+        uint8 cls = bot->getClass();
+        uint8 specTab = AiFactory::GetPlayerSpecTab(bot);
 
-		// If your helper returns a talent tab index for the active spec, use that.
-		// 3.3.5 tab indexes:
-		// Druid: 0 Balance, 1 Feral, 2 Restoration
-		// Paladin: 0 Holy, 1 Protection, 2 Retribution
-		// Priest: 0 Discipline, 1 Holy, 2 Shadow
-		// Shaman: 0 Elemental, 1 Enhancement, 2 Restoration
-		// Warrior: 0 Arms, 1 Fury, 2 Protection
-		// Death Knight: 0 Blood, 1 Frost, 2 Unholy
+        switch (cls)
+        {
+            case CLASS_DRUID:
+                if (specTab == DRUID_TAB_RESTORATION)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (specTab == DRUID_TAB_FERAL)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
 
-		switch (cls)
-		{
-			case CLASS_DRUID:
-				if (spec == 2) // Restoration
-					return lfg::PLAYER_ROLE_HEALER;
-				if (spec == 1) // Feral
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PALADIN:
+                if (specTab == PALADIN_TAB_HOLY)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (specTab == PALADIN_TAB_PROTECTION)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
 
-			case CLASS_PALADIN:
-				if (spec == 0) // Holy
-					return lfg::PLAYER_ROLE_HEALER;
-				if (spec == 1) // Protection
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PRIEST:
+                if (specTab == PRIEST_TAB_SHADOW)
+                    return lfg::PLAYER_ROLE_DAMAGE;
+                return lfg::PLAYER_ROLE_HEALER;
 
-			case CLASS_PRIEST:
-				if (spec == 2) // Shadow
-					return lfg::PLAYER_ROLE_DAMAGE;
-				return lfg::PLAYER_ROLE_HEALER;
+            case CLASS_SHAMAN:
+                if (specTab == SHAMAN_TAB_RESTORATION)
+                    return lfg::PLAYER_ROLE_HEALER;
+                return lfg::PLAYER_ROLE_DAMAGE;
 
-			case CLASS_SHAMAN:
-				if (spec == 2) // Restoration
-					return lfg::PLAYER_ROLE_HEALER;
-				return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_WARRIOR:
+                if (specTab == WARRIOR_TAB_PROTECTION)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
 
-			case CLASS_WARRIOR:
-				if (spec == 2) // Protection
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_DEATH_KNIGHT:
+                if (specTab == DEATH_KNIGHT_TAB_BLOOD)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
 
-			case CLASS_DEATH_KNIGHT:
-				if (spec == 0) // Blood
-					return lfg::PLAYER_ROLE_TANK;
-				return lfg::PLAYER_ROLE_DAMAGE;
+            default:
+                return lfg::PLAYER_ROLE_DAMAGE;
+        }
+    }
 
-			default:
-				return lfg::PLAYER_ROLE_DAMAGE;
-		}
-	}
-	
-	static bool RTG_ParseLfgDesiredRole(std::string const& addData, uint32& desiredRole)
+    static bool RTG_ParseLfgDesiredRole(std::string const& addData, uint32& desiredRole)
 	{
 		desiredRole = 0;
 
