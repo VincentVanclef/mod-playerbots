@@ -1211,7 +1211,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			// If the bot is queued, leave it alone and refresh patience
 			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
 			{
-				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
 				continue;
 			}
 
@@ -1326,14 +1326,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					}
 				}
 
-				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
 				continue;
 			}
 
 			// Pending bots get more patience
 			if (GetEventValue(botId, "rtg_lfg_pending"))
 			{
-				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
 				continue;
 			}
 
@@ -1396,7 +1396,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (GetEventValue(botId, "rtg_bg_pending"))
             {
-                SetEventValue(botId, "rtg_bg_pending", 1, 45, addData);
+                SetEventValue(botId, "rtg_bg_pending", 1, 15, addData);
                 continue;
             }
 
@@ -1637,16 +1637,22 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
             sRandomPlayerbotMgr.CheckPlayers();
     }
 
-    if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
+	if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
     {
-        if (!sPlayerbotAIConfig.rtgEventDriven && time(nullptr) > (BgCheckTimer + 35))
+        if (time(nullptr) > (BgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? 5 : 35)))
+        {
             sRandomPlayerbotMgr.CheckBgQueue();
+            BgCheckTimer = time(nullptr);
+        }
     }
 
     if (sPlayerbotAIConfig.randomBotJoinLfg /* && !players.empty()*/)
     {
-        if (time(nullptr) > (LfgCheckTimer + 30))
+        if (time(nullptr) > (LfgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? 5 : 30)))
+        {
             sRandomPlayerbotMgr.CheckLfgQueue();
+            LfgCheckTimer = time(nullptr);
+        }
     }
 
     if (sPlayerbotAIConfig.randomBotAutologin && time(nullptr) > (printStatsTimer + 300))

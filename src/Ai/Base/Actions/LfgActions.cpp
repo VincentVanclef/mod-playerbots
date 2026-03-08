@@ -103,6 +103,28 @@ namespace
         }
     }
 
+    static bool RTG_GroupHasRealPlayerMember(Player* bot)
+    {
+        if (!bot)
+            return false;
+
+        Group* group = bot->GetGroup();
+        if (!group)
+            return false;
+
+        for (GroupReference* itr = group->GetFirstMember(); itr; itr = itr->next())
+        {
+            Player* member = itr->GetSource();
+            if (!member)
+                continue;
+
+            if (!GET_PLAYERBOT_AI(member))
+                return true;
+        }
+
+        return false;
+    }
+
     static bool RTG_IsQueuedLfgBot(Player* bot)
     {
         return RTG_HasPrefix(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), "rtg_lfg:");
@@ -185,6 +207,9 @@ bool LfgJoinAction::JoinLFG()
     // Only let bots queue for LFG after real players have initiated LFG queueing
     // and the grace window has expired.
     // ------------------------------------------------------------------
+    if (RTG_GroupHasRealPlayerMember(bot))
+        return false;
+
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 desiredRole = 0;
@@ -305,6 +330,9 @@ bool LfgJoinAction::JoinLFG()
 
 bool LfgRoleCheckAction::Execute(Event event)
 {
+    if (RTG_GroupHasRealPlayerMember(bot))
+        return false;
+
     if (Group* group = bot->GetGroup())
     {
         uint32 currentRoles = sLFGMgr->GetRoles(bot->GetGUID());
@@ -453,10 +481,16 @@ bool LfgJoinAction::isUseful()
     if (GET_PLAYERBOT_AI(bot)->IsRealPlayer())
         return false;
 
-    if (bot->GetGroup() && bot->GetGroup()->GetLeaderGUID() != bot->GetGUID())
+    if (bot->GetGroup())
     {
-        // botAI->ChangeStrategy("-lfg", BOT_STATE_NON_COMBAT);
-        return false;
+        if (RTG_GroupHasRealPlayerMember(bot))
+            return false;
+
+        if (bot->GetGroup()->GetLeaderGUID() != bot->GetGUID())
+        {
+            // botAI->ChangeStrategy("-lfg", BOT_STATE_NON_COMBAT);
+            return false;
+        }
     }
 
     if (bot->IsBeingTeleported())

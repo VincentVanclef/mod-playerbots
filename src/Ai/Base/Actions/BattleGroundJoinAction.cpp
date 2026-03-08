@@ -371,12 +371,23 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     }
 
     // Check if bots should join Battleground
+    bool assignedHelper = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType);
+
     uint32 bgAllianceBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAllianceBotCount;
     uint32 bgAlliancePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAlliancePlayerCount;
     uint32 bgHordeBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordeBotCount;
     uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
     uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
+
+    // RTG: explicitly assigned battleground helpers should still be allowed
+    // to queue even when the legacy activeBgQueue/bgInstanceCount counters have
+    // not caught up yet for this battleground.
+    if (assignedHelper)
+        return true;
+
+    if (assignedHelper)
+        return true;
 
     if (teamId == TEAM_ALLIANCE)
     {
@@ -388,12 +399,6 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
         if ((bgHordeBotCount + bgHordePlayerCount) < TeamSize * (activeBgQueue + bgInstanceCount))
             return true;
     }
-
-    // RTG: an explicitly assigned battleground helper should still be allowed
-    // to queue even when the legacy activeBgQueue/bgInstanceCount counters have
-    // not caught up yet for this battleground.
-    if (assignedHelper)
-        return true;
 
     return false;
 }

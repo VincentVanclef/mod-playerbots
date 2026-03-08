@@ -1,30 +1,103 @@
 # RTG Role/Context Framework Roadmap
 
-This test zip lays groundwork for a broader role-aware playerbot decision framework.
+This module snapshot now includes the earlier healer/role work plus the concrete queue-handling rules from **V5** and **V6**. The purpose of this document is to keep the project from drifting backward on later passes.
 
-## Goals
-- Make RDF role choice match actual spec.
-- Prevent BG support from being starved by RDF support.
-- Push healer specs toward healing-first behavior in dungeon/LFG context.
-- Keep class flavor alive by treating survival tools as desperation fallback instead of removing them entirely.
+## Locked goals
+These are now treated as concrete goals, not loose ideas.
 
-## What this zip changes
-1. **Spec-truth role detection**
-   - `RandomPlayerbotMgr.cpp` now uses `AiFactory::GetPlayerSpecTab(bot)` and the playerbot spec-tab enums for RDF role truth.
-2. **RDF/BG fairness groundwork**
-   - When both queues need bots, the helper budget now alternates if only one slot is available and guarantees at least one share each when two or more slots are available.
-3. **Dungeon healer suppression / support bias**
-   - `AttackAction.cpp` suppresses healer offensive pull behavior more aggressively in dungeon/LFG runs.
-   - `NonCombatActions.cpp` delays healer drinking when the group is fighting or has moved too far ahead.
-4. **Healer strategy tuning**
-   - Priest and Paladin healer defaults no longer lead with offensive filler.
-   - Druid and Shaman healer defaults lean further into proactive healing and tank support.
-5. **Emergency-only druid bear fallback**
-   - Resto-style healers in dungeon/LFG context can still bear-form as a last resort if they are personally being hit and are in critical health, instead of freely drifting into tank behavior.
+### Queue handling
+- RDF and BG queue checks must continue running while `rtgEventDriven` is enabled.
+- BG support must be serviced on a short cadence instead of being effectively disabled in RTG mode.
+- RDF support should react on the same short cadence once the grace window expires.
+- Pending queue reservations must expire quickly enough that a filled first dungeon does not cause the next dungeon queue to go stale behind it.
+- Mixed parties that contain real players must not have random bots spamming role checks or restarting queue flow on their own.
 
-## Recommended next pass
-- Add a shared `role/context` score modifier layer that adjusts action relevance globally for tank/healer/dps roles.
-- Add BG-specific role/context weighting so healers still heal aggressively in battleground support.
-- Add tank protection priorities: peel healer, pick up loose adds, value taunt/defensives above raw DPS.
-- Add DPS target policy: focus current kill target, avoid threat spikes, use interrupts/utility.
-- Add vote-to-kick handling for dead/DC/not-in-map bots after queue behavior is stable.
+### Battleground behavior
+- AB, WSG, and EotS are first-class test targets.
+- A bot explicitly brought online for BG support must be allowed to queue even if legacy `activeBgQueue` / `bgInstanceCount` counters have not caught up yet.
+- BG helper failures must be diagnosable from logs instead of remaining silent.
+
+### RDF behavior
+- RDF role choice must continue matching actual spec.
+- Healer-role dungeon bots should remain healing-first.
+- The queue system should favor fast recycling of stale helper reservations over leaving later queues blocked.
+
+## V5 concrete changes
+### Battleground scheduling
+- `RandomPlayerbotMgr.cpp`
+  - `CheckBgQueue()` now continues running when `rtgEventDriven` is enabled.
+  - RTG mode uses a short 5-second BG service interval instead of effectively skipping BG support.
+
+### Battleground join path
+- `BattleGroundJoinAction.cpp`
+  - RTG-assigned BG helpers are now allowed through `shouldJoinBg()` even when old BG counters have not updated yet.
+  - The same allowance is mirrored in `FreeBGJoinAction::shouldJoinBg()`.
+
+### Battleground stale reservation cleanup
+- `RandomPlayerbotMgr.cpp`
+  - `rtg_bg_pending` reservations now recycle on a short 15-second window instead of sitting around much longer.
+
+## V6 concrete changes
+### Faster RDF service cadence
+- `RandomPlayerbotMgr.cpp`
+  - `CheckLfgQueue()` now runs on a short cadence in RTG mode so RDF help does not wait for long scheduler gaps.
+
+### Faster LFG stale reservation cleanup
+- `RandomPlayerbotMgr.cpp`
+  - `rtg_lfg_pending` reservations now recycle on a short 15-second window.
+
+### Mixed-party anti-spam guard
+- `LfgActions.cpp`
+  - If a bot is grouped with any real player, it must not initiate or re-initiate queue flow on its own.
+  - Real players control requeue and role-check flow in mixed parties.
+
+### Grace defaults
+- `PlayerbotAIConfig.cpp`
+- `PlayerbotAIConfig.h`
+- `conf/playerbots.conf.dist`
+  - The default `AiPlayerbot.RTG.QueueGraceSeconds` baseline is now 30 seconds.
+
+## Logging requirements going forward
+Future passes should preserve or expand logging, not reduce it.
+
+### Required queue logs
+- BG demand detected for AB / WSG / EotS
+- BG helper assigned
+- BG helper allowed into `shouldJoinBg()`
+- BG helper failed to queue and why
+- LFG helper assigned
+- LFG helper rejected because role/spec mismatched
+- Pending reservation expired and was recycled
+
+### Why this matters
+We now know silent failures waste entire test rounds. Logging must keep queue-path failures visible.
+
+## Current test focus
+1. **Solo RDF**
+   - queue as DPS
+   - verify tank/healer/DPS helpers arrive quickly after grace expires
+
+2. **Back-to-back RDF**
+   - fill one dungeon
+   - queue another immediately
+   - verify the second queue is serviced quickly instead of stalling behind stale reservations
+
+3. **Mixed-party RDF**
+   - two real players in one party
+   - verify bots stop spamming role checks and do not force requeue
+
+4. **Solo BG**
+   - AB
+   - WSG
+   - EotS
+   - verify bots log in and actually queue
+
+5. **RDF + BG simultaneously**
+   - verify BG is still serviced while dungeon filling is happening
+
+## Next concrete direction
+The next passes should stay focused on:
+- faster burst-style helper login once grace expires
+- fair servicing of multiple simultaneous RDF queues
+- BG helper visibility and failure logging
+- no regression on healer-role dungeon behavior
