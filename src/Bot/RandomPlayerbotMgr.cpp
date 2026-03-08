@@ -40,6 +40,27 @@
 #include "GuildMgr.h"
 #include "GuildTaskMgr.h"
 #include "LFGMgr.h"
+#include "MapMgr.h"
+#include "NewRpgInfo.h"
+#include "NewRpgStrategy.h"
+#include "ObjectGuid.h"
+#include "ObjectAccessor.h"
+#include "PerfMonitor.h"
+#include "Player.h"
+#include "PlayerbotAI.h"
+#include "PlayerbotAIConfig.h"
+#include "PlayerbotCommandServer.h"
+#include "PlayerbotFactory.h"
+#include "Playerbots.h"
+#include "Position.h"
+#include "Random.h"
+#include "RandomPlayerbotFactory.h"
+#include "ServerFacade.h"
+#include "SharedDefines.h"
+#include "TravelMgr.h"
+#include "Unit.h"
+#include "UpdateTime.h"
+#include "World.h"
 
 namespace
 {
@@ -267,27 +288,6 @@ namespace
 		return RTG_GetActualSpecRole(bot);
 	}
 }
-#include "MapMgr.h"
-#include "NewRpgInfo.h"
-#include "NewRpgStrategy.h"
-#include "ObjectGuid.h"
-#include "ObjectAccessor.h"
-#include "PerfMonitor.h"
-#include "Player.h"
-#include "PlayerbotAI.h"
-#include "PlayerbotAIConfig.h"
-#include "PlayerbotCommandServer.h"
-#include "PlayerbotFactory.h"
-#include "Playerbots.h"
-#include "Position.h"
-#include "Random.h"
-#include "RandomPlayerbotFactory.h"
-#include "ServerFacade.h"
-#include "SharedDefines.h"
-#include "TravelMgr.h"
-#include "Unit.h"
-#include "UpdateTime.h"
-#include "World.h"
 
 struct GuidClassRaceInfo
 {
