@@ -2619,6 +2619,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 std::string addData = RTG_MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
+                bool sawEligibleFaction = false;
                 for (auto const& charInfo : allCharacters)
                 {
                     if (!capacity)
@@ -2627,6 +2628,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
                     if (charTeam != bucket.team)
                         continue;
+
+                    sawEligibleFaction = true;
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
@@ -2636,6 +2639,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     ++bucket.assignedExtra;
                     return true;
                 }
+
+                LOG_INFO("playerbots", "[RTG][BG] No helper logged for queue {} team {} level {} (eligibleFactionSeen={}, capacity={})",
+                         bucket.queueTypeId, bucket.team, bucket.level, sawEligibleFaction ? 1 : 0, capacity);
                 return false;
             };
 
@@ -3212,18 +3218,33 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             for (auto const& bracketIdPair : queueTypePair.second)
             {
                 BattlegroundInfo const& bgInfo = bracketIdPair.second;
-                if (!bgInfo.activeBgQueue || !bgInfo.minLevel)
+                if (!bgInfo.minLevel)
                     continue;
 
-                if (bgInfo.bgAlliancePlayerCount || bgInfo.bgHordePlayerCount)
+                bool realPlayersQueued = (bgInfo.bgAlliancePlayerCount || bgInfo.bgHordePlayerCount);
+                bool queueOpenForHelpers = bgInfo.activeBgQueue || realPlayersQueued;
+                if (!queueOpenForHelpers)
+                    continue;
+
+                if (realPlayersQueued)
                     anyRealBgQueued = true;
 
                 uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
                 uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
-                if (allianceCurrent < teamSize)
-                    rtgBgNeedTotal += (teamSize - allianceCurrent);
-                if (hordeCurrent < teamSize)
-                    rtgBgNeedTotal += (teamSize - hordeCurrent);
+                uint32 allianceNeed = allianceCurrent < teamSize ? (teamSize - allianceCurrent) : 0u;
+                uint32 hordeNeed = hordeCurrent < teamSize ? (teamSize - hordeCurrent) : 0u;
+                rtgBgNeedTotal += allianceNeed + hordeNeed;
+
+                if (realPlayersQueued && (bgTypeId == BATTLEGROUND_AB || bgTypeId == BATTLEGROUND_WS || bgTypeId == BATTLEGROUND_EY))
+                {
+                    LOG_INFO("playerbots",
+                             "[RTG][BG] Demand {} {}-{} A(real={}, bot={}, need={}) H(real={}, bot={}, need={}) activeQueue={}",
+                             bgTypeId == BATTLEGROUND_AB ? "AB" : (bgTypeId == BATTLEGROUND_WS ? "WSG" : "EotS"),
+                             bgInfo.minLevel, bgInfo.maxLevel,
+                             bgInfo.bgAlliancePlayerCount, bgInfo.bgAllianceBotCount, allianceNeed,
+                             bgInfo.bgHordePlayerCount, bgInfo.bgHordeBotCount, hordeNeed,
+                             bgInfo.activeBgQueue);
+                }
             }
         }
 
