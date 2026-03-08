@@ -187,7 +187,7 @@ bool PlayerbotAIConfig::Initialize()
 
     // RTG: queue-driven bot population
     rtgEventDriven = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Enable", false);
-    rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
+    rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 180);
     rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 60);
     rtgKeepWorldBots = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.KeepWorldBots", false);
 

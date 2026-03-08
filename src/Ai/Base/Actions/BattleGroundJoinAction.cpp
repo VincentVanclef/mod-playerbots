@@ -377,16 +377,6 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
     uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
-    bool realPlayersQueued = (bgAlliancePlayerCount || bgHordePlayerCount);
-
-    if (assignedHelper)
-    {
-        uint32 myCount = (teamId == TEAM_ALLIANCE) ? (bgAllianceBotCount + bgAlliancePlayerCount) : (bgHordeBotCount + bgHordePlayerCount);
-        if (myCount < TeamSize)
-            return true;
-
-        return realPlayersQueued;
-    }
 
     if (teamId == TEAM_ALLIANCE)
     {
@@ -398,6 +388,12 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
         if ((bgHordeBotCount + bgHordePlayerCount) < TeamSize * (activeBgQueue + bgInstanceCount))
             return true;
     }
+
+    // RTG: an explicitly assigned battleground helper should still be allowed
+    // to queue even when the legacy activeBgQueue/bgInstanceCount counters have
+    // not caught up yet for this battleground.
+    if (assignedHelper)
+        return true;
 
     return false;
 }
@@ -736,16 +732,6 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
     uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
     uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
-    bool realPlayersQueued = (bgAlliancePlayerCount || bgHordePlayerCount);
-
-    if (assignedHelper)
-    {
-        uint32 myCount = (teamId == TEAM_ALLIANCE) ? (bgAllianceBotCount + bgAlliancePlayerCount) : (bgHordeBotCount + bgHordePlayerCount);
-        if (myCount < TeamSize)
-            return true;
-
-        return realPlayersQueued;
-    }
 
     if (teamId == TEAM_ALLIANCE)
     {

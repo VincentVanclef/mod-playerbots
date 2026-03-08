@@ -180,12 +180,12 @@ namespace
     {
         specTab = RTG_DefaultSpecTabForClass(cls);
 
-        QueryResult specResult = CharacterDatabase.Query("SELECT activeTalentGroup FROM characters WHERE guid = {}", guid);
-        uint8 activeTalentGroup = 0;
+        QueryResult specResult = CharacterDatabase.Query("SELECT activeSpec FROM characters WHERE guid = {}", guid);
+        uint8 activeSpec = 0;
         if (specResult)
-            activeTalentGroup = specResult->Fetch()[0].Get<uint8>();
+            activeSpec = specResult->Fetch()[0].Get<uint8>();
 
-        uint32 activeMask = (1u << activeTalentGroup);
+        uint32 activeMask = (1u << activeSpec);
         uint32 const* talentTabIds = GetTalentTabPages(cls);
         if (!talentTabIds)
             return true;
@@ -1211,7 +1211,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			// If the bot is queued, leave it alone and refresh patience
 			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
 			{
-				SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
 				continue;
 			}
 
@@ -1326,14 +1326,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					}
 				}
 
-				SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
 				continue;
 			}
 
 			// Pending bots get more patience
 			if (GetEventValue(botId, "rtg_lfg_pending"))
 			{
-				SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
+				SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
 				continue;
 			}
 
@@ -1396,7 +1396,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (GetEventValue(botId, "rtg_bg_pending"))
             {
-                SetEventValue(botId, "rtg_bg_pending", 1, 20, addData);
+                SetEventValue(botId, "rtg_bg_pending", 1, 45, addData);
                 continue;
             }
 
@@ -1639,15 +1639,13 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
 
     if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
     {
-        uint32 bgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 35u;
-        if (time(nullptr) > (BgCheckTimer + bgCheckInterval))
+        if (!sPlayerbotAIConfig.rtgEventDriven && time(nullptr) > (BgCheckTimer + 35))
             sRandomPlayerbotMgr.CheckBgQueue();
     }
 
     if (sPlayerbotAIConfig.randomBotJoinLfg /* && !players.empty()*/)
     {
-        uint32 lfgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 30u;
-        if (time(nullptr) > (LfgCheckTimer + lfgCheckInterval))
+        if (time(nullptr) > (LfgCheckTimer + 30))
             sRandomPlayerbotMgr.CheckLfgQueue();
     }
 
@@ -2211,9 +2209,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
             if (RTG_HasPrefix(addData, "rtg_lfg:"))
-                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 20, addData);
+                SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             else if (RTG_HasPrefix(addData, "rtg_bg:"))
-                SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 20, addData);
+                SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 45, addData);
             currentBots.push_back(charInfo.guid);
 
             return true;
@@ -2621,7 +2619,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 std::string addData = RTG_MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
-                bool sawEligibleFaction = false;
                 for (auto const& charInfo : allCharacters)
                 {
                     if (!capacity)
@@ -2630,8 +2627,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
                     if (charTeam != bucket.team)
                         continue;
-
-                    sawEligibleFaction = true;
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
@@ -2641,9 +2636,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     ++bucket.assignedExtra;
                     return true;
                 }
-
-                LOG_INFO("playerbots", "[RTG][BG] No helper logged for queue {} team {} level {} (eligibleFactionSeen={}, capacity={})",
-                         bucket.queueTypeId, bucket.team, bucket.level, sawEligibleFaction ? 1 : 0, capacity);
                 return false;
             };
 
@@ -2817,15 +2809,19 @@ std::vector<uint32> parseBrackets(const std::string& str)
 
 void RandomPlayerbotMgr::CheckBgQueue()
 {
-    uint32 bgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 35u;
-
     if (!BgCheckTimer)
+    {
         BgCheckTimer = time(nullptr);
+        return;  // Exit immediately after initializing the timer
+    }
 
     if (time(nullptr) < BgCheckTimer)
-        return;
+    {
+        return;  // No need to proceed if the current time is less than the timer
+    }
 
-    BgCheckTimer = time(nullptr) + bgCheckInterval;
+    // Update the timer to the current time
+    BgCheckTimer = time(nullptr);
 
     LOG_DEBUG("playerbots", "Checking BG Queue...");
 
@@ -3216,33 +3212,18 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             for (auto const& bracketIdPair : queueTypePair.second)
             {
                 BattlegroundInfo const& bgInfo = bracketIdPair.second;
-                if (!bgInfo.minLevel)
+                if (!bgInfo.activeBgQueue || !bgInfo.minLevel)
                     continue;
 
-                bool realPlayersQueued = (bgInfo.bgAlliancePlayerCount || bgInfo.bgHordePlayerCount);
-                bool queueOpenForHelpers = bgInfo.activeBgQueue || realPlayersQueued;
-                if (!queueOpenForHelpers)
-                    continue;
-
-                if (realPlayersQueued)
+                if (bgInfo.bgAlliancePlayerCount || bgInfo.bgHordePlayerCount)
                     anyRealBgQueued = true;
 
                 uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
                 uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
-                uint32 allianceNeed = allianceCurrent < teamSize ? (teamSize - allianceCurrent) : 0u;
-                uint32 hordeNeed = hordeCurrent < teamSize ? (teamSize - hordeCurrent) : 0u;
-                rtgBgNeedTotal += allianceNeed + hordeNeed;
-
-                if (realPlayersQueued && (bgTypeId == BATTLEGROUND_AB || bgTypeId == BATTLEGROUND_WS || bgTypeId == BATTLEGROUND_EY))
-                {
-                    LOG_INFO("playerbots",
-                             "[RTG][BG] Demand {} {}-{} A(real={}, bot={}, need={}) H(real={}, bot={}, need={}) activeQueue={}",
-                             bgTypeId == BATTLEGROUND_AB ? "AB" : (bgTypeId == BATTLEGROUND_WS ? "WSG" : "EotS"),
-                             bgInfo.minLevel, bgInfo.maxLevel,
-                             bgInfo.bgAlliancePlayerCount, bgInfo.bgAllianceBotCount, allianceNeed,
-                             bgInfo.bgHordePlayerCount, bgInfo.bgHordeBotCount, hordeNeed,
-                             bgInfo.activeBgQueue);
-                }
+                if (allianceCurrent < teamSize)
+                    rtgBgNeedTotal += (teamSize - allianceCurrent);
+                if (hordeCurrent < teamSize)
+                    rtgBgNeedTotal += (teamSize - hordeCurrent);
             }
         }
 
@@ -3268,8 +3249,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
 
 void RandomPlayerbotMgr::CheckLfgQueue()
 {
-    uint32 lfgCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? 5u : 30u;
-    if (!LfgCheckTimer || time(nullptr) > (LfgCheckTimer + lfgCheckInterval))
+    if (!LfgCheckTimer || time(nullptr) > (LfgCheckTimer + 30))
         LfgCheckTimer = time(nullptr);
 
     LOG_DEBUG("playerbots", "Checking LFG Queue...");
@@ -5156,7 +5136,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
 
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 20, addData);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
         }
         else if (RTG_ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
@@ -5168,7 +5148,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
 
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 20, addData);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
         }
     }

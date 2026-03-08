@@ -102,7 +102,7 @@ public:
 
     // RTG: Event-driven bots (keep bots offline unless needed for BG/LFG)
     bool rtgEventDriven = false;
-    uint32 rtgQueueGraceSeconds = 30;
+    uint32 rtgQueueGraceSeconds = 180;
     uint32 rtgEventMaxBots = 60;
     bool rtgKeepWorldBots = false; // if true, preserves normal world population target
 

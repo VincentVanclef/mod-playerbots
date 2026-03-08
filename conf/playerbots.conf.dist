@@ -2222,7 +2222,7 @@ AiPlayerbot.EnableICCBuffs = 1
 # - When real players start queueing, bots will begin joining ONLY AFTER QueueGraceSeconds expires.
 #
 AiPlayerbot.RTG.EventDriven.Enable = 0
-AiPlayerbot.RTG.QueueGraceSeconds = 30
+AiPlayerbot.RTG.QueueGraceSeconds = 180
 AiPlayerbot.RTG.EventDriven.MaxBots = 60
 AiPlayerbot.RTG.EventDriven.KeepWorldBots = 0
 
