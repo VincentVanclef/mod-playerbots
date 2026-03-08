@@ -15,7 +15,9 @@ HealPriestStrategy::HealPriestStrategy(PlayerbotAI* botAI) : GenericPriestStrate
 
 std::vector<NextAction> HealPriestStrategy::getDefaultActions()
 {
-    return {};
+    return {
+        NextAction("shoot", ACTION_DEFAULT)
+    };
 }
 
 void HealPriestStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)

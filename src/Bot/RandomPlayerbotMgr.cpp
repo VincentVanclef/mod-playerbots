@@ -4,7 +4,7 @@
  */
 
 #include "RandomPlayerbotMgr.h"
-#include "PlayerbotAI.h" 
+
 #include <WorldSessionMgr.h>
 #include "unordered_set"
 #include <algorithm>
@@ -40,6 +40,7 @@
 #include "GuildMgr.h"
 #include "GuildTaskMgr.h"
 #include "LFGMgr.h"
+#include "PlayerbotAI.h"
 
 namespace
 {
@@ -112,6 +113,7 @@ namespace
             return lfg::PLAYER_ROLE_TANK;
         return lfg::PLAYER_ROLE_DAMAGE;
     }
+
     static uint32 RTG_GetActualSpecRole(Player* bot)
     {
         if (!bot)
@@ -160,8 +162,8 @@ namespace
                 return lfg::PLAYER_ROLE_DAMAGE;
         }
     }
-
-    static bool RTG_ParseLfgDesiredRole(std::string const& addData, uint32& desiredRole)
+	
+	static bool RTG_ParseLfgDesiredRole(std::string const& addData, uint32& desiredRole)
 	{
 		desiredRole = 0;
 
@@ -265,6 +267,20 @@ namespace
 	{
 		return RTG_GetActualSpecRole(bot);
 	}
+
+    static bool RTG_AssignedLfgRoleMatchesSpec(Player* bot, std::string const& addData, uint32* desiredRoleOut = nullptr, uint32* actualRoleOut = nullptr)
+    {
+        uint32 desiredRole = 0;
+        if (!RTG_ParseLfgDesiredRole(addData, desiredRole) || !desiredRole)
+            return true;
+
+        uint32 actualRole = RTG_ActualRoleForBot(bot);
+        if (desiredRoleOut)
+            *desiredRoleOut = desiredRole;
+        if (actualRoleOut)
+            *actualRoleOut = actualRole;
+        return desiredRole == actualRole;
+    }
 }
 #include "MapMgr.h"
 #include "NewRpgInfo.h"
@@ -2418,16 +2434,47 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             uint32 totalRequested = totalLfgNeed + totalBgNeed;
             uint32 lfgCapacity = 0;
             uint32 bgCapacity = 0;
+            bool bgFirstTurn = GetEventValue(0, "rtg_queue_turn_bg") != 0;
+
             if (totalRequested)
             {
-                lfgCapacity = (remainingCapacity * totalLfgNeed + totalRequested - 1) / totalRequested;
-                if (lfgCapacity > remainingCapacity)
-                    lfgCapacity = remainingCapacity;
-                bgCapacity = remainingCapacity - lfgCapacity;
-                if (!totalLfgNeed)
-                    bgCapacity = remainingCapacity;
-                if (!totalBgNeed)
-                    lfgCapacity = remainingCapacity;
+                if (totalLfgNeed && totalBgNeed && remainingCapacity == 1)
+                {
+                    bgCapacity = bgFirstTurn ? 1u : 0u;
+                    lfgCapacity = bgFirstTurn ? 0u : 1u;
+                }
+                else
+                {
+                    lfgCapacity = (remainingCapacity * totalLfgNeed + totalRequested - 1) / totalRequested;
+                    if (lfgCapacity > remainingCapacity)
+                        lfgCapacity = remainingCapacity;
+
+                    bgCapacity = remainingCapacity - lfgCapacity;
+
+                    if (!totalLfgNeed)
+                        bgCapacity = remainingCapacity;
+                    if (!totalBgNeed)
+                        lfgCapacity = remainingCapacity;
+
+                    if (totalLfgNeed && totalBgNeed && remainingCapacity >= 2)
+                    {
+                        if (!lfgCapacity)
+                        {
+                            lfgCapacity = 1u;
+                            bgCapacity = remainingCapacity - lfgCapacity;
+                        }
+                        else if (!bgCapacity)
+                        {
+                            bgCapacity = 1u;
+                            lfgCapacity = remainingCapacity - bgCapacity;
+                        }
+                    }
+                }
+
+                if (totalLfgNeed && totalBgNeed)
+                    SetEventValue(0, "rtg_queue_turn_bg", bgFirstTurn ? 0u : 1u, 300);
+                else
+                    SetEventValue(0, "rtg_queue_turn_bg", 0u, 0u);
             }
 
             auto tryFillLfgRole = [&](RtgLfgBucket& bucket, uint32 desiredRole, uint32& capacity) -> bool
@@ -2457,6 +2504,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         ++bucket.assignedHeal;
                     else
                         ++bucket.assignedDps;
+
+                    LOG_INFO("playerbots", "[RTG][LFG] Logged helper {} for owner {} team {} level {} desired role {}",
+                             charInfo.guid, bucket.owner, bucket.team, bucket.level, desiredRole);
                     return true;
                 }
                 return false;
@@ -5006,13 +5056,28 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         uint32 desiredLevel = 0;
         uint32 desiredQueueType = 0;
 
-        if (RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel))
+        uint32 desiredRole = 0;
+        if (RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole))
         {
             if (desiredLevel && bot->GetLevel() != desiredLevel)
             {
                 bot->GiveLevel(desiredLevel);
                 bot->InitStatsForLevel(true);
                 bot->SetUInt32Value(PLAYER_XP, 0);
+            }
+
+            uint32 actualRole = RTG_ActualRoleForBot(bot);
+            if (desiredRole && desiredRole != actualRole)
+            {
+                LOG_INFO("playerbots", "[RTG][LFG] Rejecting bot {} <{}> on login: desired role {} does not match spec role {}",
+                         bot->GetGUID().ToString().c_str(), bot->GetName().c_str(), desiredRole, actualRole);
+
+                SetEventValue(bot->GetGUID().GetCounter(), "add", 0, 0);
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
+                currentBots.remove(bot->GetGUID().GetCounter());
+                LogoutPlayerBot(bot->GetGUID());
+                return;
             }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
@@ -5027,6 +5092,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 bot->SetUInt32Value(PLAYER_XP, 0);
             }
 
+            LOG_INFO("playerbots", "[RTG][BG] Logged helper {} <{}> for queue {} team {} level {}",
+                     bot->GetGUID().ToString().c_str(), bot->GetName().c_str(), desiredQueueType, desiredTeam, desiredLevel);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
         }

@@ -17,7 +17,7 @@
 
 namespace
 {
-    static bool RTG_ShouldSuppressHealerCombat(PlayerbotAI* botAI, Player* bot, Unit* target)
+    static bool RTG_ShouldSuppressHealerPull(PlayerbotAI* botAI, Player* bot, Unit* target)
     {
         if (!botAI || !bot || !target || !botAI->IsHeal(bot))
             return false;
@@ -48,7 +48,7 @@ bool AttackAction::Execute(Event /*event*/)
     if (!target->IsInWorld())
         return false;
     Player* bot = botAI ? botAI->GetBot() : nullptr;
-    if (RTG_ShouldSuppressHealerCombat(botAI, bot, target))
+    if (RTG_ShouldSuppressHealerPull(botAI, bot, target))
     {
         bot->AttackStop();
         bot->SetTarget(ObjectGuid::Empty);
@@ -74,7 +74,7 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
         return false;
     }
     Unit* masterTarget = botAI->GetUnit(guid);
-    if (RTG_ShouldSuppressHealerCombat(botAI, bot, masterTarget))
+    if (RTG_ShouldSuppressHealerPull(botAI, bot, masterTarget))
     {
         bot->AttackStop();
         bot->SetTarget(ObjectGuid::Empty);
@@ -91,13 +91,6 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
 
 bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
-    if (RTG_ShouldSuppressHealerCombat(botAI, bot, target))
-    {
-        bot->AttackStop();
-        bot->SetTarget(ObjectGuid::Empty);
-        return false;
-    }
-
     Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
     bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
     
