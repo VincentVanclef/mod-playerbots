@@ -19,7 +19,7 @@ namespace
 {
     static bool RTG_ShouldSuppressHealerPull(PlayerbotAI* botAI, Player* bot, Unit* target)
     {
-        if (!botAI || !bot || !target || !botAI->IsHeal(bot))
+        if (!botAI || !bot || !target || !botAI->IsHeal(bot, true))
             return false;
 
         Group* group = bot->GetGroup();
@@ -35,8 +35,22 @@ namespace
         if (target->GetVictim() == bot)
             return false;
 
+        if (group)
+        {
+            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+            {
+                Player* member = ref->GetSource();
+                if (!member || !member->IsInWorld())
+                    continue;
+
+                if (member != bot && member->IsInCombat())
+                    return true;
+            }
+        }
+
         return true;
     }
+
 }
 
 bool AttackAction::Execute(Event /*event*/)

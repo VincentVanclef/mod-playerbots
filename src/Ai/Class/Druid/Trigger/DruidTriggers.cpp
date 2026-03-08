@@ -7,6 +7,28 @@
 #include "Player.h"
 #include "Playerbots.h"
 
+namespace
+{
+    static bool RTG_HealerEmergencyBearForm(PlayerbotAI* botAI)
+    {
+        Player* bot = botAI ? botAI->GetBot() : nullptr;
+        if (!botAI || !bot || !botAI->IsHeal(bot, true))
+            return true;
+
+        Group* group = bot->GetGroup();
+        Map* map = bot->GetMap();
+        bool inDungeonRun = (group && group->isLFGGroup()) || (map && map->IsDungeon());
+        if (!inDungeonRun)
+            return true;
+
+        Unit* victim = bot->GetVictim();
+        if (!victim || victim->GetVictim() != bot)
+            return false;
+
+        return bot->GetHealthPct() <= 35.0f;
+    }
+}
+
 bool MarkOfTheWildOnPartyTrigger::IsActive()
 {
     return BuffOnPartyTrigger::IsActive() && !botAI->HasAura("gift of the wild", GetTarget());
@@ -29,7 +51,7 @@ bool EntanglingRootsKiteTrigger::IsActive()
 
 bool ThornsTrigger::IsActive() { return BuffTrigger::IsActive() && !botAI->HasAura("thorns", GetTarget()); }
 
-bool BearFormTrigger::IsActive() { return !botAI->HasAnyAuraOf(bot, "bear form", "dire bear form", nullptr); }
+bool BearFormTrigger::IsActive() { return RTG_HealerEmergencyBearForm(botAI) && !botAI->HasAnyAuraOf(bot, "bear form", "dire bear form", nullptr); }
 
 bool TreeFormTrigger::IsActive() { return !botAI->HasAura(33891, bot); }
 

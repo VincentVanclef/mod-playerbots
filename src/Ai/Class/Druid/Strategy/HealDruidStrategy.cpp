@@ -43,6 +43,7 @@ void HealDruidStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
                         {
                                           NextAction("tree form", ACTION_CRITICAL_HEAL + 4.1f),
                                           NextAction("swiftmend on party", ACTION_CRITICAL_HEAL + 4),
+                                          NextAction("rejuvenation on party", ACTION_CRITICAL_HEAL + 3.5f),
                                           NextAction("regrowth on party", ACTION_CRITICAL_HEAL + 3),
                                           NextAction("wild growth on party", ACTION_CRITICAL_HEAL + 2),
                                           NextAction("nourish on party", ACTION_CRITICAL_HEAL + 1),
@@ -71,6 +72,7 @@ void HealDruidStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
         new TriggerNode("party member low health",
                         { NextAction("tree form", ACTION_MEDIUM_HEAL + 1.5f),
                                           NextAction("wild growth on party", ACTION_MEDIUM_HEAL + 1.4f),
+                                          NextAction("rejuvenation on party", ACTION_MEDIUM_HEAL + 1.35f),
                                           NextAction("regrowth on party", ACTION_MEDIUM_HEAL + 1.3f),
                                           NextAction("swiftmend on party", ACTION_MEDIUM_HEAL + 1.2),
                                           NextAction("nourish on party", ACTION_MEDIUM_HEAL + 1.1f),

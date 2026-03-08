@@ -8,8 +8,41 @@
 #include "Event.h"
 #include "Playerbots.h"
 
+namespace
+{
+    static bool RTG_ShouldDelayHealerDrink(PlayerbotAI* botAI, Player* bot)
+    {
+        if (!botAI || !bot || !botAI->IsHeal(bot, true))
+            return false;
+
+        Group* group = bot->GetGroup();
+        Map* map = bot->GetMap();
+        bool inDungeonRun = (group && group->isLFGGroup()) || (map && map->IsDungeon());
+        if (!inDungeonRun || !group)
+            return false;
+
+        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+        {
+            Player* member = ref->GetSource();
+            if (!member || member == bot || !member->IsInWorld())
+                continue;
+
+            if (member->IsInCombat())
+                return true;
+
+            if (bot->GetDistance(member) > 35.0f)
+                return true;
+        }
+
+        return false;
+    }
+}
+
 bool DrinkAction::Execute(Event event)
 {
+    if (RTG_ShouldDelayHealerDrink(botAI, bot))
+        return false;
+
     if (botAI->HasCheat(BotCheatMask::food))
     {
         // if (bot->IsNonMeleeSpellCast(true))
@@ -49,6 +82,9 @@ bool DrinkAction::Execute(Event event)
 
 bool DrinkAction::isUseful()
 {
+    if (RTG_ShouldDelayHealerDrink(botAI, bot))
+        return false;
+
     return UseItemAction::isUseful() &&
         AI_VALUE2(bool, "has mana", "self target") &&
         AI_VALUE2(uint8, "mana", "self target") < 100;

@@ -7,14 +7,36 @@
 
 #include "Playerbots.h"
 
+namespace
+{
+    static bool RTG_AllowHealerBearForm(PlayerbotAI* botAI)
+    {
+        Player* bot = botAI ? botAI->GetBot() : nullptr;
+        if (!botAI || !bot || !botAI->IsHeal(bot, true))
+            return true;
+
+        Group* group = bot->GetGroup();
+        Map* map = bot->GetMap();
+        bool inDungeonRun = (group && group->isLFGGroup()) || (map && map->IsDungeon());
+        if (!inDungeonRun)
+            return true;
+
+        Unit* victim = bot->GetVictim();
+        if (!victim || victim->GetVictim() != bot)
+            return false;
+
+        return bot->GetHealthPct() <= 35.0f;
+    }
+}
+
 bool CastBearFormAction::isPossible()
 {
-    return CastBuffSpellAction::isPossible() && !botAI->HasAura("dire bear form", GetTarget());
+    return RTG_AllowHealerBearForm(botAI) && CastBuffSpellAction::isPossible() && !botAI->HasAura("dire bear form", GetTarget());
 }
 
 bool CastBearFormAction::isUseful()
 {
-    return CastBuffSpellAction::isUseful() && !botAI->HasAura("dire bear form", GetTarget());
+    return RTG_AllowHealerBearForm(botAI) && CastBuffSpellAction::isUseful() && !botAI->HasAura("dire bear form", GetTarget());
 }
 
 std::vector<NextAction> CastDireBearFormAction::getAlternatives()

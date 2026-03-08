@@ -16,7 +16,8 @@ HealPriestStrategy::HealPriestStrategy(PlayerbotAI* botAI) : GenericPriestStrate
 std::vector<NextAction> HealPriestStrategy::getDefaultActions()
 {
     return {
-        NextAction("shoot", ACTION_DEFAULT)
+        NextAction("renew on party", ACTION_DEFAULT + 0.5f),
+        NextAction("power word: shield on party", ACTION_DEFAULT)
     };
 }
 
@@ -29,7 +30,8 @@ void HealPriestStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
             "group heal setting",
             {
                 NextAction("prayer of mending on party", ACTION_MEDIUM_HEAL + 8),
-                NextAction("power word: shield on not full", ACTION_MEDIUM_HEAL + 7)
+                NextAction("power word: shield on not full", ACTION_MEDIUM_HEAL + 9),
+                NextAction("renew on party", ACTION_MEDIUM_HEAL + 6)
             }
         )
     );

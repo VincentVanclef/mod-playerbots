@@ -11,6 +11,7 @@
 #include "LFGPackets.h"
 #include "Opcodes.h"
 #include "Playerbots.h"
+#include "PlayerbotAI.h"
 #include "World.h"
 #include "WorldPacket.h"
 
@@ -151,12 +152,8 @@ uint32 LfgJoinAction::GetRoles()
         {
             if (desiredRole != actualRole)
             {
-                LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, refusing desired role and using actual role", bot->GetGUID().ToString().c_str(),
+                LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, using actual role", bot->GetGUID().ToString().c_str(),
                          bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), desiredRole, actualRole);
-            }
-            else
-            {
-                return desiredRole;
             }
         }
     }
