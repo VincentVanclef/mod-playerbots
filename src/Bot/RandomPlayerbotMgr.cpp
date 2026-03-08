@@ -180,7 +180,7 @@ namespace
     {
         specTab = RTG_DefaultSpecTabForClass(cls);
 
-        QueryResult specResult = CharacterDatabase.Query("SELECT activeSpec FROM characters WHERE guid = {}", guid);
+        QueryResult specResult = CharacterDatabase.Query("SELECT activeTalentGroup FROM characters WHERE guid = {}", guid);
         uint8 activeSpec = 0;
         if (specResult)
             activeSpec = specResult->Fetch()[0].Get<uint8>();
