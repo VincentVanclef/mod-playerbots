@@ -1224,14 +1224,17 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					continue;
 				}
 
-				// grouped but not LFG group - preserve a bit longer
-				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-				continue;
+				if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+					botAI->LeaveOrDisbandGroup();
 			}
 
 			if (bot->isDead() || bot->GetCorpse())
 			{
-				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				SetEventValue(botId, "add", 0, 0);
+				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				SetEventValue(botId, "rtg_dungeon_active", 0, 0);
+				currentBots.remove(botId);
+				rtgIdleLogout.push_back(botGuid);
 				continue;
 			}
 
@@ -1247,7 +1250,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		for (ObjectGuid const& guid : rtgStaleQueueBots)
 		{
 			if (Player* staleBot = GetPlayerBot(guid))
-				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
+			{
+				staleBot->RemoveAura(71041); // Dungeon Deserter
+				staleBot->RemoveAura(71328);
+			}
 
 			LogoutPlayerBot(guid);
 		}
@@ -1339,13 +1345,23 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
 			if (grp)
 			{
-				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-				continue;
+				if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+					botAI->LeaveOrDisbandGroup();
+
+				if (grp->isLFGGroup())
+				{
+					SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+					continue;
+				}
 			}
 
 			if (bot->isDead() || bot->GetCorpse())
 			{
-				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
+				SetEventValue(botId, "add", 0, 0);
+				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				SetEventValue(botId, "rtg_dungeon_active", 0, 0);
+				currentBots.remove(botId);
+				rtgStaleQueueBots.push_back(botGuid);
 				continue;
 			}
 
@@ -1361,7 +1377,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		for (ObjectGuid const& botGuid : rtgStaleQueueBots)
 		{
 			if (Player* staleBot = GetPlayerBot(botGuid))
-				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
+			{
+				staleBot->RemoveAura(71041); // Dungeon Deserter
+				staleBot->RemoveAura(71328);
+			}
 
 			LogoutPlayerBot(botGuid);
 		}
@@ -1466,8 +1485,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			bool stillInRun =
 				(map && (map->IsDungeon() || map->IsRaid())) ||
 				(group && group->isLFGGroup()) ||
-				bot->isDead() ||
-				bot->GetCorpse() ||
+				sLFGMgr->GetState(bot->GetGUID()) == lfg::LFG_STATE_DUNGEON ||
 				bot->IsInCombat() ||
 				bot->IsBeingTeleported() ||
 				bot->HasUnitState(UNIT_STATE_IN_FLIGHT);
@@ -1478,7 +1496,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			if (now <= activeSince + 300)
+			if (now <= activeSince + 30)
 				continue;
 
 			SetEventValue(botId, "rtg_dungeon_active", 0, 0);
