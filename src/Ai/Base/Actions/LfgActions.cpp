@@ -63,18 +63,6 @@ namespace
         }
     }
 	
-	static void RTG_ClearQueuePenaltyAuras(Player* bot)
-	{
-		if (!bot)
-			return;
-
-		static uint32 const penaltySpells[] = {71041, 71328};
-		for (uint32 spellId : penaltySpells)
-		{
-			if (bot->HasAura(spellId))
-				bot->RemoveAurasDueToSpell(spellId);
-		}
-	}
 
     static uint32 RTG_ActualRoleForBot(Player* bot)
     {
@@ -118,6 +106,27 @@ namespace
     {
         return RTG_HasPrefix(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), "rtg_lfg:");
     }
+
+    static bool RTG_IsAssignedLfgHelper(Player* bot, uint32* desiredRole = nullptr)
+    {
+        if (!bot)
+            return false;
+
+        uint32 role = 0;
+        bool assigned = RTG_ParseLfgDesiredRole(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), role);
+        if (desiredRole)
+            *desiredRole = role;
+        return assigned;
+    }
+
+    static void RTG_ClearDungeonQueuePenalties(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        bot->RemoveAura(71041);
+        bot->RemoveAura(71328);
+    }
 }
 
 bool LfgJoinAction::Execute(Event event) { return JoinLFG(); }
@@ -155,9 +164,6 @@ bool LfgJoinAction::JoinLFG()
 {
     static std::unordered_map<uint32, time_t> rtgNextJoinAttempt;
 
-    if (sRandomPlayerbotMgr.IsRandomBot(bot))
-        RTG_ClearQueuePenaltyAuras(bot);
-
     // check if already in lfg
     LfgState state = sLFGMgr->GetState(bot->GetGUID());
     if (state != LFG_STATE_NONE)
@@ -180,13 +186,22 @@ bool LfgJoinAction::JoinLFG()
     // ------------------------------------------------------------------
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_start");
-        bool isAssignedHelper = RTG_IsQueuedLfgBot(bot);
-        if (!start && !isAssignedHelper)
-            return false;
+        uint32 desiredRole = 0;
+        bool assignedHelper = RTG_IsAssignedLfgHelper(bot, &desiredRole);
 
-        if (start && now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds) && !isAssignedHelper)
-            return false;
+        if (!assignedHelper)
+        {
+            uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_start");
+            if (!start)
+                return false;
+
+            if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+                return false;
+        }
+        else
+        {
+            rtgNextJoinAttempt[botId] = now + 5;
+        }
     }
 
     /*ItemCountByQuality visitor;
@@ -244,6 +259,8 @@ bool LfgJoinAction::JoinLFG()
     if (roleMask & lfg::PLAYER_ROLE_DAMAGE)
         _roles = "DPS";
 
+    RTG_ClearDungeonQueuePenalties(bot);
+
     LOG_INFO("playerbots", "Bot {} {}:{} <{}>: queues LFG, Dungeon as {} ({})", bot->GetGUID().ToString().c_str(),
              bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), _roles,
              many ? "several dungeons" : dungeon->Name[0]);
@@ -271,13 +288,13 @@ bool LfgJoinAction::JoinLFG()
     // - fresh queued fill bots with no group should retry quickly
     // - grouped/post-dungeon bots should retry more calmly
     // - normal bots keep the default pacing
-    uint32 retryDelay = 6;
+    uint32 retryDelay = 8;
     if (RTG_IsQueuedLfgBot(bot))
     {
         if (bot->GetGroup())
             retryDelay = 10;
         else
-            retryDelay = 1;
+            retryDelay = 2;
     }
 
     rtgNextJoinAttempt[botId] = now + retryDelay;
@@ -390,7 +407,7 @@ bool LfgLeaveAction::Execute(Event event)
         return false;
 
     if (RTG_IsQueuedLfgBot(bot))
-        RTG_ClearQueuePenaltyAuras(bot);
+        RTG_ApplyDungeonDeserter(bot);
 
     WorldPacket* packet = new WorldPacket(CMSG_LFG_LEAVE);
     bot->GetSession()->QueuePacket(packet);

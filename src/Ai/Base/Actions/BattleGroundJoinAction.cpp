@@ -60,11 +60,12 @@ namespace
 bool BGJoinAction::Execute(Event event)
 {
     uint32 queueType = AI_VALUE(uint32, "bg type");
-    if (!queueType)
+
+    uint32 assignedQueueType = 0;
+    if (!queueType && sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType))
     {
-        uint32 assignedQueueType = 0;
-        if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType)
-            queueType = assignedQueueType;
+        queueType = assignedQueueType;
+        botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(queueType);
     }
 
     if (!queueType)  // force join to fill bg
@@ -292,21 +293,23 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     // and respect the grace window so real players get first shot.
     // ------------------------------------------------------------------
     uint32 assignedQueueType = 0;
-    bool hasAssignedQueue = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType;
+    bool assignedHelper = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType);
 
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_bg_start");
-        if (!start && !hasAssignedQueue)
-            return false;
+        if (!assignedHelper)
+        {
+            uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_bg_start");
+            if (!start)
+                return false;
 
-        time_t now = time(nullptr);
-        if (start && now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds) && !hasAssignedQueue)
+            time_t now = time(nullptr);
+            if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+                return false;
+        }
+        else if (assignedQueueType != uint32(queueTypeId))
             return false;
     }
-
-    if (hasAssignedQueue && assignedQueueType != uint32(queueTypeId))
-        return false;
 
     TeamId teamId = bot->GetTeamId();
     uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
@@ -442,22 +445,6 @@ bool BGJoinAction::isUseful()
 
     bgList.clear();
     ratedList.clear();
-
-    if (isRtgBgBot && assignedQueueType)
-    {
-        BattlegroundQueueTypeId assignedId = BattlegroundQueueTypeId(assignedQueueType);
-        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(assignedId);
-        Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-        if (bg)
-        {
-            PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bg->GetMapId(), bot->GetLevel());
-            if (pvpDiff && canJoinBg(assignedId, pvpDiff->GetBracketId()))
-            {
-                bgList.push_back(assignedId);
-                return true;
-            }
-        }
-    }
 
     for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
     {
