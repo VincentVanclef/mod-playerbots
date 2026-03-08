@@ -407,7 +407,7 @@ bool LfgLeaveAction::Execute(Event event)
         return false;
 
     if (RTG_IsQueuedLfgBot(bot))
-        RTG_ApplyDungeonDeserter(bot);
+        RTG_ClearDungeonQueuePenalties(bot);
 
     WorldPacket* packet = new WorldPacket(CMSG_LFG_LEAVE);
     bot->GetSession()->QueuePacket(packet);
