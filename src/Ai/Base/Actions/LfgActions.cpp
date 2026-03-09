@@ -142,6 +142,29 @@ namespace
         return assigned;
     }
 
+    static bool RTG_AllowGroupedRealPlayerLfgParticipation(Player* bot)
+    {
+        if (!bot)
+            return false;
+
+        Group* group = bot->GetGroup();
+        if (!group || !RTG_GroupHasRealPlayerMember(bot))
+            return false;
+
+        Map* map = bot->GetMap();
+        if ((map && (map->IsDungeon() || map->IsRaid())) || group->isLFGGroup())
+            return true;
+
+        LfgState state = sLFGMgr->GetState(bot->GetGUID());
+        if (state == LFG_STATE_ROLECHECK || state == LFG_STATE_QUEUED || state == LFG_STATE_PROPOSAL)
+            return true;
+
+        if (RTG_IsAssignedLfgHelper(bot))
+            return true;
+
+        return sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_start") != 0;
+    }
+
     static void RTG_ClearDungeonQueuePenalties(Player* bot)
     {
         if (!bot)
@@ -207,7 +230,7 @@ bool LfgJoinAction::JoinLFG()
     // Only let bots queue for LFG after real players have initiated LFG queueing
     // and the grace window has expired.
     // ------------------------------------------------------------------
-    if (RTG_GroupHasRealPlayerMember(bot))
+    if (RTG_GroupHasRealPlayerMember(bot) && !RTG_AllowGroupedRealPlayerLfgParticipation(bot))
         return false;
 
     if (sPlayerbotAIConfig.rtgEventDriven)
@@ -330,7 +353,7 @@ bool LfgJoinAction::JoinLFG()
 
 bool LfgRoleCheckAction::Execute(Event event)
 {
-    if (RTG_GroupHasRealPlayerMember(bot))
+    if (RTG_GroupHasRealPlayerMember(bot) && !RTG_AllowGroupedRealPlayerLfgParticipation(bot))
         return false;
 
     if (Group* group = bot->GetGroup())
@@ -483,7 +506,7 @@ bool LfgJoinAction::isUseful()
 
     if (bot->GetGroup())
     {
-        if (RTG_GroupHasRealPlayerMember(bot))
+        if (RTG_GroupHasRealPlayerMember(bot) && !RTG_AllowGroupedRealPlayerLfgParticipation(bot))
             return false;
 
         if (bot->GetGroup()->GetLeaderGUID() != bot->GetGUID())

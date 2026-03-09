@@ -356,104 +356,6 @@ namespace
 		return RTG_GetActualSpecRole(bot);
 	}
 
-    static uint32 RTG_GetLiveLfgRole(Player* player, bool activeDungeon)
-    {
-        if (!player)
-            return lfg::PLAYER_ROLE_DAMAGE;
-
-        uint32 role = RTG_NormalizeQueuedRoleMask(sLFGMgr->GetRoles(player->GetGUID()));
-        if (role)
-            return role;
-
-        if (activeDungeon)
-        {
-            role = RTG_GetActualSpecRole(player);
-            if (role)
-                return role;
-        }
-
-        role = RTG_DefaultRoleForClass(player->getClass());
-        if (role)
-            return role;
-
-        return lfg::PLAYER_ROLE_DAMAGE;
-    }
-
-    static ObjectGuid RTG_ResolveLfgOwnerGuid(Player* player, bool& queuedLfg, bool& activeDungeon)
-    {
-        queuedLfg = false;
-        activeDungeon = false;
-
-        if (!player)
-            return ObjectGuid::Empty;
-
-        ObjectGuid ownerGuid = player->GetGUID();
-        Group* group = player->GetGroup();
-        Map* map = player->GetMap();
-
-        lfg::LfgState playerState = sLFGMgr->GetState(player->GetGUID());
-        queuedLfg = (playerState != lfg::LFG_STATE_NONE && playerState < lfg::LFG_STATE_DUNGEON);
-        activeDungeon = (playerState == lfg::LFG_STATE_DUNGEON);
-
-        if (group)
-        {
-            ObjectGuid groupGuid = group->GetGUID();
-            lfg::LfgState groupState = sLFGMgr->GetState(groupGuid);
-            bool groupQueued = (groupState != lfg::LFG_STATE_NONE && groupState < lfg::LFG_STATE_DUNGEON);
-            bool groupDungeon = group->isLFGGroup() || groupState == lfg::LFG_STATE_DUNGEON;
-            bool mapDungeon = map && (map->IsDungeon() || map->IsRaid());
-
-            queuedLfg = queuedLfg || groupQueued;
-            activeDungeon = activeDungeon || groupDungeon || mapDungeon;
-
-            if (groupQueued || groupDungeon || mapDungeon)
-                ownerGuid = groupGuid;
-        }
-        else if (map && (map->IsDungeon() || map->IsRaid()))
-        {
-            activeDungeon = true;
-        }
-
-        return ownerGuid;
-    }
-
-    static bool RTG_IsBgQueueTypeActiveForPlayer(Player* player, BattlegroundQueueTypeId queueTypeId)
-    {
-        if (!player || queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
-            return false;
-
-        if (player->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
-            return true;
-
-        Battleground* bg = player->GetBattleground();
-        if (!bg || bg->GetStatus() == STATUS_WAIT_LEAVE)
-            return false;
-
-        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
-        if (desiredBgType == BATTLEGROUND_TYPE_NONE)
-            return false;
-
-        return bg->GetBgTypeID() == desiredBgType;
-    }
-
-    static bool RTG_HasAnyBgDemand(BattlegroundInfo const& bgInfo)
-    {
-        return (bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0;
-    }
-
-    static bool RTG_HasActiveRealBgMatch(BattlegroundInfo const& bgInfo)
-    {
-        return bgInfo.bgInstanceCount > 0 && RTG_HasAnyBgDemand(bgInfo);
-    }
-
-    static bool RTG_BgNeedsMorePlayers(BattlegroundInfo const& bgInfo, uint32 team, uint32 teamSize)
-    {
-        uint32 current = (team == TEAM_ALLIANCE)
-            ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-            : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-        return current < teamSize;
-    }
-
     static bool RTG_IsRealPlayer(Player* player)
     {
         return player && !GET_PLAYERBOT_AI(player);
@@ -1565,12 +1467,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 }
             }
 
-            bool activeForDesiredBg = RTG_IsBgQueueTypeActiveForPlayer(bot, BattlegroundQueueTypeId(desiredQueueType));
-            if (activeForDesiredBg)
+            if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) || bot->InBattleground())
             {
                 RTG_ClearQueueDebuffs(bot);
                 SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                continue;
+                if (bgHasRealDemand)
+                    continue;
             }
 
             if (GetEventValue(botId, "rtg_bg_pending"))
@@ -1579,15 +1481,22 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
             }
 
-            // Only retire helper bots once they are fully out of the BG ecosystem.
+            // Once a BG helper is out of queue and out of the battleground, retire it promptly
+            // unless it is still inside the short pending window above.
             if (!bot->InBattleground() && !bot->InBattlegroundQueue())
             {
-                if (bgHasRealDemand && rtgBgDemand && rtgBgReady)
-                {
-                    SetEventValue(botId, "rtg_bg_pending", 1, 15, addData);
+                if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
-                }
 
+                SetEventValue(botId, "add", 0, 0);
+                SetEventValue(botId, "rtg_bg_pending", 0, 0);
+                currentBots.remove(botId);
+                rtgBgLogout.push_back(botGuid);
+                continue;
+            }
+
+            if (!bgHasRealDemand || !rtgBgDemand || !rtgBgReady)
+            {
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
 
@@ -2451,9 +2360,20 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
 
                 Group* group = player->GetGroup();
-                bool queuedLfg = false;
-                bool activeDungeon = false;
-                ObjectGuid queueGuid = RTG_ResolveLfgOwnerGuid(player, queuedLfg, activeDungeon);
+				ObjectGuid queueGuid = player->GetGUID();
+
+				if (group)
+				{
+					lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+					if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+						queueGuid = group->GetGUID();
+				}
+                lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
+                Map* map = player->GetMap();
+                bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
+                bool activeDungeon = (group && group->isLFGGroup()) ||
+                                     gState == lfg::LFG_STATE_DUNGEON ||
+                                     (map && (map->IsDungeon() || map->IsRaid()) && group && group->isLFGGroup());
                 if (queuedLfg || activeDungeon)
                 {
                     uint32 owner = queueGuid.GetCounter();
@@ -2466,7 +2386,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (queuedLfg)
                         ++bucket.realQueued;
 
-                    uint32 role = RTG_GetLiveLfgRole(player, activeDungeon);
+                    uint32 role = RTG_NormalizeQueuedRoleMask(sLFGMgr->GetRoles(player->GetGUID()));
+                    if (!role)
+                        role = RTG_DefaultRoleForClass(player->getClass());
 
                     if (role == lfg::PLAYER_ROLE_TANK)
                         ++bucket.realTank;
@@ -2581,8 +2503,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         it = bgBuckets.emplace(key, bucket).first;
                     }
 
-                    bool countsInBgState = managedBot && managedBot->IsInWorld() &&
-                        RTG_IsBgQueueTypeActiveForPlayer(managedBot, BattlegroundQueueTypeId(desiredQueueType));
+                    bool countsInBgState = false;
+                    if (managedBot && managedBot->IsInWorld())
+                    {
+                        countsInBgState = managedBot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
+                                          (managedBot->InBattleground() && managedBot->GetBattlegroundTypeId() == BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType)));
+                    }
 
                     if (!countsInBgState)
                         ++it->second.assignedExtra;
@@ -2638,55 +2564,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     uint32 alreadyReserved = it->second.currentTeamCount + it->second.assignedExtra;
                     it->second.need = alreadyReserved < it->second.teamSize ? (it->second.teamSize - alreadyReserved) : 0u;
-                }
-            }
-
-            for (auto const& queueTypePair : BattlegroundData)
-            {
-                uint32 queueTypeId = queueTypePair.first;
-                BattlegroundQueueTypeId queueTypeIdEnum = BattlegroundQueueTypeId(queueTypeId);
-                if (BattlegroundMgr::BGArenaType(queueTypeIdEnum))
-                    continue;
-
-                for (auto const& bracketPair : queueTypePair.second)
-                {
-                    BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketPair.first);
-                    BattlegroundInfo const& bgInfo = bracketPair.second;
-                    if (!bgInfo.minLevel)
-                        continue;
-                    if (!RTG_HasActiveRealBgMatch(bgInfo) && !bgInfo.activeBgQueue)
-                        continue;
-
-                    uint32 teamSize = 0;
-                    BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeIdEnum);
-                    if (Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
-                        teamSize = bgTemplate->GetMaxPlayersPerTeam();
-                    if (!teamSize)
-                        continue;
-
-                    uint32 level = bgInfo.maxLevel ? bgInfo.maxLevel : bgInfo.minLevel;
-                    for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
-                    {
-                        auto key = std::make_tuple(queueTypeId, team, level);
-                        auto it = bgBuckets.find(key);
-                        if (it == bgBuckets.end())
-                        {
-                            RtgBgBucket bucket;
-                            bucket.queueTypeId = queueTypeId;
-                            bucket.team = team;
-                            bucket.level = level;
-                            bucket.bracketId = bracketId;
-                            bucket.teamSize = teamSize;
-                            bucket.realQueued = bgInfo.activeBgQueue ? 1u : 0u;
-                            bucket.currentTeamCount = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-                            it = bgBuckets.emplace(key, bucket).first;
-                        }
-
-                        uint32 alreadyReserved = it->second.currentTeamCount + it->second.assignedExtra;
-                        it->second.need = alreadyReserved < it->second.teamSize ? (it->second.teamSize - alreadyReserved) : 0u;
-                    }
                 }
             }
 
@@ -3180,7 +3057,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
     // Process player bots
     for (auto& [guid, bot] : playerBots)
     {
-        if (!bot || (!bot->InBattlegroundQueue() && !bot->InBattleground()) || !bot->IsInWorld() || !IsRandomBot(bot))
+        if (!bot || !bot->InBattlegroundQueue() || !bot->IsInWorld() || !IsRandomBot(bot))
             continue;
 
         Battleground* bg = bot->GetBattleground();
@@ -3449,26 +3326,36 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                 if (!bgInfo.minLevel)
                     continue;
 
-                bool hasRealDemand = RTG_HasAnyBgDemand(bgInfo);
-                bool hasActiveRealMatch = RTG_HasActiveRealBgMatch(bgInfo);
-                bool queueOrMatchActive = bgInfo.activeBgQueue || hasActiveRealMatch;
-                SetEventValue(0, RTG_MakeBgDemandKey(uint32(queueTypeId), uint32(bracketId)), (hasRealDemand || hasActiveRealMatch) ? 1u : 0u, ttl);
+                bool hasRealDemand = (bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0;
+                bool queueOrMatchActive = bgInfo.activeBgQueue || hasRealDemand;
+                SetEventValue(0, RTG_MakeBgDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
                 if (!queueOrMatchActive)
                     continue;
 
-                if (hasRealDemand || hasActiveRealMatch)
+                if (hasRealDemand)
                     anyRealBgDemand = true;
 
                 uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
-                uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
-                uint32 allianceTarget = teamSize;
-                uint32 hordeTarget = teamSize;
+				uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
 
-                if (allianceCurrent < allianceTarget)
-                    rtgBgNeedTotal += (allianceTarget - allianceCurrent);
+				uint32 allianceTarget = teamSize;
+				uint32 hordeTarget = teamSize;
 
-                if (hordeCurrent < hordeTarget)
-                    rtgBgNeedTotal += (hordeTarget - hordeCurrent);
+				// Fresh queue wants full teams.
+				// Active real-player match without queue only gets a limited support buffer.
+				if (!bgInfo.activeBgQueue && hasRealDemand)
+				{
+					uint32 replacementCap = 3; // tune this if needed
+
+					allianceTarget = std::min<uint32>(teamSize, bgInfo.bgAlliancePlayerCount + replacementCap);
+					hordeTarget = std::min<uint32>(teamSize, bgInfo.bgHordePlayerCount + replacementCap);
+				}
+
+				if (allianceCurrent < allianceTarget)
+					rtgBgNeedTotal += (allianceTarget - allianceCurrent);
+
+				if (hordeCurrent < hordeTarget)
+					rtgBgNeedTotal += (hordeTarget - hordeCurrent);
             }
         }
 
@@ -3524,10 +3411,22 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (!player || !player->IsInWorld() || IsRandomBot(player))
             continue;
 
-        Group* group = player->GetGroup();
-        bool queuedLfg = false;
-        bool activeDungeon = false;
-        ObjectGuid queueGuid = RTG_ResolveLfgOwnerGuid(player, queuedLfg, activeDungeon);
+		Group* group = player->GetGroup();
+		ObjectGuid queueGuid = player->GetGUID();
+
+		if (group)
+		{
+			lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+			if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+				queueGuid = group->GetGUID();
+		}
+
+        lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
+        Map* map = player->GetMap();
+        bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
+        bool activeDungeon = (group && group->isLFGGroup()) ||
+                             gState == lfg::LFG_STATE_DUNGEON ||
+                             (map && (map->IsDungeon() || map->IsRaid()) && group && group->isLFGGroup());
         if (!queuedLfg && !activeDungeon)
             continue;
 
@@ -3544,7 +3443,9 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (activeDungeon)
             ++req.realActive;
 
-        uint32 role = RTG_GetLiveLfgRole(player, activeDungeon);
+        uint32 role = RTG_NormalizeQueuedRoleMask(sLFGMgr->GetRoles(player->GetGUID()));
+        if (!role)
+            role = RTG_DefaultRoleForClass(player->getClass());
 
         if (role == lfg::PLAYER_ROLE_TANK)
             ++req.realTank;
@@ -5095,6 +4996,50 @@ std::string RandomPlayerbotMgr::GetEventData(uint32 bot, std::string const& even
 uint32 RandomPlayerbotMgr::SetEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn,
                                          std::string const& data)
 {
+    auto const isTransientRtgEvent = [&event, &data]()
+    {
+        if (event.rfind("rtg_", 0) == 0)
+            return true;
+
+        if (event == "add" && data.rfind("rtg_", 0) == 0)
+            return true;
+
+        return false;
+    };
+
+    uint32 const now = NowSeconds();
+    CachedEvent* existing = FindEvent(bot, event);
+    if (existing)
+    {
+        bool const samePayload = existing->value == value && existing->validIn == validIn && existing->data == data;
+        bool const stillFresh = !existing->IsEmpty() && (existing->lastChangeTime + existing->validIn) >= now;
+
+        if (samePayload && stillFresh)
+            return value;
+    }
+
+    // Update in-memory cache first so hot queue/LFG/BG orchestration stays fast and does not block the world thread.
+    BotEventCache& cache = eventCache[bot];
+    cache.loaded = true;
+
+    if (!value)
+    {
+        cache.events.erase(event);
+    }
+    else
+    {
+        CachedEvent& e = cache.events[event];
+        e.value = value;
+        e.lastChangeTime = now;
+        e.validIn = validIn;
+        e.data = data;
+    }
+
+    // RTG queue supervision events are intentionally transient. Persisting each write immediately can create
+    // delete/insert/commit storms during BG and RDF recalculation, which is risky for world responsiveness.
+    if (isTransientRtgEvent())
+        return value;
+
     PlayerbotsDatabaseTransaction trans = PlayerbotsDatabase.BeginTransaction();
 
     PlayerbotsDatabasePreparedStatement* stmt =
@@ -5109,7 +5054,7 @@ uint32 RandomPlayerbotMgr::SetEventValue(uint32 bot, std::string const& event, u
         stmt = PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_INS_RANDOM_BOTS);
         stmt->SetData(0, 0);
         stmt->SetData(1, bot);
-        stmt->SetData(2, NowSeconds());
+        stmt->SetData(2, now);
         stmt->SetData(3, validIn);
         stmt->SetData(4, event.c_str());
         stmt->SetData(5, value);
@@ -5123,23 +5068,6 @@ uint32 RandomPlayerbotMgr::SetEventValue(uint32 bot, std::string const& event, u
     }
 
     PlayerbotsDatabase.CommitTransaction(trans);
-
-    // Update in-memory cache
-    BotEventCache& cache = eventCache[bot];
-    cache.loaded = true;
-
-    if (!value)
-    {
-        cache.events.erase(event);
-        return 0;
-    }
-
-    CachedEvent& e = cache.events[event];  // create-on-write is OK here
-    e.value = value;
-    e.lastChangeTime = NowSeconds();
-    e.validIn = validIn;
-    e.data = data;
-
     return value;
 }
 
