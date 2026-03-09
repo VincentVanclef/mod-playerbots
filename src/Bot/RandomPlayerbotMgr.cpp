@@ -3359,7 +3359,8 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             }
         }
 
-        SetEventValue(0, "rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
+        SetEventValue(0, "rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl); // compatibility
+		SetEventValue(0, "rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
         SetEventValue(0, "rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
 
         if (anyRealBgDemand && rtgBgNeedTotal)
