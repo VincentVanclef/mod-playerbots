@@ -355,6 +355,55 @@ namespace
 	{
 		return RTG_GetActualSpecRole(bot);
 	}
+
+    static bool RTG_IsRealPlayer(Player* player)
+    {
+        return player && !GET_PLAYERBOT_AI(player);
+    }
+
+    static bool RTG_GroupHasRealPlayer(Group* group)
+    {
+        if (!group)
+            return false;
+
+        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+        {
+            Player* member = ref->GetSource();
+            if (RTG_IsRealPlayer(member))
+                return true;
+        }
+
+        return false;
+    }
+
+    static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
+    {
+        return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static void RTG_ClearQueueDebuffs(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        bot->RemoveAura(26013); // Deserter
+        bot->RemoveAura(71041); // Dungeon Deserter
+    }
+
+    static void RTG_PrepareBotForLogout(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        RTG_ClearQueueDebuffs(bot);
+
+        if (bot->isDead())
+        {
+            bot->ResurrectPlayer(1.0f, false);
+            bot->SpawnCorpseBones();
+            bot->SetFullHealth();
+        }
+    }
 }
 
 struct GuidClassRaceInfo
@@ -1128,15 +1177,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			Group* grp = bot->GetGroup();
 			if (grp)
 			{
-				if (grp->isLFGGroup())
+				if (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp))
 				{
 					SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 					continue;
 				}
-
-				// Keep grouped bots alive longer for wipe/recovery transitions
-				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-				continue;
 			}
 
 			Map* map = bot->GetMap();
@@ -1157,7 +1202,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		}
 
 		for (ObjectGuid const& botGuid : rtgShrinkLogout)
+		{
+			if (Player* shrinkBot = GetPlayerBot(botGuid))
+				RTG_PrepareBotForLogout(shrinkBot);
+
 			LogoutPlayerBot(botGuid);
+		}
 	}
 
 
@@ -1183,6 +1233,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			Map* map = bot->GetMap();
 			if (map && (map->IsDungeon() || map->IsRaid()))
 			{
+				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				continue;
 			}
@@ -1191,7 +1242,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 
 			uint32 desiredRole = 0;
-			RTG_ParseLfgDesiredRole(addData, desiredRole);
+			uint32 desiredOwner = 0;
+			unsigned int parsedTeam = 0;
+			unsigned int parsedLevel = 0;
+			unsigned int parsedRole = 0;
+			unsigned int parsedOwner = 0;
+			if (RTG_ParseLfgAddData(addData, parsedTeam, parsedLevel, &parsedRole, &parsedOwner))
+			{
+				desiredRole = parsedRole;
+				desiredOwner = parsedOwner;
+			}
+
+			bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
 
 			if (desiredRole)
 			{
@@ -1218,18 +1280,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			Group* grp = bot->GetGroup();
 			if (grp)
 			{
-				if (grp->isLFGGroup())
+				if (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand)
 				{
 					SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 					continue;
 				}
-
-				// grouped but not LFG group - preserve a bit longer
-				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
-				continue;
 			}
 
-			if (bot->isDead() || bot->GetCorpse())
+			if ((bot->isDead() || bot->GetCorpse()) && ownerHasRealDemand)
 			{
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				continue;
@@ -1247,13 +1305,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		for (ObjectGuid const& guid : rtgStaleQueueBots)
 		{
 			if (Player* staleBot = GetPlayerBot(guid))
-				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
+				RTG_PrepareBotForLogout(staleBot);
 
 			LogoutPlayerBot(guid);
 		}
 
 		for (ObjectGuid const& botGuid : rtgIdleLogout)
+		{
+			if (Player* idleBot = GetPlayerBot(botGuid))
+				RTG_PrepareBotForLogout(idleBot);
+
 			LogoutPlayerBot(botGuid);
+		}
 	}
 
 
@@ -1277,8 +1340,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			uint32 desiredTeam = 0;
 			uint32 desiredLevel = 0;
 			uint32 desiredRole = 0;
-			if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole))
+			uint32 desiredOwner = 0;
+			if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
 				continue;
+
+			bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
 
 			Map* map = bot->GetMap();
 			if (map && (map->IsDungeon() || map->IsRaid()))
@@ -1292,8 +1358,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 
 			Group* grp = bot->GetGroup();
-			if (grp && grp->isLFGGroup())
+			if (grp && (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand))
 			{
+				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
 				continue;
@@ -1337,13 +1404,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			if (grp)
+			if (grp && (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand))
 			{
+				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				continue;
 			}
 
-			if (bot->isDead() || bot->GetCorpse())
+			if ((bot->isDead() || bot->GetCorpse()) && ownerHasRealDemand)
 			{
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				continue;
@@ -1361,7 +1429,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		for (ObjectGuid const& botGuid : rtgStaleQueueBots)
 		{
 			if (Player* staleBot = GetPlayerBot(botGuid))
-				staleBot->CastSpell(staleBot, 71041, true); // Dungeon Deserter
+				RTG_PrepareBotForLogout(staleBot);
 
 			LogoutPlayerBot(botGuid);
 		}
@@ -1388,10 +1456,23 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG_ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
                 continue;
 
+            bool bgHasRealDemand = false;
+            BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
+            if (desiredBgType != BATTLEGROUND_TYPE_NONE)
+            {
+                if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
+                {
+                    if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
+                        bgHasRealDemand = GetEventValue(0, RTG_MakeBgDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
+                }
+            }
+
             if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) || bot->InBattleground())
             {
+                RTG_ClearQueueDebuffs(bot);
                 SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                continue;
+                if (bgHasRealDemand)
+                    continue;
             }
 
             if (GetEventValue(botId, "rtg_bg_pending"))
@@ -1414,7 +1495,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
             }
 
-            if (!rtgBgDemand || !rtgBgReady)
+            if (!bgHasRealDemand || !rtgBgDemand || !rtgBgReady)
             {
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
@@ -1437,7 +1518,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         }
 
         for (ObjectGuid const& botGuid : rtgBgLogout)
+        {
+            if (Player* bgBot = GetPlayerBot(botGuid))
+                RTG_PrepareBotForLogout(bgBot);
+
             LogoutPlayerBot(botGuid);
+        }
     }
 
 
@@ -1489,7 +1575,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		}
 
 		for (ObjectGuid const& botGuid : rtgFinishedDungeonLogout)
+		{
+			if (Player* finishedBot = GetPlayerBot(botGuid))
+				RTG_PrepareBotForLogout(finishedBot);
+
 			LogoutPlayerBot(botGuid);
+		}
 	}
 
 // ---------------------------------------------------------
@@ -2271,7 +2362,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 Group* group = player->GetGroup();
                 ObjectGuid queueGuid = group ? group->GetGUID() : player->GetGUID();
                 lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
-                if (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON)
+                Map* map = player->GetMap();
+                bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
+                bool activeDungeon = (group && group->isLFGGroup()) ||
+                                     gState == lfg::LFG_STATE_DUNGEON ||
+                                     (map && (map->IsDungeon() || map->IsRaid()) && group && group->isLFGGroup());
+                if (queuedLfg || activeDungeon)
                 {
                     uint32 owner = queueGuid.GetCounter();
                     auto key = std::make_tuple(owner, static_cast<uint32>(player->GetTeamId()), static_cast<uint32>(player->GetLevel()));
@@ -2279,8 +2375,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     bucket.owner = owner;
                     bucket.team = player->GetTeamId();
                     bucket.level = player->GetLevel();
-                    bucket.startTs = GetEventValue(owner, "rtg_lfg_start");
-                    ++bucket.realQueued;
+                    bucket.startTs = activeDungeon ? (static_cast<uint32>(time(nullptr)) - sPlayerbotAIConfig.rtgQueueGraceSeconds) : GetEventValue(owner, "rtg_lfg_start");
+                    if (queuedLfg)
+                        ++bucket.realQueued;
 
                     uint32 role = RTG_NormalizeQueuedRoleMask(sLFGMgr->GetRoles(player->GetGUID()));
                     if (!role)
@@ -2294,7 +2391,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         ++bucket.realDps;
                 }
 
-                if (!player->InBattlegroundQueue())
+                if (!player->InBattlegroundQueue() && !player->InBattleground())
                     continue;
 
                 for (uint8 queueType = 0; queueType < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueType)
@@ -3201,7 +3298,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     {
         uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
         uint32 rtgBgNeedTotal = 0;
-        bool anyRealBgQueued = false;
+        bool anyRealBgDemand = false;
 
         for (auto const& queueTypePair : BattlegroundData)
         {
@@ -3217,12 +3314,19 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             uint32 teamSize = bgTemplate->GetMaxPlayersPerTeam();
             for (auto const& bracketIdPair : queueTypePair.second)
             {
+                BattlegroundBracketId bracketId = bracketIdPair.first;
                 BattlegroundInfo const& bgInfo = bracketIdPair.second;
-                if (!bgInfo.activeBgQueue || !bgInfo.minLevel)
+                if (!bgInfo.minLevel)
                     continue;
 
-                if (bgInfo.bgAlliancePlayerCount || bgInfo.bgHordePlayerCount)
-                    anyRealBgQueued = true;
+                bool hasRealDemand = (bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0;
+                bool queueOrMatchActive = bgInfo.activeBgQueue || hasRealDemand;
+                SetEventValue(0, RTG_MakeBgDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
+                if (!queueOrMatchActive)
+                    continue;
+
+                if (hasRealDemand)
+                    anyRealBgDemand = true;
 
                 uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
                 uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
@@ -3233,14 +3337,14 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             }
         }
 
-        SetEventValue(0, "rtg_bg_any_real_queued", anyRealBgQueued ? 1u : 0u, ttl);
+        SetEventValue(0, "rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl);
         SetEventValue(0, "rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
 
-        if (anyRealBgQueued && rtgBgNeedTotal)
+        if (anyRealBgDemand && rtgBgNeedTotal)
         {
             uint32 existing = GetEventValue(0, "rtg_bg_start");
             uint32 now = static_cast<uint32>(time(nullptr));
-            uint32 start = existing ? existing : now;
+            uint32 start = existing ? existing : (now - sPlayerbotAIConfig.rtgQueueGraceSeconds);
             SetEventValue(0, "rtg_bg_start", start, ttl);
         }
         else
@@ -3269,10 +3373,12 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         uint32 realHeal = 0;
         uint32 realDps = 0;
         uint32 realQueued = 0;
+        uint32 realActive = 0;
+        bool activeDungeon = false;
     };
 
     std::map<uint32, QueueRequest> requests;
-    bool anyRealLfgQueued = false;
+    bool anyRealLfgDemand = false;
 
     LfgDungeons[TEAM_ALLIANCE].clear();
     LfgDungeons[TEAM_HORDE].clear();
@@ -3286,17 +3392,26 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         ObjectGuid queueGuid = group ? group->GetGUID() : player->GetGUID();
 
         lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
-        if (gState == lfg::LFG_STATE_NONE || gState >= lfg::LFG_STATE_DUNGEON)
+        Map* map = player->GetMap();
+        bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
+        bool activeDungeon = (group && group->isLFGGroup()) ||
+                             gState == lfg::LFG_STATE_DUNGEON ||
+                             (map && (map->IsDungeon() || map->IsRaid()) && group && group->isLFGGroup());
+        if (!queuedLfg && !activeDungeon)
             continue;
 
-        anyRealLfgQueued = true;
+        anyRealLfgDemand = true;
 
         uint32 owner = queueGuid.GetCounter();
         QueueRequest& req = requests[owner];
         req.owner = owner;
         req.team = player->GetTeamId();
         req.level = player->GetLevel();
-        ++req.realQueued;
+        req.activeDungeon = req.activeDungeon || activeDungeon;
+        if (queuedLfg)
+            ++req.realQueued;
+        if (activeDungeon)
+            ++req.realActive;
 
         uint32 role = RTG_NormalizeQueuedRoleMask(sLFGMgr->GetRoles(player->GetGUID()));
         if (!role)
@@ -3309,14 +3424,17 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         else
             ++req.realDps;
 
-        lfg::LfgDungeonSet const& dList = sLFGMgr->GetSelectedDungeons(player->GetGUID());
-        for (lfg::LfgDungeonSet::const_iterator itr = dList.begin(); itr != dList.end(); ++itr)
+        if (queuedLfg)
         {
-            lfg::LFGDungeonData const* dungeon = sLFGMgr->GetLFGDungeon(*itr);
-            if (!dungeon)
-                continue;
+            lfg::LfgDungeonSet const& dList = sLFGMgr->GetSelectedDungeons(player->GetGUID());
+            for (lfg::LfgDungeonSet::const_iterator itr = dList.begin(); itr != dList.end(); ++itr)
+            {
+                lfg::LFGDungeonData const* dungeon = sLFGMgr->GetLFGDungeon(*itr);
+                if (!dungeon)
+                    continue;
 
-            LfgDungeons[player->GetTeamId()].push_back(dungeon->id);
+                LfgDungeons[player->GetTeamId()].push_back(dungeon->id);
+            }
         }
     }
 
@@ -3332,8 +3450,9 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         {
             QueueRequest const& req = kv.second;
             uint32 existingStart = GetEventValue(req.owner, "rtg_lfg_start");
-            uint32 startTs = existingStart ? existingStart : now;
+            uint32 startTs = req.activeDungeon ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (existingStart ? existingStart : now);
             SetEventValue(req.owner, "rtg_lfg_start", startTs, ttl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
+            SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ttl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
 
             uint32 needTank = req.realTank >= 1 ? 0u : 1u;
             uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
@@ -3343,21 +3462,21 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 
             if (helperNeed)
             {
-                LOG_INFO("playerbots", "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} needTank={} needHeal={} needDps={} startTs={}",
-                         req.owner, req.team, req.level, req.realQueued, needTank, needHeal, needDps, startTs);
+                LOG_INFO("playerbots", "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} needTank={} needHeal={} needDps={} startTs={}",
+                         req.owner, req.team, req.level, req.realQueued, req.realActive, needTank, needHeal, needDps, startTs);
             }
 
-            if (now >= startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
+            if (req.activeDungeon || now >= startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
                 anyReady = true;
             else if (!oldestPendingStart || startTs < oldestPendingStart)
                 oldestPendingStart = startTs;
         }
 
-        if (anyRealLfgQueued && desiredHelperTotal)
+        if (anyRealLfgDemand && desiredHelperTotal)
         {
             uint32 globalStart = anyReady ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (oldestPendingStart ? oldestPendingStart : now);
             uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgEventMaxBots);
-            LOG_INFO("playerbots", "[RTG][LFG][TOTAL] queuedOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
+            LOG_INFO("playerbots", "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
                      static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
             SetEventValue(0, "rtg_lfg_start", globalStart, ttl);
             SetEventValue(0, "rtg_lfg_need_total", cappedNeed, ttl);
