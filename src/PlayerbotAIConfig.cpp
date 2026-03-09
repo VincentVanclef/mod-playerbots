@@ -190,6 +190,7 @@ bool PlayerbotAIConfig::Initialize()
     rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
     rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 60);
     rtgKeepWorldBots = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.KeepWorldBots", false);
+    rtgEventDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Debug", false);
 
     rtgLowBracketCapsEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.LowBracketCaps.Enable", false);
     rtgLowBracketBotCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.Cap", 40);

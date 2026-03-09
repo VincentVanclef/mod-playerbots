@@ -21,6 +21,12 @@ using namespace lfg;
 
 namespace
 {
+
+    static bool RTG_LfgDebugEnabled()
+    {
+        return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug;
+    }
+
     static bool RTG_HasPrefix(std::string const& value, std::string const& prefix)
     {
         return value.rfind(prefix, 0) == 0;
@@ -142,29 +148,6 @@ namespace
         return assigned;
     }
 
-    static bool RTG_AllowGroupedRealPlayerLfgParticipation(Player* bot)
-    {
-        if (!bot)
-            return false;
-
-        Group* group = bot->GetGroup();
-        if (!group || !RTG_GroupHasRealPlayerMember(bot))
-            return false;
-
-        Map* map = bot->GetMap();
-        if ((map && (map->IsDungeon() || map->IsRaid())) || group->isLFGGroup())
-            return true;
-
-        LfgState state = sLFGMgr->GetState(bot->GetGUID());
-        if (state == LFG_STATE_ROLECHECK || state == LFG_STATE_QUEUED || state == LFG_STATE_PROPOSAL)
-            return true;
-
-        if (RTG_IsAssignedLfgHelper(bot))
-            return true;
-
-        return sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_start") != 0;
-    }
-
     static void RTG_ClearDungeonQueuePenalties(Player* bot)
     {
         if (!bot)
@@ -214,6 +197,8 @@ bool LfgJoinAction::JoinLFG()
     LfgState state = sLFGMgr->GetState(bot->GetGUID());
     if (state != LFG_STATE_NONE)
     {
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} blocked existingState={}", bot->GetGUID().GetCounter(), uint32(state));
         rtgNextJoinAttempt.erase(bot->GetGUID().GetCounter());
         return false;
     }
@@ -223,15 +208,23 @@ bool LfgJoinAction::JoinLFG()
 
     auto attemptIt = rtgNextJoinAttempt.find(botId);
     if (attemptIt != rtgNextJoinAttempt.end() && now < attemptIt->second)
+    {
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} cooldown waitUntil={} now={}", botId, uint32(attemptIt->second), uint32(now));
         return false;
+    }
 
     // ------------------------------------------------------------------
     // RTG: Event-driven LFG grace
     // Only let bots queue for LFG after real players have initiated LFG queueing
     // and the grace window has expired.
     // ------------------------------------------------------------------
-    if (RTG_GroupHasRealPlayerMember(bot) && !RTG_AllowGroupedRealPlayerLfgParticipation(bot))
+    if (RTG_GroupHasRealPlayerMember(bot))
+    {
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} blocked real-player-group", botId);
         return false;
+    }
 
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
@@ -242,10 +235,18 @@ bool LfgJoinAction::JoinLFG()
         {
             uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_start");
             if (!start)
+            {
+                if (RTG_LfgDebugEnabled())
+                    LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} waiting no-global-start", botId);
                 return false;
+            }
 
             if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
+            {
+                if (RTG_LfgDebugEnabled())
+                    LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} waiting grace start={} grace={} now={}", botId, start, sPlayerbotAIConfig.rtgQueueGraceSeconds, uint32(now));
                 return false;
+            }
         }
         else
         {
@@ -313,6 +314,8 @@ bool LfgJoinAction::JoinLFG()
     LOG_INFO("playerbots", "Bot {} {}:{} <{}>: queues LFG, Dungeon as {} ({})", bot->GetGUID().ToString().c_str(),
              bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), _roles,
              many ? "several dungeons" : dungeon->Name[0]);
+    if (RTG_LfgDebugEnabled())
+        LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} roleMask={} selectedCount={} grouped={} queuedHelper={}", botId, roleMask, static_cast<uint32>(list.size()), bot->GetGroup() ? 1u : 0u, RTG_IsQueuedLfgBot(bot) ? 1u : 0u);
 
     // Set RbotAId Browser comment
     std::string const _gs = std::to_string(botAI->GetEquipGearScore(bot/*, false, false*/));
@@ -353,8 +356,12 @@ bool LfgJoinAction::JoinLFG()
 
 bool LfgRoleCheckAction::Execute(Event event)
 {
-    if (RTG_GroupHasRealPlayerMember(bot) && !RTG_AllowGroupedRealPlayerLfgParticipation(bot))
+    if (RTG_GroupHasRealPlayerMember(bot))
+    {
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGROLE] bot={} blocked real-player-group", bot->GetGUID().GetCounter());
         return false;
+    }
 
     if (Group* group = bot->GetGroup())
     {
@@ -371,6 +378,8 @@ bool LfgRoleCheckAction::Execute(Event event)
 
         LOG_INFO("playerbots", "Bot {} {}:{} <{}>: LFG roles checked", bot->GetGUID().ToString().c_str(),
                  bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str());
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGROLE] bot={} currentRoles={} newRoles={} groupGuid={}", bot->GetGUID().GetCounter(), currentRoles, newRoles, group->GetGUID().GetCounter());
 
         return true;
     }
@@ -506,7 +515,7 @@ bool LfgJoinAction::isUseful()
 
     if (bot->GetGroup())
     {
-        if (RTG_GroupHasRealPlayerMember(bot) && !RTG_AllowGroupedRealPlayerLfgParticipation(bot))
+        if (RTG_GroupHasRealPlayerMember(bot))
             return false;
 
         if (bot->GetGroup()->GetLeaderGUID() != bot->GetGUID())

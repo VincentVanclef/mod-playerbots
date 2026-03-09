@@ -2225,6 +2225,7 @@ AiPlayerbot.RTG.EventDriven.Enable = 0
 AiPlayerbot.RTG.QueueGraceSeconds = 30
 AiPlayerbot.RTG.EventDriven.MaxBots = 60
 AiPlayerbot.RTG.EventDriven.KeepWorldBots = 0
+AiPlayerbot.RTG.EventDriven.Debug = 0
 
 # RTG: Optional low-bracket recycle caps (for your "start new bots when new players start" logic)
 AiPlayerbot.RTG.LowBracketCaps.Enable = 0

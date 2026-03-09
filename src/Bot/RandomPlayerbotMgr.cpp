@@ -69,6 +69,17 @@ namespace
         return value.rfind(prefix, 0) == 0;
     }
 
+
+    static bool RTG_QueueDebugEnabled()
+    {
+        return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug;
+    }
+
+    static bool RTG_IsQueueSupervisorEvent(std::string const& event)
+    {
+        return event == "add" || event == "logout" || RTG_HasPrefix(event, "rtg_");
+    }
+
     static std::string RTG_MakeLfgAddData(unsigned int team, unsigned int level, unsigned int role = 0, unsigned int owner = 0)
     {
         std::string data = std::string("rtg_lfg:") + std::to_string(team) + ":" + std::to_string(level);
@@ -2934,6 +2945,8 @@ void RandomPlayerbotMgr::CheckBgQueue()
     BgCheckTimer = time(nullptr);
 
     LOG_DEBUG("playerbots", "Checking BG Queue...");
+    if (RTG_QueueDebugEnabled())
+        LOG_INFO("playerbots", "[RTGDBG][BG] check begin trackedPlayers={} trackedBots={}", static_cast<uint32>(players.size()), static_cast<uint32>(playerBots.size()));
 
     bool anyRealQueued = false;
 
@@ -3377,6 +3390,8 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
         }
     }
 
+    if (RTG_QueueDebugEnabled())
+        LOG_INFO("playerbots", "[RTGDBG][BG] check end anyRealQueued={} anyRealDemand={} needTotal={} start={} turnBg={}", anyRealQueued ? 1u : 0u, GetEventValue(0, "rtg_bg_any_real_demand"), GetEventValue(0, "rtg_bg_need_total"), GetEventValue(0, "rtg_bg_start"), GetEventValue(0, "rtg_queue_turn_bg"));
     LOG_DEBUG("playerbots", "BG Queue check finished");
 }
 
@@ -3386,6 +3401,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         LfgCheckTimer = time(nullptr);
 
     LOG_DEBUG("playerbots", "Checking LFG Queue...");
+    if (RTG_QueueDebugEnabled())
+        LOG_INFO("playerbots", "[RTGDBG][LFG] check begin trackedPlayers={} trackedBots={}", static_cast<uint32>(players.size()), static_cast<uint32>(playerBots.size()));
 
     struct QueueRequest
     {
@@ -3494,7 +3511,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             uint32 helperNeed = needTank + needHeal + needDps;
             desiredHelperTotal += helperNeed;
 
-            if (helperNeed)
+            if (RTG_QueueDebugEnabled() || helperNeed)
             {
                 LOG_INFO("playerbots", "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} needTank={} needHeal={} needDps={} startTs={}",
                          req.owner, req.team, req.level, req.realQueued, req.realActive, needTank, needHeal, needDps, startTs);
@@ -3522,6 +3539,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         }
     }
 
+    if (RTG_QueueDebugEnabled())
+        LOG_INFO("playerbots", "[RTGDBG][LFG] check end owners={} anyRealDemand={} needTotal={} start={}", static_cast<uint32>(requests.size()), anyRealLfgDemand ? 1u : 0u, GetEventValue(0, "rtg_lfg_need_total"), GetEventValue(0, "rtg_lfg_start"));
     LOG_DEBUG("playerbots", "LFG Queue check finished");
 }
 
@@ -4996,49 +5015,16 @@ std::string RandomPlayerbotMgr::GetEventData(uint32 bot, std::string const& even
 uint32 RandomPlayerbotMgr::SetEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn,
                                          std::string const& data)
 {
-    auto const isTransientRtgEvent = [&event, &data]()
+    uint32 now = NowSeconds();
+    if (RTG_QueueDebugEnabled() && RTG_IsQueueSupervisorEvent(event))
     {
-        if (event.rfind("rtg_", 0) == 0)
-            return true;
-
-        if (event == "add" && data.rfind("rtg_", 0) == 0)
-            return true;
-
-        return false;
-    };
-
-    uint32 const now = NowSeconds();
-    CachedEvent* existing = FindEvent(bot, event);
-    if (existing)
-    {
-        bool const samePayload = existing->value == value && existing->validIn == validIn && existing->data == data;
-        bool const stillFresh = !existing->IsEmpty() && (existing->lastChangeTime + existing->validIn) >= now;
-
-        if (samePayload && stillFresh)
-            return value;
+        CachedEvent* oldEvent = FindEvent(bot, event);
+        uint32 oldValue = oldEvent ? oldEvent->value : 0u;
+        uint32 oldValidIn = oldEvent ? oldEvent->validIn : 0u;
+        std::string oldData = oldEvent ? oldEvent->data : "";
+        LOG_INFO("playerbots", "[RTGDBG][EVENT] bot={} event={} oldValue={} newValue={} oldTtl={} newTtl={} oldData='{}' newData='{}'",
+                 bot, event, oldValue, value, oldValidIn, validIn, oldData, data);
     }
-
-    // Update in-memory cache first so hot queue/LFG/BG orchestration stays fast and does not block the world thread.
-    BotEventCache& cache = eventCache[bot];
-    cache.loaded = true;
-
-    if (!value)
-    {
-        cache.events.erase(event);
-    }
-    else
-    {
-        CachedEvent& e = cache.events[event];
-        e.value = value;
-        e.lastChangeTime = now;
-        e.validIn = validIn;
-        e.data = data;
-    }
-
-    // RTG queue supervision events are intentionally transient. Persisting each write immediately can create
-    // delete/insert/commit storms during BG and RDF recalculation, which is risky for world responsiveness.
-    if (isTransientRtgEvent())
-        return value;
 
     PlayerbotsDatabaseTransaction trans = PlayerbotsDatabase.BeginTransaction();
 
@@ -5068,6 +5054,23 @@ uint32 RandomPlayerbotMgr::SetEventValue(uint32 bot, std::string const& event, u
     }
 
     PlayerbotsDatabase.CommitTransaction(trans);
+
+    // Update in-memory cache
+    BotEventCache& cache = eventCache[bot];
+    cache.loaded = true;
+
+    if (!value)
+    {
+        cache.events.erase(event);
+        return 0;
+    }
+
+    CachedEvent& e = cache.events[event];  // create-on-write is OK here
+    e.value = value;
+    e.lastChangeTime = now;
+    e.validIn = validIn;
+    e.data = data;
+
     return value;
 }
 
