@@ -3335,11 +3335,17 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             uint32 startTs = existingStart ? existingStart : now;
             SetEventValue(req.owner, "rtg_lfg_start", startTs, ttl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
 
-            uint32 helperNeed = 0;
-            helperNeed += req.realTank >= 1 ? 0u : 1u;
-            helperNeed += req.realHeal >= 1 ? 0u : 1u;
-            helperNeed += req.realDps >= 3 ? 0u : (3u - req.realDps);
+            uint32 needTank = req.realTank >= 1 ? 0u : 1u;
+            uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
+            uint32 needDps = req.realDps >= 3 ? 0u : (3u - req.realDps);
+            uint32 helperNeed = needTank + needHeal + needDps;
             desiredHelperTotal += helperNeed;
+
+            if (helperNeed)
+            {
+                LOG_INFO("playerbots", "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} needTank={} needHeal={} needDps={} startTs={}",
+                         req.owner, req.team, req.level, req.realQueued, needTank, needHeal, needDps, startTs);
+            }
 
             if (now >= startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
                 anyReady = true;
@@ -3350,8 +3356,11 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (anyRealLfgQueued && desiredHelperTotal)
         {
             uint32 globalStart = anyReady ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (oldestPendingStart ? oldestPendingStart : now);
+            uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgEventMaxBots);
+            LOG_INFO("playerbots", "[RTG][LFG][TOTAL] queuedOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
+                     static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
             SetEventValue(0, "rtg_lfg_start", globalStart, ttl);
-            SetEventValue(0, "rtg_lfg_need_total", std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
+            SetEventValue(0, "rtg_lfg_need_total", cappedNeed, ttl);
         }
         else
         {

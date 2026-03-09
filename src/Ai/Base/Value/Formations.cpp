@@ -214,7 +214,7 @@ public:
                     range = botAI->GetRange("flee");
                 break;
             case CLASS_SHAMAN:
-                if (botAI->IsHeal(bot))
+                if (botAI->IsHeal(bot, true))
                     range = botAI->GetRange("flee");
                 break;
         }
@@ -448,13 +448,13 @@ float Formation::GetFollowAngle()
                 continue;
 
             // Put DPS in the middle
-            if (!botAI->IsTank(member) && !botAI->IsHeal(member))
+            if (!botAI->IsTank(member) && !botAI->IsHeal(member, true))
             {
                 roster.insert(roster.begin() + roster.size() / 2, member);
             }
 
             // Put Healers in the middle
-            else if (botAI->IsHeal(member))
+            else if (botAI->IsHeal(member, true))
             {
                 roster.insert(roster.begin() + roster.size() / 2, member);
             }

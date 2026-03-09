@@ -25,7 +25,7 @@ bool HealerHoldDpsAction::PartyNeedsHealing(float hpThreshold) const
 bool HealerHoldDpsAction::Execute(Event /*event*/)
 {
     // Only applies to healer bots
-    if (!botAI->IsHeal(bot))
+    if (!botAI->IsHeal(bot, true))
         return false;
 
     Map* map = bot->GetMap();

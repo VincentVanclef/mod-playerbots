@@ -57,6 +57,21 @@ These are now treated as concrete goals, not loose ideas.
 - `conf/playerbots.conf.dist`
   - The default `AiPlayerbot.RTG.QueueGraceSeconds` baseline is now 30 seconds.
 
+### V7 concrete changes
+### Healer role recognition by actual spec
+- `ChooseTargetActions.cpp`
+- `GenericTriggers.cpp`
+- `FollowDungeonTankAction.cpp`
+- `MovementActions.cpp`
+- `Formations.cpp`
+  - RTG dungeon healer behavior now checks `IsHeal(..., true)` in key passive/positioning paths so assigned healer-spec queue helpers are treated as healers even if the legacy heal strategy state has not been rebuilt yet.
+  - This keeps healer helpers from acting like DPS during RDF runs and improves backline spacing around the tank.
+
+### RDF planning logs
+- `RandomPlayerbotMgr.cpp`
+  - Added `[RTG][LFG][PLAN]` per-owner logs showing missing tank/heal/DPS counts.
+  - Added `[RTG][LFG][TOTAL]` summary logs showing total requested helpers and capped helper budget.
+
 ## Logging requirements going forward
 Future passes should preserve or expand logging, not reduce it.
 

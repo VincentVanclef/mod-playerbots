@@ -51,7 +51,7 @@ bool FollowDungeonTankAction::Execute(Event /*event*/)
     if (!tankMap || !tankMap->IsDungeon())
         return false;
 
-    float dist = botAI->IsHeal(bot) ? 16.0f : 10.0f; // healer stays farther back
+    float dist = botAI->IsHeal(bot, true) ? 16.0f : 10.0f; // healer stays farther back
     float maxCatchup = 60.0f;                        // if tank is insanely far, don't try to path forever
 
     if (!bot->IsWithinDistInMap(tank, maxCatchup))

@@ -20,7 +20,7 @@ static bool RTG_IsPassiveDungeonHealer(Player* bot, PlayerbotAI* botAI, Unit* ta
     if (!bot || !botAI)
         return false;
 
-    if (!botAI->IsHeal(bot))
+    if (!botAI->IsHeal(bot, true))
         return false;
 
     Map* map = bot->GetMap();

@@ -1444,7 +1444,7 @@ bool MovementAction::Flee(Unit* target)
     }
     else  // bot is not targeted, try to flee dps/healers
     {
-        bool isHealer = botAI->IsHeal(bot);
+        bool isHealer = botAI->IsHeal(bot, true);
         bool isDps = !isHealer && !botAI->IsTank(bot);
         bool isTank = botAI->IsTank(bot);
         bool needHealer = !isHealer && AI_VALUE2(uint8, "health", "self target") < 50;
@@ -1465,7 +1465,7 @@ bool MovementAction::Flee(Unit* target)
                 if (!player || player == bot || !player->IsAlive())
                     continue;
 
-                if ((isHealer && botAI->IsHeal(player)) || needHealer)
+                if ((isHealer && botAI->IsHeal(player, true)) || needHealer)
                 {
                     float distanceToHealer = ServerFacade::instance().GetDistance2d(bot, player);
                     float distanceToTarget = ServerFacade::instance().GetDistance2d(player, target);
