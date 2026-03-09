@@ -3391,7 +3391,12 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     }
 
     if (RTG_QueueDebugEnabled())
-        LOG_INFO("playerbots", "[RTGDBG][BG] check end anyRealQueued={} anyRealDemand={} needTotal={} start={} turnBg={}", anyRealQueued ? 1u : 0u, GetEventValue(0, "rtg_bg_any_real_demand"), GetEventValue(0, "rtg_bg_need_total"), GetEventValue(0, "rtg_bg_start"), GetEventValue(0, "rtg_queue_turn_bg"));
+        LOG_INFO("playerbots",
+    "[RTGDBG][BG] check end anyRealDemand={} needTotal={} start={} turnBg={}",
+    GetEventValue(0, "rtg_bg_any_real_demand"),
+    GetEventValue(0, "rtg_bg_need_total"),
+    GetEventValue(0, "rtg_bg_start"),
+    GetEventValue(0, "rtg_queue_turn_bg"));
     LOG_DEBUG("playerbots", "BG Queue check finished");
 }
 
