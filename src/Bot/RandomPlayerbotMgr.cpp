@@ -2360,7 +2360,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
 
                 Group* group = player->GetGroup();
-                ObjectGuid queueGuid = group ? group->GetGUID() : player->GetGUID();
+				ObjectGuid queueGuid = player->GetGUID();
+
+				if (group)
+				{
+					lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+					if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+						queueGuid = group->GetGUID();
+				}
                 lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
                 Map* map = player->GetMap();
                 bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
@@ -3329,15 +3336,30 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                     anyRealBgDemand = true;
 
                 uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
-                uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
-                if (allianceCurrent < teamSize)
-                    rtgBgNeedTotal += (teamSize - allianceCurrent);
-                if (hordeCurrent < teamSize)
-                    rtgBgNeedTotal += (teamSize - hordeCurrent);
+				uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
+
+				uint32 allianceTarget = teamSize;
+				uint32 hordeTarget = teamSize;
+
+				// Fresh queue wants full teams.
+				// Active real-player match without queue only gets a limited support buffer.
+				if (!bgInfo.activeBgQueue && hasRealDemand)
+				{
+					uint32 replacementCap = 3; // tune this if needed
+
+					allianceTarget = std::min<uint32>(teamSize, bgInfo.bgAlliancePlayerCount + replacementCap);
+					hordeTarget = std::min<uint32>(teamSize, bgInfo.bgHordePlayerCount + replacementCap);
+				}
+
+				if (allianceCurrent < allianceTarget)
+					rtgBgNeedTotal += (allianceTarget - allianceCurrent);
+
+				if (hordeCurrent < hordeTarget)
+					rtgBgNeedTotal += (hordeTarget - hordeCurrent);
             }
         }
 
-        SetEventValue(0, "rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl);
+        SetEventValue(0, "rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
         SetEventValue(0, "rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
 
         if (anyRealBgDemand && rtgBgNeedTotal)
@@ -3388,8 +3410,15 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (!player || !player->IsInWorld() || IsRandomBot(player))
             continue;
 
-        Group* group = player->GetGroup();
-        ObjectGuid queueGuid = group ? group->GetGUID() : player->GetGUID();
+		Group* group = player->GetGroup();
+		ObjectGuid queueGuid = player->GetGUID();
+
+		if (group)
+		{
+			lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+			if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+				queueGuid = group->GetGUID();
+		}
 
         lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
         Map* map = player->GetMap();
@@ -3437,24 +3466,28 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             }
         }
     }
-
+	
+	// Owner-local LFG demand should expire quickly so stale real-player groups
+	// do not keep helper bots alive too long after queue/group collapse.
+	// Global LFG demand can live longer to avoid thrashing between scans.
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 now = static_cast<uint32>(time(nullptr));
-        uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
-        uint32 desiredHelperTotal = 0;
-        bool anyReady = false;
-        uint32 oldestPendingStart = 0;
+		uint32 ownerTtl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 20;
+		uint32 globalTtl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
+		uint32 desiredHelperTotal = 0;
+		bool anyReady = false;
+		uint32 oldestPendingStart = 0;
 
         for (auto const& kv : requests)
         {
             QueueRequest const& req = kv.second;
             uint32 existingStart = GetEventValue(req.owner, "rtg_lfg_start");
             uint32 startTs = req.activeDungeon ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (existingStart ? existingStart : now);
-            SetEventValue(req.owner, "rtg_lfg_start", startTs, ttl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
-            SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ttl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
-
-            uint32 needTank = req.realTank >= 1 ? 0u : 1u;
+            SetEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
+			SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
+            
+			uint32 needTank = req.realTank >= 1 ? 0u : 1u;
             uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
             uint32 needDps = req.realDps >= 3 ? 0u : (3u - req.realDps);
             uint32 helperNeed = needTank + needHeal + needDps;
@@ -3478,8 +3511,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgEventMaxBots);
             LOG_INFO("playerbots", "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
                      static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
-            SetEventValue(0, "rtg_lfg_start", globalStart, ttl);
-            SetEventValue(0, "rtg_lfg_need_total", cappedNeed, ttl);
+            SetEventValue(0, "rtg_lfg_start", globalStart, globalTtl);
+			SetEventValue(0, "rtg_lfg_need_total", cappedNeed, globalTtl);
         }
         else
         {
