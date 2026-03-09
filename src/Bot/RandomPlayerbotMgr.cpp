@@ -3314,7 +3314,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             uint32 teamSize = bgTemplate->GetMaxPlayersPerTeam();
             for (auto const& bracketIdPair : queueTypePair.second)
             {
-                BattlegroundBracketId bracketId = bracketIdPair.first;
+                BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketIdPair.first);
                 BattlegroundInfo const& bgInfo = bracketIdPair.second;
                 if (!bgInfo.minLevel)
                     continue;
