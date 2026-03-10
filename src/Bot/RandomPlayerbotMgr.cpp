@@ -1122,6 +1122,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
             }
 
+            // BG groups are owned by battleground lifecycle. Do not force-disband
+            // bot-only battleground groups here just because no real player remains.
+            // That can tear down live battleground state while the instance is still open.
+            if (isBgGroup && inBg)
+            {
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
+                continue;
+            }
+
             if (hasRealOnline)
             {
                 SetEventValue(botId, "rtg_group_noreal", 0, 0);
@@ -1136,7 +1145,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
             }
 
-            // After 10s with no real players online, dissolve.
+            // After 10s with no real players online, dissolve allowed non-BG groups only.
             if (now > started + 10)
             {
                 if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
@@ -1478,12 +1487,28 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 }
             }
 
-            if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) || bot->InBattleground())
+            bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
+            bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || !rtgBgReady || wrongTeam;
+            bool inBgState = bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue();
+            bool inDesiredQueue = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType));
+
+            if (inDesiredQueue || inBgState)
             {
                 RTG_ClearQueueDebuffs(bot);
                 SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                if (bgHasRealDemand)
-                    continue;
+
+                if (noLongerNeeded)
+                {
+                    // Mark this helper for retirement, but only once it is safely out of
+                    // battleground / arena / queue state. Logging it out here can wedge
+                    // battleground state while the instance is still alive.
+                    SetEventValue(botId, "rtg_bg_retire_when_safe", 1, 120, addData);
+                }
+                else
+                {
+                    SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+                }
+                continue;
             }
 
             if (GetEventValue(botId, "rtg_bg_pending"))
@@ -1492,36 +1517,35 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
             }
 
-            // Once a BG helper is out of queue and out of the battleground, retire it promptly
-            // unless it is still inside the short pending window above.
-            if (!bot->InBattleground() && !bot->InBattlegroundQueue())
+            bool retireWhenSafe = GetEventValue(botId, "rtg_bg_retire_when_safe") != 0;
+            bool outOfBgState = !bot->InBattleground() && !bot->InArena() && !bot->InBattlegroundQueue();
+
+            // Once a BG helper is fully out of battleground state, retire it promptly if
+            // demand disappeared, team assignment is invalid, or it was previously marked
+            // for deferred retirement while still tied to BG lifecycle.
+            if (outOfBgState && (retireWhenSafe || noLongerNeeded))
             {
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
 
                 SetEventValue(botId, "add", 0, 0);
                 SetEventValue(botId, "rtg_bg_pending", 0, 0);
+                SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
                 currentBots.remove(botId);
                 rtgBgLogout.push_back(botGuid);
                 continue;
             }
 
-            if (!bgHasRealDemand || !rtgBgDemand || !rtgBgReady)
+            // Helpers that have already left battleground state should not linger forever
+            // once their assigned queue work is done.
+            if (outOfBgState)
             {
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
 
                 SetEventValue(botId, "add", 0, 0);
                 SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                currentBots.remove(botId);
-                rtgBgLogout.push_back(botGuid);
-                continue;
-            }
-
-            if (desiredTeam && bot->GetTeamId() != desiredTeam)
-            {
-                SetEventValue(botId, "add", 0, 0);
-                SetEventValue(botId, "rtg_bg_pending", 0, 0);
+                SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
                 currentBots.remove(botId);
                 rtgBgLogout.push_back(botGuid);
                 continue;
