@@ -52,6 +52,29 @@ namespace
 
         return true;
     }
+
+    static BattlegroundQueueTypeId RTG_FindBotQueueTypeForLeave(Player* bot)
+    {
+        if (!bot)
+            return BATTLEGROUND_QUEUE_NONE;
+
+        for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+        {
+            BattlegroundQueueTypeId queueTypeId = bot->GetBattlegroundQueueTypeId(queueSlot);
+            if (queueTypeId > BATTLEGROUND_QUEUE_NONE && queueTypeId < MAX_BATTLEGROUND_QUEUE_TYPES)
+                return queueTypeId;
+        }
+
+        uint32 team = 0;
+        uint32 level = 0;
+        uint32 queueType = 0;
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+        if (RTG_ParseBgBotAssignment(addData, team, level, queueType) &&
+            queueType > BATTLEGROUND_QUEUE_NONE && queueType < MAX_BATTLEGROUND_QUEUE_TYPES)
+            return BattlegroundQueueTypeId(queueType);
+
+        return BATTLEGROUND_QUEUE_NONE;
+    }
 }
 
 #include "PositionValue.h"
@@ -381,11 +404,7 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
 
     // RTG: explicitly assigned battleground helpers should still be allowed
-    // to queue even when the legacy activeBgQueue/bgInstanceCount counters have
-    // not caught up yet for this battleground.
-    if (assignedHelper)
-        return true;
-
+    // to queue even when the legacy counters have not caught up yet.
     if (assignedHelper)
         return true;
 
@@ -763,7 +782,10 @@ bool BGLeaveAction::Execute(Event event)
         return true;
 
     // leave queue if not in BG
-    BattlegroundQueueTypeId queueTypeId = bot->GetBattlegroundQueueTypeId(0);
+    BattlegroundQueueTypeId queueTypeId = RTG_FindBotQueueTypeForLeave(bot);
+    if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+        return false;
+
     BattlegroundTypeId _bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
     uint8 type = false;
     uint16 unk = 0x1F90;

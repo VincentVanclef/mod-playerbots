@@ -43,6 +43,16 @@ struct BattlegroundInfo
     // Players (Battleground)
     uint32 bgHordePlayerCount = 0;
     uint32 bgAlliancePlayerCount = 0;
+
+    // RTG split view: queue demand vs active battleground lifecycle
+    uint32 bgQueueHordePlayerCount = 0;
+    uint32 bgQueueAlliancePlayerCount = 0;
+    uint32 bgQueueHordeBotCount = 0;
+    uint32 bgQueueAllianceBotCount = 0;
+    uint32 bgActiveHordePlayerCount = 0;
+    uint32 bgActiveAlliancePlayerCount = 0;
+    uint32 bgActiveHordeBotCount = 0;
+    uint32 bgActiveAllianceBotCount = 0;
     // Community level cap cache
 
 };
