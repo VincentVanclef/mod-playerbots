@@ -56,6 +56,7 @@
 #include "Random.h"
 #include "RandomPlayerbotFactory.h"
 #include "RtgQueueMetadata.h"
+#include "RtgBgQueuePlanner.h"
 #include "ServerFacade.h"
 #include "SharedDefines.h"
 #include "TravelMgr.h"
@@ -3333,78 +3334,8 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     }
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
-        uint32 rtgBgNeedTotal = 0;
-        bool anyRealBgDemand = false;
-
-        for (auto const& queueTypePair : BattlegroundData)
-        {
-            BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueTypePair.first);
-            if (BattlegroundMgr::BGArenaType(queueTypeId))
-                continue;
-
-            BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
-            Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-            if (!bgTemplate)
-                continue;
-
-            uint32 teamSize = bgTemplate->GetMaxPlayersPerTeam();
-            for (auto const& bracketIdPair : queueTypePair.second)
-            {
-                BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketIdPair.first);
-                BattlegroundInfo const& bgInfo = bracketIdPair.second;
-                if (!bgInfo.minLevel)
-                    continue;
-
-                bool hasRealDemand = (bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0;
-                bool queueOrMatchActive = bgInfo.activeBgQueue || hasRealDemand;
-                SetEventValue(0, RTG_MakeBgDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
-                if (!queueOrMatchActive)
-                    continue;
-
-                if (hasRealDemand)
-                    anyRealBgDemand = true;
-
-                uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
-				uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
-
-				uint32 allianceTarget = teamSize;
-				uint32 hordeTarget = teamSize;
-
-				// Fresh queue wants full teams.
-				// Active real-player match without queue only gets a limited support buffer.
-				if (!bgInfo.activeBgQueue && hasRealDemand)
-				{
-					uint32 replacementCap = 3; // tune this if needed
-
-					allianceTarget = std::min<uint32>(teamSize, bgInfo.bgAlliancePlayerCount + replacementCap);
-					hordeTarget = std::min<uint32>(teamSize, bgInfo.bgHordePlayerCount + replacementCap);
-				}
-
-				if (allianceCurrent < allianceTarget)
-					rtgBgNeedTotal += (allianceTarget - allianceCurrent);
-
-				if (hordeCurrent < hordeTarget)
-					rtgBgNeedTotal += (hordeTarget - hordeCurrent);
-            }
-        }
-
-        SetEventValue(0, "rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl); // compatibility
-		SetEventValue(0, "rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
-        SetEventValue(0, "rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
-
-        if (anyRealBgDemand && rtgBgNeedTotal)
-        {
-            uint32 existing = GetEventValue(0, "rtg_bg_start");
-            uint32 now = static_cast<uint32>(time(nullptr));
-            uint32 start = existing ? existing : (now - sPlayerbotAIConfig.rtgQueueGraceSeconds);
-            SetEventValue(0, "rtg_bg_start", start, ttl);
-        }
-        else
-        {
-            SetEventValue(0, "rtg_bg_start", 0, 0);
-            SetEventValue(0, "rtg_bg_need_total", 0, 0);
-        }
+        RTG::RtgBgQueuePlanner bgPlanner;
+        bgPlanner.ApplyDemandEvents(*this);
     }
 
     if (RTG_QueueDebugEnabled())
