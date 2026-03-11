@@ -55,6 +55,7 @@
 #include "Position.h"
 #include "Random.h"
 #include "RandomPlayerbotFactory.h"
+#include "RtgQueueMetadata.h"
 #include "ServerFacade.h"
 #include "SharedDefines.h"
 #include "TravelMgr.h"
@@ -64,12 +65,6 @@
 
 namespace
 {
-    static bool RTG_HasPrefix(std::string const& value, std::string const& prefix)
-    {
-        return value.rfind(prefix, 0) == 0;
-    }
-
-
     static bool RTG_QueueDebugEnabled()
     {
         return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug;
@@ -77,48 +72,7 @@ namespace
 
     static bool RTG_IsQueueSupervisorEvent(std::string const& event)
     {
-        return event == "add" || event == "logout" || RTG_HasPrefix(event, "rtg_");
-    }
-
-    static std::string RTG_MakeLfgAddData(unsigned int team, unsigned int level, unsigned int role = 0, unsigned int owner = 0)
-    {
-        std::string data = std::string("rtg_lfg:") + std::to_string(team) + ":" + std::to_string(level);
-        if (role || owner)
-            data += ":" + std::to_string(role);
-        if (owner)
-            data += ":" + std::to_string(owner);
-        return data;
-    }
-
-    static bool RTG_ParseLfgAddData(std::string const& data, unsigned int& team, unsigned int& level, unsigned int* role = nullptr, unsigned int* owner = nullptr)
-    {
-        if (!RTG_HasPrefix(data, "rtg_lfg:"))
-            return false;
-
-        std::string payload = data.substr(8);
-        std::vector<std::string> parts;
-        std::stringstream ss(payload);
-        std::string part;
-        while (std::getline(ss, part, ':'))
-            parts.push_back(part);
-
-        if (parts.size() < 2)
-            return false;
-
-        try
-        {
-            team = static_cast<unsigned int>(std::stoul(parts[0]));
-            level = static_cast<unsigned int>(std::stoul(parts[1]));
-            if (role)
-                *role = parts.size() >= 3 ? static_cast<unsigned int>(std::stoul(parts[2])) : 0u;
-            if (owner)
-                *owner = parts.size() >= 4 ? static_cast<unsigned int>(std::stoul(parts[3])) : 0u;
-            return true;
-        }
-        catch (...)
-        {
-            return false;
-        }
+        return event == "add" || event == "logout" || RTG::HasPrefix(event, "rtg_");
     }
 
     static bool RTG_ClassCanRole(uint8 cls, uint32 role)
@@ -261,86 +215,7 @@ namespace
 
         return RTG_RoleForClassSpecTab(bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
     }
-
-	static bool RTG_ParseLfgDesiredRole(std::string const& addData, uint32& desiredRole)
-	{
-		desiredRole = 0;
-
-		if (addData.empty())
-			return false;
-
-		// Expected format:
-		// rtg_lfg:team:level:role
-
-		size_t p1 = addData.find(':');
-		if (p1 == std::string::npos)
-			return false;
-
-		size_t p2 = addData.find(':', p1 + 1);
-		if (p2 == std::string::npos)
-			return false;
-
-		size_t p3 = addData.find(':', p2 + 1);
-		if (p3 == std::string::npos)
-			return false;
-
-		std::string prefix = addData.substr(0, p1);
-		if (prefix != "rtg_lfg")
-			return false;
-
-		std::string roleStr = addData.substr(p3 + 1);
-		if (roleStr.empty())
-			return false;
-
-		desiredRole = uint32(std::strtoul(roleStr.c_str(), nullptr, 10));
-
-		return true;
-	}
-	
-    static std::string RTG_MakeBgAddData(unsigned int team, unsigned int level, unsigned int queueType, unsigned int owner = 0)
-    {
-        std::string data = std::string("rtg_bg:") + std::to_string(team) + ":" + std::to_string(level) + ":" + std::to_string(queueType);
-        if (owner)
-            data += ":" + std::to_string(owner);
-        return data;
-    }
-
-    static bool RTG_ParseBgAddData(std::string const& data, unsigned int& team, unsigned int& level, unsigned int& queueType, unsigned int* owner = nullptr)
-    {
-        if (!RTG_HasPrefix(data, "rtg_bg:"))
-            return false;
-
-        std::string payload = data.substr(7);
-        std::vector<std::string> parts;
-        std::stringstream ss(payload);
-        std::string part;
-        while (std::getline(ss, part, ':'))
-            parts.push_back(part);
-
-        if (parts.size() < 3)
-            return false;
-
-        try
-        {
-            team = static_cast<unsigned int>(std::stoul(parts[0]));
-            level = static_cast<unsigned int>(std::stoul(parts[1]));
-            queueType = static_cast<unsigned int>(std::stoul(parts[2]));
-            if (owner)
-                *owner = parts.size() >= 4 ? static_cast<unsigned int>(std::stoul(parts[3])) : 0u;
-            return true;
-        }
-        catch (...)
-        {
-            return false;
-        }
-    }
-
-    static bool RTG_IsQueueManagedAddData(std::string const& data)
-    {
-        return RTG_HasPrefix(data, "rtg_lfg:") || RTG_HasPrefix(data, "rtg_bg:");
-    }
-
-	static uint32 RTG_NormalizeQueuedRoleMask(uint32 roleMask)
+    static uint32 RTG_NormalizeQueuedRoleMask(uint32 roleMask)
 	{
 		if (roleMask & lfg::PLAYER_ROLE_TANK)
 			return lfg::PLAYER_ROLE_TANK;
@@ -536,7 +411,7 @@ namespace
         uint32 desiredTeam = 0;
         uint32 desiredLevel = 0;
         uint32 desiredQueueType = 0;
-        if (RTG_ParseBgAddData(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), desiredTeam, desiredLevel, desiredQueueType) &&
+        if (RTG::ParseBgAddData(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), desiredTeam, desiredLevel, desiredQueueType) &&
             desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES)
             return BattlegroundQueueTypeId(desiredQueueType);
 
@@ -1205,7 +1080,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             uint32 botId = kv.first.GetCounter();
             std::string addData = GetEventData(botId, "add");
-            if (!RTG_HasPrefix(addData, "rtg_lfg:"))
+            if (!RTG::HasPrefix(addData, "rtg_lfg:"))
                 continue;
 
             Map* map = bot->GetMap();
@@ -1405,7 +1280,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
 			uint32 botId = botGuid.GetCounter();
 			std::string addData = GetEventData(botId, "add");
-			if (!RTG_HasPrefix(addData, "rtg_lfg:"))
+			if (!RTG::HasPrefix(addData, "rtg_lfg:"))
 				continue;
 
 			Map* map = bot->GetMap();
@@ -1425,7 +1300,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			unsigned int parsedLevel = 0;
 			unsigned int parsedRole = 0;
 			unsigned int parsedOwner = 0;
-			if (RTG_ParseLfgAddData(addData, parsedTeam, parsedLevel, &parsedRole, &parsedOwner))
+			if (RTG::ParseLfgAddData(addData, parsedTeam, parsedLevel, &parsedRole, &parsedOwner))
 			{
 				desiredRole = parsedRole;
 				desiredOwner = parsedOwner;
@@ -1503,7 +1378,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			uint32 desiredLevel = 0;
 			uint32 desiredRole = 0;
 			uint32 desiredOwner = 0;
-			if (!RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
+			if (!RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
 				continue;
 
 			bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
@@ -1607,7 +1482,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             uint32 desiredTeam = 0;
             uint32 desiredLevel = 0;
             uint32 desiredQueueType = 0;
-            if (!RTG_ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
+            if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
                 continue;
 
             bool bgHasRealDemand = false;
@@ -2330,7 +2205,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         for (uint32 botId : currentBots)
         {
             std::string addData = GetEventData(botId, "add");
-            if (RTG_IsQueueManagedAddData(addData) || GetEventValue(botId, "rtg_dungeon_active") || GetEventValue(botId, "rtg_bg_pending") || GetEventValue(botId, "rtg_lfg_pending"))
+            if (RTG::IsQueueManagedAddData(addData) || GetEventValue(botId, "rtg_dungeon_active") || GetEventValue(botId, "rtg_bg_pending") || GetEventValue(botId, "rtg_lfg_pending"))
                 ++rtgManagedOnline;
         }
 
@@ -2456,9 +2331,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
-            if (RTG_HasPrefix(addData, "rtg_lfg:"))
+            if (RTG::HasPrefix(addData, "rtg_lfg:"))
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
-            else if (RTG_HasPrefix(addData, "rtg_bg:"))
+            else if (RTG::HasPrefix(addData, "rtg_bg:"))
                 SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 45, addData);
             currentBots.push_back(charInfo.guid);
 
@@ -2593,7 +2468,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 desiredQueueType = 0;
 
                 uint32 ownerId = 0;
-                if (RTG_ParseLfgAddData(addData, dataTeam, dataLevel, &desiredRole, &ownerId))
+                if (RTG::ParseLfgAddData(addData, dataTeam, dataLevel, &desiredRole, &ownerId))
                 {
                     auto it = lfgBuckets.find(std::make_tuple(ownerId, dataTeam, dataLevel));
                     if (it == lfgBuckets.end())
@@ -2626,7 +2501,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             ++it->second.assignedDps;
                     }
                 }
-                else if (RTG_ParseBgAddData(addData, dataTeam, dataLevel, desiredQueueType))
+                else if (RTG::ParseBgAddData(addData, dataTeam, dataLevel, desiredQueueType))
                 {
                     auto key = std::make_tuple(desiredQueueType, dataTeam, dataLevel);
                     auto it = bgBuckets.find(key);
@@ -2814,7 +2689,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!capacity)
                     return false;
 
-                std::string addData = RTG_MakeLfgAddData(bucket.team, bucket.level, desiredRole, bucket.owner);
+                std::string addData = RTG::MakeLfgAddData(bucket.team, bucket.level, desiredRole, bucket.owner);
                 for (auto const& charInfo : allCharacters)
                 {
                     if (!capacity)
@@ -2879,7 +2754,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!capacity)
                     return false;
 
-                std::string addData = RTG_MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
+                std::string addData = RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
                 for (auto const& charInfo : allCharacters)
                 {
                     if (!capacity)
@@ -3659,8 +3534,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             QueueRequest const& req = kv.second;
             uint32 existingStart = GetEventValue(req.owner, "rtg_lfg_start");
             uint32 startTs = req.activeDungeon ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (existingStart ? existingStart : now);
-            SetEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
-			SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, RTG_MakeLfgAddData(req.team, req.level, 0, req.owner));
+            SetEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
+			SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
             
 			uint32 needTank = req.realTank >= 1 ? 0u : 1u;
             uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
@@ -5033,7 +4908,7 @@ void RandomPlayerbotMgr::GetBots()
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
             std::string addData = GetEventData(*it, "add");
-            if (!RTG_IsQueueManagedAddData(addData))
+            if (!RTG::IsQueueManagedAddData(addData))
             {
                 it = currentBots.erase(it);
                 continue;
@@ -5066,7 +4941,7 @@ void RandomPlayerbotMgr::GetBots()
             if (sPlayerbotAIConfig.rtgEventDriven)
             {
                 std::string addData = GetEventData(bot, "add");
-                if (!RTG_IsQueueManagedAddData(addData))
+                if (!RTG::IsQueueManagedAddData(addData))
                     continue;
             }
 
@@ -5482,7 +5357,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         uint32 desiredLevel = 0;
         uint32 desiredQueueType = 0;
 
-        if (RTG_ParseLfgAddData(addData, desiredTeam, desiredLevel))
+        if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel))
         {
             if (desiredLevel && bot->GetLevel() != desiredLevel)
             {
@@ -5494,7 +5369,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
         }
-        else if (RTG_ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
+        else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
             if (desiredLevel && bot->GetLevel() != desiredLevel)
             {
