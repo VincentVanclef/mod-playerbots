@@ -49,7 +49,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
             bool hasRealDemand = (bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0;
             bool queueOrMatchActive = bgInfo.activeBgQueue || hasRealDemand;
-            mgr.SetEventValue(0, RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
+            mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
             if (!queueOrMatchActive)
                 continue;
 
@@ -77,21 +77,21 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
         }
     }
 
-    mgr.SetEventValue(0, "rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl);
-    mgr.SetEventValue(0, "rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
-    mgr.SetEventValue(0, "rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
+    mgr.RTG_SetGlobalEvent("rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl);
+	mgr.RTG_SetGlobalEvent("rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
+	mgr.RTG_SetGlobalEvent("rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
 
     if (anyRealBgDemand && rtgBgNeedTotal)
     {
-        uint32 existing = mgr.GetEventValue(0, "rtg_bg_start");
+        uint32 existing = mgr.RTG_GetGlobalEvent("rtg_bg_start");
         uint32 now = static_cast<uint32>(time(nullptr));
         uint32 start = existing ? existing : (now - sPlayerbotAIConfig.rtgQueueGraceSeconds);
-        mgr.SetEventValue(0, "rtg_bg_start", start, ttl);
+        mgr.RTG_SetGlobalEvent("rtg_bg_start", start, ttl);
     }
     else
     {
-        mgr.SetEventValue(0, "rtg_bg_start", 0, 0);
-        mgr.SetEventValue(0, "rtg_bg_need_total", 0, 0);
+        mgr.RTG_SetGlobalEvent("rtg_bg_start", 0, 0);
+		mgr.RTG_SetGlobalEvent("rtg_bg_need_total", 0, 0);
     }
 }
 }
