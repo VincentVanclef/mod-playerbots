@@ -349,18 +349,21 @@ void PlayerbotHolder::LogoutPlayerBot(ObjectGuid guid)
         if (!botAI)
             return;
 
-        // Queue group cleanup operation for world thread
+        WorldSession* botWorldSessionPtr = bot->GetSession();
+        if (!botWorldSessionPtr)
+            return;
+
+        if (botWorldSessionPtr->isLogingOut() || bot->IsDuringRemoveFromWorld())
+            return;
+
+        // Queue group cleanup operation for world thread only once the bot is confirmed live.
         auto cleanupOp = std::make_unique<BotLogoutGroupCleanupOperation>(guid);
         PlayerbotWorldThreadProcessor::instance().QueueOperation(std::move(cleanupOp));
 
         LOG_DEBUG("playerbots", "Bot {} logging out", bot->GetName().c_str());
         bot->SaveToDB(false, false);
 
-        WorldSession* botWorldSessionPtr = bot->GetSession();
         WorldSession* masterWorldSessionPtr = nullptr;
-
-        if (botWorldSessionPtr->isLogingOut())
-            return;
 
         Player* master = botAI->GetMaster();
         if (master)

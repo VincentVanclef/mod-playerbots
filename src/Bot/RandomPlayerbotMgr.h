@@ -251,6 +251,7 @@ private:
                          std::string const& data = "");
     void GetBots();
     std::vector<uint32> GetBgBots(uint32 bracket);
+    bool RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason = nullptr, bool clearQueueState = true);
     time_t BgCheckTimer;
     time_t LfgCheckTimer;
     time_t PlayersCheckTimer;

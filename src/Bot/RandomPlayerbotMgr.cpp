@@ -759,6 +759,45 @@ uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
     return count;
 }
 
+bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
+{
+    Player* bot = GetPlayerBot(guid);
+    if (!bot)
+        return false;
+
+    WorldSession* session = bot->GetSession();
+    if (!session)
+        return false;
+
+    uint32 botId = guid.GetCounter();
+    if (GetEventValue(botId, "logout"))
+        return false;
+
+    if (session->isLogingOut() || bot->IsDuringRemoveFromWorld())
+    {
+        SetEventValue(botId, "logout", 1, 60);
+        return false;
+    }
+
+    if (clearQueueState)
+    {
+        SetEventValue(botId, "add", 0, 0);
+        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+    }
+
+    currentBots.remove(botId);
+    RTG_PrepareBotForLogout(bot);
+    SetEventValue(botId, "logout", 1, 60);
+
+    if (RTG_QueueDebugEnabled())
+        LOG_INFO("playerbots", "[RTGDBG][LOGOUT] request bot={} reason={} addData='{}'", botId, reason ? reason : "rtg", GetEventData(botId, "add"));
+
+    LogoutPlayerBot(guid);
+    return true;
+}
+
 void RandomPlayerbotMgr::SaveBotsPerPlayerToDB(float ratio) const
 {
     PlayerbotsDatabase.Execute(
@@ -1341,20 +1380,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
 				continue;
 
-			SetEventValue(botId, "add", 0, 0);
-			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-			currentBots.remove(botId);
 			rtgShrinkLogout.push_back(botGuid);
 			--toLogout;
 		}
 
 		for (ObjectGuid const& botGuid : rtgShrinkLogout)
-		{
-			if (Player* shrinkBot = GetPlayerBot(botGuid))
-				RTG_PrepareBotForLogout(shrinkBot);
-
-			LogoutPlayerBot(botGuid);
-		}
+			RTG_RequestSafeBotLogout(botGuid, "rtg_shrink");
 	}
 
 
@@ -1407,9 +1438,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				uint32 actualRole = RTG_ActualRoleForBot(bot);
 				if (actualRole != desiredRole)
 				{
-					SetEventValue(botId, "add", 0, 0);
-					SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-					currentBots.remove(botId);
 					rtgStaleQueueBots.push_back(botGuid);
 					continue;
 				}
@@ -1443,27 +1471,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
 				continue;
 
-			SetEventValue(botId, "add", 0, 0);
-			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-			currentBots.remove(botId);
 			rtgIdleLogout.push_back(botGuid);
 		}
 
 		for (ObjectGuid const& guid : rtgStaleQueueBots)
-		{
-			if (Player* staleBot = GetPlayerBot(guid))
-				RTG_PrepareBotForLogout(staleBot);
-
-			LogoutPlayerBot(guid);
-		}
+			RTG_RequestSafeBotLogout(guid, "rtg_lfg_role_mismatch");
 
 		for (ObjectGuid const& botGuid : rtgIdleLogout)
-		{
-			if (Player* idleBot = GetPlayerBot(botGuid))
-				RTG_PrepareBotForLogout(idleBot);
-
-			LogoutPlayerBot(botGuid);
-		}
+			RTG_RequestSafeBotLogout(botGuid, "rtg_lfg_idle");
 	}
 
 
@@ -1567,19 +1582,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
 				continue;
 
-			SetEventValue(botId, "add", 0, 0);
-			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-			currentBots.remove(botId);
 			rtgStaleQueueBots.push_back(botGuid);
 		}
 
 		for (ObjectGuid const& botGuid : rtgStaleQueueBots)
-		{
-			if (Player* staleBot = GetPlayerBot(botGuid))
-				RTG_PrepareBotForLogout(staleBot);
-
-			LogoutPlayerBot(botGuid);
-		}
+			RTG_RequestSafeBotLogout(botGuid, "rtg_lfg_stale");
 	}
 
 
@@ -1652,10 +1659,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
 
-                SetEventValue(botId, "add", 0, 0);
-                SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-                currentBots.remove(botId);
                 rtgBgLogout.push_back(botGuid);
                 continue;
             }
@@ -1670,12 +1673,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         }
 
         for (ObjectGuid const& botGuid : rtgBgLogout)
-        {
-            if (Player* bgBot = GetPlayerBot(botGuid))
-                RTG_PrepareBotForLogout(bgBot);
-
-            LogoutPlayerBot(botGuid);
-        }
+            RTG_RequestSafeBotLogout(botGuid, "rtg_bg_retire");
     }
 
 
@@ -1720,19 +1718,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 
 			SetEventValue(botId, "rtg_dungeon_active", 0, 0);
-			SetEventValue(botId, "add", 0, 0);
-			SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-			currentBots.remove(botId);
 			rtgFinishedDungeonLogout.push_back(botGuid);
 		}
 
 		for (ObjectGuid const& botGuid : rtgFinishedDungeonLogout)
-		{
-			if (Player* finishedBot = GetPlayerBot(botGuid))
-				RTG_PrepareBotForLogout(finishedBot);
-
-			LogoutPlayerBot(botGuid);
-		}
+			RTG_RequestSafeBotLogout(botGuid, "rtg_dungeon_finished");
 	}
 
 // ---------------------------------------------------------
@@ -1828,7 +1818,8 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
 
     if (sPlayerbotAIConfig.disabledWithoutRealPlayer)
     {
-        if (sWorldSessionMgr->GetActiveAndQueuedSessionCount() > 0)
+        uint32 onlineRealPlayers = GetOnlineRealPlayerCount();
+        if (onlineRealPlayers > 0)
         {
             RealPlayerLastTimeSeen = time(nullptr);
             realPlayerIsLogged = true;
@@ -1840,9 +1831,21 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
         }
         else
         {
+            realPlayerIsLogged = false;
+
             if (DelayLoginBotsTimer)
             {
                 DelayLoginBotsTimer = 0;
+            }
+
+            if (sPlayerbotAIConfig.rtgEventDriven)
+            {
+                SetEventValue(0, "rtg_bg_any_real_queued", 0, 0);
+                SetEventValue(0, "rtg_bg_any_real_demand", 0, 0);
+                SetEventValue(0, "rtg_bg_need_total", 0, 0);
+                SetEventValue(0, "rtg_bg_start", 0, 0);
+                SetEventValue(0, "rtg_lfg_need_total", 0, 0);
+                SetEventValue(0, "rtg_lfg_start", 0, 0);
             }
 
             if (RealPlayerLastTimeSeen != 0 && onlineBotCount > 0 &&
@@ -2011,14 +2014,10 @@ for (auto const& c : candidates)
 	    // on the next tick because its "add" event is still valid and its id is still
 	    // present in currentBots.
 	    //
-	    // To ensure shrinking actually sticks, invalidate the bot's "add" event and
-	    // remove it from currentBots before logging it out.
+	    // Use the RTG-safe path so repeated shrink passes do not re-queue the same logout.
 	    ObjectGuid botGuid = c.first;
-	    uint32 botId = botGuid.GetCounter();
-	    SetEventValue(botId, "add", 0, 0);
-	    currentBots.remove(botId);
-	    LogoutPlayerBot(botGuid);
-    ++loggedOut;
+	    if (RTG_RequestSafeBotLogout(botGuid, "ratio_shrink"))
+            ++loggedOut;
 }
 	
 	    if (loggedOut > 0)
@@ -3091,6 +3090,18 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
     bool anyRealQueued = false;
 
+    if (sPlayerbotAIConfig.rtgEventDriven && GetOnlineRealPlayerCount() == 0)
+    {
+        SetEventValue(0, "rtg_bg_any_real_queued", 0, 0);
+        SetEventValue(0, "rtg_bg_any_real_demand", 0, 0);
+        SetEventValue(0, "rtg_bg_need_total", 0, 0);
+        SetEventValue(0, "rtg_bg_start", 0, 0);
+
+        if (RTG_QueueDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][BG] skip check: no real players online");
+        return;
+    }
+
     // Initialize Battleground Data (do not clear here)
 
     for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
@@ -3533,6 +3544,16 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
 
 void RandomPlayerbotMgr::CheckLfgQueue()
 {
+    if (sPlayerbotAIConfig.rtgEventDriven && GetOnlineRealPlayerCount() == 0)
+    {
+        SetEventValue(0, "rtg_lfg_need_total", 0, 0);
+        SetEventValue(0, "rtg_lfg_start", 0, 0);
+
+        if (RTG_QueueDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFG] skip check: no real players online");
+        return;
+    }
+
     if (!LfgCheckTimer || time(nullptr) > (LfgCheckTimer + 30))
         LfgCheckTimer = time(nullptr);
 
