@@ -34,9 +34,9 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
         return false;
 
     ObjectGuid::LowType botId = bot->GetGUID().GetCounter();
-    if (sRandomPlayerbotMgr.GetEventValue(botId, "rtg_bg_pending") ||
-        sRandomPlayerbotMgr.GetEventValue(botId, "rtg_lfg_pending") ||
-        sRandomPlayerbotMgr.GetEventValue(botId, "rtg_dungeon_active"))
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
+        sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
+        sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active"))
     {
         return true;
     }
@@ -54,7 +54,7 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
     uint32 owner = 0;
     if (ParseBgAddData(addData, team, level, queueType, &owner))
     {
-        if (sRandomPlayerbotMgr.GetEventValue(0, "rtg_bg_need_total") != 0)
+        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, "rtg_bg_need_total") != 0)
             return true;
 
         BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueType));
@@ -65,7 +65,7 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
                 if (PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), level ? level : bot->GetLevel()))
                 {
                     std::string demandKey = std::string("rtg_bg_need_") + std::to_string(queueType) + "_" + std::to_string(uint32(pvpDiff->GetBracketId()));
-                    if (sRandomPlayerbotMgr.GetEventValue(0, demandKey) != 0)
+                    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0)
                         return true;
                 }
             }
@@ -73,9 +73,9 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
     }
     else if (ParseLfgAddData(addData, team, level, nullptr, &owner))
     {
-        if (sRandomPlayerbotMgr.GetEventValue(0, "rtg_lfg_need_total") != 0)
+        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, "rtg_lfg_need_total") != 0)
             return true;
-        if (owner && sRandomPlayerbotMgr.GetEventValue(owner, "rtg_lfg_real_demand") != 0)
+        if (owner && sRandomPlayerbotMgr.RTG_GetBotEventValue(owner, "rtg_lfg_real_demand") != 0)
             return true;
     }
 
