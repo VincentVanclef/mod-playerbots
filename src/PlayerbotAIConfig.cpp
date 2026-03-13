@@ -198,6 +198,16 @@ bool PlayerbotAIConfig::Initialize()
     rtgQueueOwnershipMaxTransitionSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds", 60);
     rtgQueueOwnershipDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Debug", false);
 
+    LOG_INFO("server.loading",
+        "RTG CFG loaded: Enable={} Debug={} MaxBots={} SmartQueue={} Grace={} Ownership={} ProtectBG={}",
+        rtgEventDriven ? 1 : 0,
+        rtgEventDebug ? 1 : 0,
+        rtgEventMaxBots,
+        rtgSmartQueue ? 1 : 0,
+        rtgQueueGraceSeconds,
+        rtgQueueOwnershipEnable ? 1 : 0,
+        rtgQueueOwnershipProtectInBattleground ? 1 : 0);
+
     rtgLowBracketCapsEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.LowBracketCaps.Enable", false);
     rtgLowBracketBotCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.Cap", 40);
     rtgLowBotsPerNewPlayer = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.PerNewPlayer", 20);

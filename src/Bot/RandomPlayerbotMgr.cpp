@@ -58,7 +58,6 @@
 #include "RtgQueueMetadata.h"
 #include "RtgBgQueuePlanner.h"
 #include "RtgQueueLedger.h"
-#include "RtgQueueLifecycle.h"
 #include "ServerFacade.h"
 #include "SharedDefines.h"
 #include "TravelMgr.h"
@@ -76,6 +75,75 @@ namespace
     static bool RTG_QueueOwnershipDebugEnabled()
     {
         return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgQueueOwnershipEnable && sPlayerbotAIConfig.rtgQueueOwnershipDebug;
+    }
+
+    static RTG::RtgHelperPurpose RTG_DetermineBgHelperPurpose(BattlegroundInfo const& bgInfo, TeamId teamId)
+    {
+        uint32 queueReal = (teamId == TEAM_ALLIANCE) ? bgInfo.bgQueueAlliancePlayerCount : bgInfo.bgQueueHordePlayerCount;
+        uint32 queueBots = (teamId == TEAM_ALLIANCE) ? bgInfo.bgQueueAllianceBotCount : bgInfo.bgQueueHordeBotCount;
+        uint32 activeReal = (teamId == TEAM_ALLIANCE) ? bgInfo.bgActiveAlliancePlayerCount : bgInfo.bgActiveHordePlayerCount;
+        uint32 activeBots = (teamId == TEAM_ALLIANCE) ? bgInfo.bgActiveAllianceBotCount : bgInfo.bgActiveHordeBotCount;
+        if (activeReal + activeBots > queueReal + queueBots)
+            return RTG::RtgHelperPurpose::LiveBalance;
+        return RTG::RtgHelperPurpose::StarterFill;
+    }
+
+    static void RTG_SyncBgHelperLedgerState(Player* bot, uint32 desiredQueueType, BattlegroundBracketId bracketId,
+                                            BattlegroundInfo const* bgInfo = nullptr)
+    {
+        if (!sPlayerbotAIConfig.rtgEventDriven || !sPlayerbotAIConfig.rtgQueueOwnershipEnable || !bot)
+            return;
+
+        uint32 botId = bot->GetGUID().GetCounter();
+        RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
+        RTG::RtgHelperLedgerEntry* entry = ledger.Get(botId);
+        if (!entry)
+            return;
+
+        entry->target.queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+        entry->target.bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
+        entry->target.bracketId = bracketId;
+        entry->target.preferredTeam = bot->GetTeamId();
+        entry->pendingQueueJoin = false;
+        entry->pendingBgJoin = false;
+
+        uint32 nowMs = GameTime::GetGameTimeMS();
+        if (bot->IsInvitedForBattlegroundInstance())
+        {
+            ledger.MarkState(botId, RTG::RtgHelperState::Invited, "invited for battleground");
+            entry->pendingBgJoin = true;
+            if (sPlayerbotAIConfig.rtgQueueOwnershipProtectInBattleground)
+                ledger.Protect(botId, nowMs + sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds * IN_MILLISECONDS, "invite protection");
+            return;
+        }
+
+        if (bot->InBattleground() || bot->InArena() || (bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena()))
+        {
+            uint32 instanceId = bot->GetInstanceId();
+            ledger.AssignBattlegroundOwnership(botId, instanceId, "entered battleground");
+            ledger.MarkState(botId, RTG::RtgHelperState::InBattleground, "entered battleground");
+            if (sPlayerbotAIConfig.rtgQueueOwnershipProtectInBattleground)
+                ledger.Protect(botId, nowMs + sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds * IN_MILLISECONDS, "battleground protection");
+            return;
+        }
+
+        if (bot->InBattlegroundQueue() || bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)))
+        {
+            ledger.MarkState(botId, RTG::RtgHelperState::Queued, "queued for battleground");
+            entry->ownerType = RTG::RtgHelperOwnerType::QueueDemand;
+            entry->pendingQueueJoin = true;
+            if (sPlayerbotAIConfig.rtgQueueOwnershipProtectInBattleground)
+                ledger.Protect(botId, nowMs + sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds * IN_MILLISECONDS, "queue protection");
+            return;
+        }
+
+        if (bgInfo)
+            entry->purpose = RTG_DetermineBgHelperPurpose(*bgInfo, bot->GetTeamId());
+
+        if (entry->state == RTG::RtgHelperState::LoggingIn || entry->state == RTG::RtgHelperState::Reserved || entry->state == RTG::RtgHelperState::Releasing)
+            ledger.MarkState(botId, RTG::RtgHelperState::WorldIdle, "idle queue helper");
+        else
+            ledger.Touch(botId);
     }
 
     static bool RTG_IsQueueSupervisorEvent(std::string const& event)
@@ -699,78 +767,6 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     return true;
 }
 
-
-void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
-{
-    if (!sPlayerbotAIConfig.rtgEventDriven || !sPlayerbotAIConfig.rtgQueueOwnershipEnable)
-        return;
-
-    RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
-    uint32 maxTransitionMs = std::max<uint32>(5u, sPlayerbotAIConfig.rtgQueueOwnershipMaxTransitionSeconds) * IN_MILLISECONDS;
-    uint32 retireRetryTtl = sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30;
-
-    for (ObjectGuid::LowType botId : ledger.GetTrackedBotIds())
-    {
-        Player* bot = GetPlayerBot(botId);
-        RTG::RtgHelperLedgerEntry* entry = ledger.Get(botId);
-        if (!entry)
-            continue;
-
-        if (!bot || !bot->IsInWorld())
-        {
-            if (entry->state == RTG::RtgHelperState::Retired)
-                ledger.Remove(botId);
-            continue;
-        }
-
-        if (entry->target.queueTypeId != BATTLEGROUND_QUEUE_NONE)
-            RTG::SyncBgHelperState(bot, uint32(entry->target.queueTypeId), entry->target.bracketId, nullptr);
-
-        entry = ledger.Get(botId);
-        if (!entry)
-            continue;
-
-        bool transitionState = entry->state == RTG::RtgHelperState::LoggingIn ||
-                               entry->state == RTG::RtgHelperState::Queued ||
-                               entry->state == RTG::RtgHelperState::Invited ||
-                               entry->state == RTG::RtgHelperState::Releasing;
-
-        uint32 nowMs = RTG::RTG_GetNowMs32();
-        if (transitionState && entry->updatedAtMs && nowMs > entry->updatedAtMs && (nowMs - entry->updatedAtMs) >= maxTransitionMs)
-        {
-            if (!bot->InBattleground() && !bot->InArena() && !bot->InBattlegroundQueue() && !bot->IsInvitedForBattlegroundInstance())
-            {
-                if (entry->pendingRetire)
-                    ledger.MarkState(botId, RTG::RtgHelperState::Releasing, "transition watchdog preserving retire state");
-                else
-                    ledger.MarkState(botId, RTG::RtgHelperState::WorldIdle, "transition watchdog reset");
-
-                if (!entry->pendingRetire)
-                    ledger.ClearOwnership(botId, "transition watchdog clear ownership");
-
-                if (RTG_QueueOwnershipDebugEnabled())
-                    LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} transition watchdog reset state={} queue={} instance={}",
-                             botId, uint32(entry->state), uint32(entry->target.queueTypeId), entry->ownerInstanceId);
-            }
-        }
-
-        if (!entry->pendingRetire)
-            continue;
-
-        if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-            continue;
-
-        RTG::RtgLifecycleResult lifecycle = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
-        if (lifecycle.decision != RTG::RtgLifecycleDecision::Allow)
-        {
-            SetEventValue(botId, "rtg_bg_retire_when_safe", 1, retireRetryTtl, GetEventData(botId, "add"));
-            continue;
-        }
-
-        RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_bg_retire_audit");
-    }
-}
-
 void RandomPlayerbotMgr::SaveBotsPerPlayerToDB(float ratio) const
 {
     PlayerbotsDatabase.Execute(
@@ -1065,8 +1061,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
     totalPmo = sPerfMonitor.start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
 
-    if (!sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
+    if (!sPlayerbotAIConfig.enabled)
         return;
+
+    if (!sPlayerbotAIConfig.randomBotAutologin && !sPlayerbotAIConfig.rtgEventDriven)
+        return;
+
+    if (sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug)
+    {
+        static uint32 rtgTickDebugCounter = 0;
+        if (++rtgTickDebugCounter % 50 == 0)
+            LOG_INFO("server.loading", "RTG TICK: supervisor running");
+    }
 
     // Enforce community level cap as a hard XP ceiling for randombots.
     // This prevents bots from leveling past the current community cap even if they gain XP in the world.
@@ -1600,7 +1606,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {
-                RTG::SyncBgHelperState(bot, desiredQueueType, BG_BRACKET_ID_FIRST, nullptr);
+                RTG_SyncBgHelperLedgerState(bot, desiredQueueType, BG_BRACKET_ID_FIRST, nullptr);
                 RTG::RtgQueueLedger::Instance().ClearRetireRequest(botId);
             }
 
@@ -2333,6 +2339,20 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 ++rtgManagedOnline;
         }
 
+        if (sPlayerbotAIConfig.rtgEventDebug)
+        {
+            LOG_INFO("server.loading",
+                "RTG ACQUIRE PLAN: need={} online_managed={} currentBots={} maxAllowed={} lfgDemand={} bgDemand={} lfgReady={} bgReady={}",
+                rtgManagedNeed,
+                rtgManagedOnline,
+                static_cast<uint32>(currentBots.size()),
+                maxAllowedBotCount,
+                rtgLfgDemand ? 1 : 0,
+                rtgBgDemand ? 1 : 0,
+                rtgLfgReady ? 1 : 0,
+                rtgBgReady ? 1 : 0);
+        }
+
         if (rtgManagedNeed > rtgManagedOnline)
             botsToAddThisInterval = rtgManagedNeed - rtgManagedOnline;
 
@@ -2459,11 +2479,16 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             else if (RTG::HasPrefix(addData, "rtg_bg:"))
                 SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 45, addData);
-
-            if (!addData.empty())
-                RTG::RegisterPendingHelperLogin(charInfo.guid, charInfo.accountId, addData);
-
             currentBots.push_back(charInfo.guid);
+
+            if (sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug && RTG::HasPrefix(addData, "rtg_"))
+            {
+                LOG_INFO("server.loading",
+                    "RTG ACQUIRE: guid={} account={} addData={}",
+                    charInfo.guid,
+                    charInfo.accountId,
+                    addData);
+            }
 
             return true;
         };
@@ -2670,15 +2695,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             uint32 rtgNow = static_cast<uint32>(time(nullptr));
-            if (RTG_QueueDebugEnabled())
-            {
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} currentBots={} targetBots={}",
-                         static_cast<uint32>(allCharacters.size()),
-                         static_cast<uint32>(lfgBuckets.size()),
-                         static_cast<uint32>(bgBuckets.size()),
-                         static_cast<uint32>(currentBots.size()),
-                         maxAllowedBotCount);
-            }
             for (auto& kv : lfgBuckets)
             {
                 RtgLfgBucket& bucket = kv.second;
@@ -2821,9 +2837,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
-            uint32 rtgLfgLogged = 0;
-            uint32 rtgBgLogged = 0;
-
             auto tryFillLfgRole = [&](RtgLfgBucket& bucket, uint32 desiredRole, uint32& capacity) -> bool
             {
                 if (!capacity)
@@ -2843,9 +2856,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
+                    LOG_INFO("playerbots", "[RTG][LFG] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
 
-                    ++rtgLfgLogged;
                     --capacity;
                     --remainingCapacity;
                     if (desiredRole == lfg::PLAYER_ROLE_TANK)
@@ -2907,8 +2919,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
-                    ++rtgBgLogged;
+                    LOG_INFO("playerbots", "[RTG][BG] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
                     --capacity;
                     --remainingCapacity;
                     ++bucket.assignedExtra;
@@ -2929,19 +2940,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
-            if (RTG_QueueDebugEnabled())
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} remainingCapacity={} totalLfgNeed={} totalBgNeed={}", rtgLfgLogged, rtgBgLogged, remainingCapacity, totalLfgNeed, totalBgNeed);
-
             if (remainingCapacity)
             {
                 if (missingBotsTimer == 0)
                     missingBotsTimer = time(nullptr);
-
-                if (RTG_QueueDebugEnabled())
-                {
-                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
-                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()));
-                }
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
                 {
@@ -3096,8 +3098,6 @@ std::vector<uint32> parseBrackets(const std::string& str)
 
 void RandomPlayerbotMgr::CheckBgQueue()
 {
-    RTG_RunQueueOwnershipAudit();
-
     if (!BgCheckTimer)
     {
         BgCheckTimer = time(nullptr);
@@ -3169,7 +3169,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
         if (isBot && sPlayerbotAIConfig.rtgQueueOwnershipEnable)
         {
             if (Player* bot = ObjectAccessor::FindConnectedPlayer(guid))
-                RTG::SyncBgHelperState(bot, uint32(queueTypeId), bracketId, &bgInfo);
+                RTG_SyncBgHelperLedgerState(bot, uint32(queueTypeId), bracketId, &bgInfo);
         }
 
         if (isBot)
@@ -5480,10 +5480,21 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 uint32 maxLevel = desiredLevel;
                 if (RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType), desiredLevel ? desiredLevel : bot->GetLevel(), bracketId, minLevel, maxLevel))
                 {
-                    RTG::RecordHelperReservation(bot, BattlegroundQueueTypeId(desiredQueueType), bracketId, TeamId(bot->GetTeamId()),
-                                                 "event-driven battleground helper login", RTG::RtgHelperPurpose::StarterFill);
+                    RTG::RtgHelperLedgerEntry entry;
+                    entry.botGuid = bot->GetGUID().GetCounter();
+                    entry.accountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
+                    entry.isEventDrivenHelper = true;
+                    entry.state = RTG::RtgHelperState::LoggingIn;
+                    entry.ownerType = RTG::RtgHelperOwnerType::QueueDemand;
+                    entry.purpose = RTG::RtgHelperPurpose::StarterFill;
+                    entry.target.bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
+                    entry.target.queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+                    entry.target.bracketId = bracketId;
+                    entry.target.preferredTeam = TeamId(bot->GetTeamId());
+                    entry.creationReason = "event-driven battleground helper login";
+                    RTG::RtgQueueLedger::Instance().Upsert(entry);
                     if (RTG_QueueOwnershipDebugEnabled())
-                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} reserved queue={} bracket={} team={}", bot->GetGUID().GetCounter(), desiredQueueType, uint32(bracketId), bot->GetTeamId());
+                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} reserved queue={} bracket={} team={}", entry.botGuid, desiredQueueType, uint32(bracketId), bot->GetTeamId());
                 }
             }
         }
