@@ -1053,7 +1053,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         rtgBgDemand = (bgStart != 0) && (bgNeed != 0);
         rtgLfgReady = rtgLfgDemand && now >= static_cast<time_t>(lfgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
         rtgBgReady = rtgBgDemand && now >= static_cast<time_t>(bgStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
-        if (RTG_LogEnabled())
+        if (sPlayerbotAIConfig.rtgEventDebug || sPlayerbotAIConfig.rtgQueueOwnershipDebug)
         {
             LOG_INFO("server.loading",
                 "RTG DEMAND: lfgDemand={} bgDemand={} lfgReady={} bgReady={} target={}",
@@ -2345,7 +2345,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
-            LOG_INFO("server.loading", "RTG ACQUIRE: guid={} account={} addData={}", uint32(charInfo.guid.GetCounter()), charInfo.account, addData);
+            LOG_INFO("server.loading", "RTG ACQUIRE: guid={} account={} addData={}", charInfo.guid, charInfo.accountId, addData);
             if (RTG::HasPrefix(addData, "rtg_lfg:"))
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             else if (RTG::HasPrefix(addData, "rtg_bg:"))
