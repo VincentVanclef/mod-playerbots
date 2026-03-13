@@ -1104,7 +1104,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
     totalPmo = sPerfMonitor.start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
 
-    if (!sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
+    if (!sPlayerbotAIConfig.enabled)
+        return;
+
+    bool rtgStandaloneControl = sPlayerbotAIConfig.rtgEventDriven && !sPlayerbotAIConfig.randomBotAutologin;
+    if (!sPlayerbotAIConfig.randomBotAutologin && !rtgStandaloneControl)
         return;
 
     // Enforce community level cap as a hard XP ceiling for randombots.
@@ -1203,6 +1207,20 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][CONTROL] standalone queue-helper control active (MaxRandomBots={}, AccountCount={})",
                 sPlayerbotAIConfig.maxRandomBots, sPlayerbotAIConfig.randomBotAccountCount));
             rtgStandaloneLogged = true;
+        }
+
+        static uint32 rtgLastDemandLfg = uint32(-1);
+        static uint32 rtgLastDemandBg = uint32(-1);
+        static uint32 rtgLastTarget = uint32(-1);
+        if (rtgLastDemandLfg != lfgNeed || rtgLastDemandBg != bgNeed || rtgLastTarget != maxAllowedBotCount)
+        {
+            RTG_RuntimeBreadcrumb(fmt::format(
+                "[RTG][DEMAND] lfgNeed={} bgNeed={} lfgReady={} bgReady={} targetBots={} keepWorld={} autologin={}",
+                lfgNeed, bgNeed, rtgLfgReady ? 1 : 0, rtgBgReady ? 1 : 0, maxAllowedBotCount,
+                sPlayerbotAIConfig.rtgKeepWorldBots ? 1 : 0, sPlayerbotAIConfig.randomBotAutologin ? 1 : 0));
+            rtgLastDemandLfg = lfgNeed;
+            rtgLastDemandBg = bgNeed;
+            rtgLastTarget = maxAllowedBotCount;
         }
     }
 

@@ -1,74 +1,50 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: RTG Queue Assistance 2.3.0
+Module Version: RTG Queue Assistance 2.3.2
 RTG Brain Compatibility Version: 2.3.0
-Commit Title: Immediate BG queue dispatch and demand-aware helper release
-Commit Description: Adds immediate battleground queue dispatch on RTG helper login, post-login queue grace protection, periodic queue retry, and stronger demand-aware release behavior when battleground demand disappears.
+Commit Title: Restore standalone RTG update tick and visible demand breadcrumbs
+Commit Description: Fixes a regression where `RandomPlayerbotMgr::UpdateAIInternal` still returned early whenever `AiPlayerbot.RandomBotAutologin = 0`, which prevented standalone RTG queue assistance from running acquisition and queue control at all. Also adds state-change demand breadcrumbs so `worldserver` has visible RTG runtime confirmation when helper demand and target bot count change.
 
 --------------------------------
 
 ## Module Purpose
 
-This module revision strengthens RTG battleground queue assistance so helper bots behave like explicit queue workers rather than passive randombots. The revision focuses on the post-login helper lifecycle: login, immediate queue attempt, queue retry protection, and orderly retirement when battleground demand disappears.
+This revision restores the intended standalone RTG battleground helper control path. It ensures the live manager tick continues to run when RTG event-driven assistance is enabled even if generic randombot autologin is disabled.
 
 --------------------------------
 
 ## Architecture Overview
 
-- `RandomPlayerbotMgr` remains the live runtime manager for helper acquisition, login, queue dispatch, and retirement.
-- RTG helper intent is still encoded through `add` event metadata (`rtg_bg:*` and `rtg_lfg:*`).
-- `RtgQueueLifecycle` remains the in-memory ownership and retirement gate layer.
-- Helper state is protected through queue-grace event markers and ledger protection windows.
-- Immediate queue dispatch is performed directly from the live manager once a BG helper reaches login success.
+- `RandomPlayerbotMgr::UpdateAIInternal` remains the live control loop for RTG helper acquisition and lifecycle.
+- RTG event-driven demand still derives target helper counts from LFG and battleground need events.
+- Runtime breadcrumbs are emitted from the same manager loop so control-path activation can be confirmed directly from `worldserver` output.
 
 --------------------------------
 
 ## Runtime Control Path
 
 real player queues battleground
-→ RTG demand planner raises BG demand events
-→ `RandomPlayerbotMgr` acquires offline helper candidates
-→ helper login begins with RTG queue metadata attached
-→ `OnPlayerLogin` marks helper as RTG-owned BG helper
-→ immediate BG queue dispatch is attempted
-→ queue retry/grace protection keeps helper alive while queueing
-→ helper becomes queued / invited / in battleground
-→ helper retires only when demand is gone and lifecycle gate allows release
+→ RTG planner raises demand events
+→ `UpdateAIInternal` stays alive even with `RandomBotAutologin = 0`
+→ RTG computes target helper population
+→ helper acquisition/login logic executes
+→ queue dispatch / retirement logic follows from the live manager path
 
 --------------------------------
 
 ## Data Structures
 
-- `RtgHelperLedgerEntry`
-- `RtgHelperState`
-- `RtgHelperOwnerType`
-- `RtgHelperPurpose`
-- RTG event markers used in this revision:
-  - `rtg_bg_pending`
-  - `rtg_bg_queue_grace`
-  - `rtg_bg_queue_retry`
-  - `rtg_bg_retire_when_safe`
-  - `rtg_lfg_pending`
-  - `rtg_dungeon_active`
+- Existing RTG queue ledger and metadata remain unchanged in this revision.
+- Existing event-cache keys remain the source of RTG demand and helper state.
 
 --------------------------------
 
 ## Config Interface
 
-This revision relies on existing RTG/playerbot settings:
-
-- `AiPlayerbot.RTG.EventDriven.Enable`
-- `AiPlayerbot.RTG.SmartQueue.Enable`
-- `AiPlayerbot.RTG.QueueGraceSeconds`
-- `AiPlayerbot.RTG.QueueOwnership.Enable`
-- `AiPlayerbot.RTG.QueueOwnership.Debug`
-- `AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds`
-- `AiPlayerbot.MaxRandomBots`
-- `AiPlayerbot.RandomBotAccountCount`
-- `AiPlayerbot.RandomBotAutologin`
-
-`AiPlayerbot.RTG.QueueGraceSeconds` now also acts as the post-login battleground queue-dispatch grace window for RTG helpers.
+- `AiPlayerbot.RTG.EventDriven.Enable` must be enabled for standalone RTG control.
+- `AiPlayerbot.RandomBotAutologin = 0` is now compatible with RTG standalone helper control again.
+- `AiPlayerbot.MaxRandomBots` must still be greater than 0 for helpers to be allowed online.
 
 --------------------------------
 
@@ -81,77 +57,59 @@ Module currently uses no DB persistence.
 ## Integration Points
 
 - `RandomPlayerbotMgr`
-- `PlayerbotAI`
-- battleground queue / battleground manager APIs
-- `RtgQueueLifecycle`
-- `RtgQueueLedger`
-- playerbot BG join action (`bg join`)
+- RTG battleground demand planner/event cache
+- existing RTG queue ownership/lifecycle support
 
 --------------------------------
 
 ## Lifecycle Model
 
-- Helper is acquired offline and marked with RTG BG queue metadata.
-- On login, helper is promoted into RTG-owned live helper state.
-- Helper receives a queue grace window and immediate queue dispatch attempt.
-- If still idle, helper retries queue dispatch on a short timer.
-- Generic retirement is blocked while queue grace, queue state, invite state, battleground state, or active RTG demand still exists.
-- Once demand vanishes and the helper is no longer queue-/BG-owned, retirement is allowed.
+This revision does not change helper state definitions. It restores access to the live runtime tick so those lifecycle stages can actually execute under standalone RTG mode.
 
 --------------------------------
 
 ## Known Constraints
 
-- Requires mod-playerbots and RTG event-driven queue assistance to be enabled.
-- Still depends on `AiPlayerbot.MaxRandomBots > 0` because helper existence uses the live playerbot online population path.
-- Visibility of breadcrumbs depends on server log configuration, but this revision emits runtime breadcrumbs through visible log calls intended for `worldserver` output.
+- Standalone RTG control still depends on the global random-bot online cap being above zero.
+- Runtime breadcrumbs depend on the server showing warning/info messages for the `playerbots` log category.
 
 --------------------------------
 
 ## Future Evolution Hooks
 
-- helper burst-queue mode for deterministic BG startup
-- per-helper queue attempt counters and queue failure diagnostics
-- stronger differentiation between StarterFill and LiveBalance retirement timing
-- scoreboard / world-activity integration for future demand weighting
+- Demand-transition breadcrumbs now make it easier to validate future queue-dispatch and retire-gate changes.
+- The restored standalone control path is the foundation for later single-controller RTG queue orchestration.
 
 --------------------------------
 
 ## Files Modified In This Revision
 
-- `src/Bot/RandomPlayerbotMgr.h`
 - `src/Bot/RandomPlayerbotMgr.cpp`
-- `src/Bot/RtgQueueLifecycle.cpp`
-- `conf/playerbots.conf.dist`
 - `brain_addendum/mod-playerbots_brain_addendum.md`
 
 --------------------------------
 
 ## Behavioral Changes In This Revision
 
-- Battleground helpers now attempt to queue immediately on login instead of waiting only for passive AI cadence.
-- Battleground helpers receive a post-login queue grace window so they are not retired before a real queue attempt occurs.
-- BG helper cleanup now reacts more directly to vanished queue demand and allows retirement once demand, queue state, and ownership protection are all gone.
-- Runtime breadcrumbs are emitted for control activation, helper acquisition, login, queue dispatch, login failure, logout requests, and retirement decisions.
+- Standalone RTG queue assistance no longer stops at the top of `UpdateAIInternal` when generic randombot autologin is disabled.
+- `worldserver` should now receive a visible `[RTG][CONTROL]` breadcrumb once and `[RTG][DEMAND]` breadcrumbs whenever RTG demand/target state changes.
 
 --------------------------------
 
 ## Test Plan
 
-1. Set `AiPlayerbot.RandomBotAutologin = 0`.
-2. Set `AiPlayerbot.MaxRandomBots` to a positive value, such as `20`.
-3. Keep `AiPlayerbot.RandomBotAccountCount` high enough to supply helpers.
-4. Enable RTG event-driven queue assistance and queue ownership.
+1. Set `AiPlayerbot.Enabled = 1`.
+2. Set `AiPlayerbot.RandomBotAutologin = 0`.
+3. Set `AiPlayerbot.MaxRandomBots` to a positive value such as `20`.
+4. Enable `AiPlayerbot.RTG.EventDriven.Enable = 1` and RTG debug options.
 5. Restart `worldserver`.
-6. Queue one real level-19 player into WSG.
-7. Confirm helpers log in and immediately attempt BG queue.
-8. Confirm helpers stay online during queue grace instead of idling out instantly.
-9. Leave the battleground queue on the real player.
-10. Confirm helper bots respond to vanished demand and retire once no queue/BG ownership remains.
-11. Watch for runtime breadcrumbs in `worldserver` during control, acquire, login, queue dispatch, and retirement.
+6. Queue one real level 19 player into WSG.
+7. Confirm `[RTG][CONTROL]` appears once and `[RTG][DEMAND]` appears when queue demand changes.
+8. Confirm helper acquisition/login resumes.
+9. Leave the queue and verify a new `[RTG][DEMAND]` line reflects the reduced or cleared BG demand.
 
 --------------------------------
 
 ## Notes For RTG Brain Ingestion
 
-This revision closes the behavioral gap between “helper exists online” and “helper behaves like a queue worker.” The important semantic change is that RTG BG helpers are now treated as directed queue actors with immediate queue dispatch and a temporary grace shield, rather than passive randombots waiting for normal AI cadence to decide to join queue.
+This revision corrects a control-path regression rather than changing queue semantics. The key semantic rule is: standalone RTG helper mode must bypass the generic autologin gate without bypassing the rest of the live manager loop.
