@@ -102,10 +102,16 @@ public:
 
     // RTG: Event-driven bots (keep bots offline unless needed for BG/LFG)
     bool rtgEventDriven = false;
+    bool rtgSmartQueue = true;
     uint32 rtgQueueGraceSeconds = 30;
     uint32 rtgEventMaxBots = 60;
     bool rtgKeepWorldBots = false; // if true, preserves normal world population target
     bool rtgEventDebug = false; // verbose queue supervisor logging
+    bool rtgQueueOwnershipEnable = true;
+    bool rtgQueueOwnershipProtectInBattleground = true;
+    uint32 rtgQueueOwnershipRetireRetrySeconds = 15;
+    uint32 rtgQueueOwnershipMaxTransitionSeconds = 60;
+    bool rtgQueueOwnershipDebug = false;
 
     // RTG: Optional low-bracket recycle caps (only used if your recycle logic is enabled elsewhere)
     bool rtgLowBracketCapsEnable = false;

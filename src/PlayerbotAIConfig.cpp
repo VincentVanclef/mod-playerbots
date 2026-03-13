@@ -187,10 +187,16 @@ bool PlayerbotAIConfig::Initialize()
 
     // RTG: queue-driven bot population
     rtgEventDriven = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Enable", false);
+    rtgSmartQueue = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.SmartQueue.Enable", true);
     rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
     rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 60);
     rtgKeepWorldBots = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.KeepWorldBots", false);
     rtgEventDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Debug", false);
+    rtgQueueOwnershipEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Enable", true);
+    rtgQueueOwnershipProtectInBattleground = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground", true);
+    rtgQueueOwnershipRetireRetrySeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds", 15);
+    rtgQueueOwnershipMaxTransitionSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds", 60);
+    rtgQueueOwnershipDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Debug", false);
 
     rtgLowBracketCapsEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.LowBracketCaps.Enable", false);
     rtgLowBracketBotCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.Cap", 40);

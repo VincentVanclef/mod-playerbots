@@ -2217,15 +2217,161 @@ AiPlayerbot.EnableICCBuffs = 1
 ####################################################################################################
 # RTG: EVENT-DRIVEN BOT POPULATION (optional)
 #
-# Goal: Keep randombots offline unless needed to fill battleground/arena/LFG queues.
-# - When enabled, the normal "world population" target is forced to 0 unless KeepWorldBots=true.
-# - When real players start queueing, bots will begin joining ONLY AFTER QueueGraceSeconds expires.
+#    AiPlayerbot.RTG.EventDriven.Enable
+#        Description: Enables the RTG event-driven queue assistance system.
+#                     When enabled, the battleground and dungeon assistance
+#                     planner reacts to meaningful queue and lifecycle state
+#                     changes instead of relying only on broader periodic
+#                     population checks.
+#
+#                     This controls WHEN the RTG queue-assistance system is
+#                     allowed to react.
+#
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#        Example:     AiPlayerbot.RTG.EventDriven.Enable = 1
+#                     Queue assistance reacts immediately to RTG-managed queue
+#                     activity.
+#
+#    AiPlayerbot.RTG.SmartQueue.Enable
+#        Description: Enables RTG smart queue prioritization for battleground
+#                     helper assignment.
+#
+#                     When enabled, the queue planner evaluates split queue
+#                     state and active battleground state to better separate
+#                     helper demand intended for starter fill from helper
+#                     demand intended for live team balancing.
+#
+#                     This controls HOW battleground helper demand is
+#                     prioritized after the event-driven system decides a
+#                     reevaluation is needed.
+#
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+#        Example:     AiPlayerbot.RTG.SmartQueue.Enable = 1
+#                     Battleground helper demand uses smarter RTG prioritization.
+#
+#    AiPlayerbot.RTG.QueueGraceSeconds
+#        Description: Defines the grace period, in seconds, used by RTG queue
+#                     assistance before certain helper retirement or transition
+#                     decisions are allowed to proceed.
+#
+#                     This helps reduce helper churn during short queue
+#                     fluctuations and brief battleground state transitions.
+#
+#        Default:     30
+#
+#        Example:     AiPlayerbot.RTG.QueueGraceSeconds = 30
+#                     Queue-assistance transitions use a 30 second grace window.
+#
+#    AiPlayerbot.RTG.EventDriven.MaxBots
+#        Description: Maximum number of playerbots that may be managed by the
+#                     RTG event-driven queue-assistance system at one time.
+#
+#                     This limit applies to helpers managed by the RTG queue
+#                     subsystem and helps prevent overly aggressive queue filling.
+#
+#        Default:     60
+#
+#        Example:     AiPlayerbot.RTG.EventDriven.MaxBots = 60
+#                     Up to 60 RTG event-driven helpers may be active.
+#
+#    AiPlayerbot.RTG.EventDriven.KeepWorldBots
+#        Description: Controls whether RTG queue helpers may remain online as
+#                     general world bots after they are no longer needed for
+#                     RTG queue-assistance purposes.
+#
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#        Example:     AiPlayerbot.RTG.EventDriven.KeepWorldBots = 0
+#                     Queue helpers are retired instead of remaining as world bots.
+#
+#    AiPlayerbot.RTG.EventDriven.Debug
+#        Description: Enables verbose debug logging for the RTG event-driven
+#                     queue-assistance system.
+#
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#        Example:     AiPlayerbot.RTG.EventDriven.Debug = 1
+#                     Detailed event-driven queue debug logging is enabled.
+#
+#    AiPlayerbot.RTG.QueueOwnership.Enable
+#        Description: Enables the RTG in-memory helper ownership ledger.
+#
+#                     When enabled, battleground helper bots created by RTG
+#                     queue assistance are tracked as managed helper assets with
+#                     explicit ownership, purpose, lifecycle state, and safe
+#                     retirement review.
+#
+#                     This is the foundation layer for lifecycle-safe helper
+#                     retirement and is intentionally implemented in memory only
+#                     during this phase.
+#
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+#        Example:     AiPlayerbot.RTG.QueueOwnership.Enable = 1
+#                     RTG battleground helpers are tracked in the ownership ledger.
+#
+#    AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground
+#        Description: Prevents RTG-managed battleground helpers from being
+#                     retired while they are still owned by live battleground
+#                     lifecycle state, invites, or queue-transition protection.
+#
+#        Default:     1 - Enabled
+#                     0 - Disabled
+#
+#        Example:     AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground = 1
+#                     Helpers stay protected while battleground lifecycle still owns them.
+#
+#    AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds
+#        Description: Delay, in seconds, before the ownership layer retries
+#                     retirement for a helper that was denied or delayed due to
+#                     active battleground lifecycle protection.
+#
+#        Default:     15
+#
+#        Example:     AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds = 15
+#                     Retirement is retried after 15 seconds when still unsafe.
+#
+#    AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds
+#        Description: Maximum transition watchdog window, in seconds, reserved
+#                     for future ownership-ledger recovery of helpers that stay
+#                     too long in transitional states.
+#
+#                     In this foundation phase the setting is documented and
+#                     loaded but only lightly reserved for follow-up logic.
+#
+#        Default:     60
+#
+#        Example:     AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds = 60
+#                     Transitional ownership watchdog window is 60 seconds.
+#
+#    AiPlayerbot.RTG.QueueOwnership.Debug
+#        Description: Enables focused debug logging for the RTG ownership ledger
+#                     and lifecycle-safe retirement decisions.
+#
+#        Default:     0 - Disabled
+#                     1 - Enabled
+#
+#        Example:     AiPlayerbot.RTG.QueueOwnership.Debug = 1
+#                     Ownership-ledger debug logging is enabled.
 #
 AiPlayerbot.RTG.EventDriven.Enable = 0
+AiPlayerbot.RTG.SmartQueue.Enable = 1
 AiPlayerbot.RTG.QueueGraceSeconds = 30
 AiPlayerbot.RTG.EventDriven.MaxBots = 60
 AiPlayerbot.RTG.EventDriven.KeepWorldBots = 0
 AiPlayerbot.RTG.EventDriven.Debug = 0
+AiPlayerbot.RTG.QueueOwnership.Enable = 1
+AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground = 1
+AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds = 15
+AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds = 60
+AiPlayerbot.RTG.QueueOwnership.Debug = 0
 
 # RTG: Optional low-bracket recycle caps (for your "start new bots when new players start" logic)
 AiPlayerbot.RTG.LowBracketCaps.Enable = 0

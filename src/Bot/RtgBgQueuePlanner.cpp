@@ -47,8 +47,21 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             if (!bgInfo.minLevel)
                 continue;
 
-            bool hasRealDemand = (bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0;
-            bool queueOrMatchActive = bgInfo.activeBgQueue || hasRealDemand;
+            uint32 queueRealAlliance = bgInfo.bgQueueAlliancePlayerCount;
+            uint32 queueRealHorde = bgInfo.bgQueueHordePlayerCount;
+            uint32 activeRealAlliance = bgInfo.bgActiveAlliancePlayerCount;
+            uint32 activeRealHorde = bgInfo.bgActiveHordePlayerCount;
+            uint32 queueCurrentAlliance = bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueAllianceBotCount;
+            uint32 queueCurrentHorde = bgInfo.bgQueueHordePlayerCount + bgInfo.bgQueueHordeBotCount;
+            uint32 activeCurrentAlliance = bgInfo.bgActiveAlliancePlayerCount + bgInfo.bgActiveAllianceBotCount;
+            uint32 activeCurrentHorde = bgInfo.bgActiveHordePlayerCount + bgInfo.bgActiveHordeBotCount;
+
+            bool hasRealDemand = sPlayerbotAIConfig.rtgSmartQueue ?
+                ((queueRealAlliance + queueRealHorde + activeRealAlliance + activeRealHorde) > 0) :
+                ((bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0);
+            bool queueOrMatchActive = sPlayerbotAIConfig.rtgSmartQueue ?
+                (bgInfo.activeBgQueue || activeCurrentAlliance || activeCurrentHorde || queueCurrentAlliance || queueCurrentHorde) :
+                (bgInfo.activeBgQueue || hasRealDemand);
             mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
             if (!queueOrMatchActive)
                 continue;
@@ -56,8 +69,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             if (hasRealDemand)
                 anyRealBgDemand = true;
 
-            uint32 allianceCurrent = bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount;
-            uint32 hordeCurrent = bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount;
+            uint32 allianceCurrent = sPlayerbotAIConfig.rtgSmartQueue ? std::max(queueCurrentAlliance, activeCurrentAlliance) : (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount);
+            uint32 hordeCurrent = sPlayerbotAIConfig.rtgSmartQueue ? std::max(queueCurrentHorde, activeCurrentHorde) : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
 
             uint32 allianceTarget = teamSize;
             uint32 hordeTarget = teamSize;
