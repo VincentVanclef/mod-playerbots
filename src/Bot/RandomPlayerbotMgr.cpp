@@ -5685,7 +5685,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     currentBots.remove(bot);
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
-        RTG::RtgQueueLedger::Instance().Erase(bot);
+        RTG::RtgQueueLedger::Instance().Remove(bot);
     RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN][FAIL] helper={} add='{}'", bot, addData));
 }
 
