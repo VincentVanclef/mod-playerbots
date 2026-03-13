@@ -1,56 +1,56 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: 2.2.1
+Module Version: 2.2.2
 RTG Brain Compatibility Version: 2.3.0
-Commit Title: RTG queue helpers run standalone without generic autologin
-Commit Description: Wires the live RandomPlayerbotMgr control tick so RTG event-driven queue assistance remains active even when generic RandomBotAutologin is disabled, and hardens failed-helper cleanup so stale pending ownership state is removed immediately.
+Commit Title: Protect RTG queue helpers through live logout gates
+Commit Description: Wires RTG ownership into live logout and retirement decisions, promotes successful helper logins into protected owned-online state, and adds visible worldserver breadcrumbs for helper acquisition, login, protection, retirement, and login-failure cleanup.
 
 --------------------------------
 
 ## Module Purpose
 
-This module supplies autonomous and RTG-managed playerbots inside the AzerothCore realm. In this revision, the RTG battleground and LFG queue-assistance path is treated as a live runtime controller rather than a passive overlay. Its purpose is to detect real demand, acquire offline helper bots, bring them online, attach RTG ownership metadata, queue them into the proper content, keep them protected while battleground lifecycle still owns them, and retire them safely afterward.
+This module supplies autonomous and RTG-managed playerbots inside the AzerothCore realm. In this revision, the RTG battleground queue-assistance path is pushed further into the real live runtime so helper bots can be acquired on demand, brought online, protected from generic cleanup while still RTG-owned, and retired only after demand is gone and lifecycle release is safe.
 
 --------------------------------
 
 ## Architecture Overview
 
 - **Manager classes**
-  - `RandomPlayerbotMgr` is the real runtime controller for helper acquisition, login scheduling, queue state audits, and helper retirement.
+  - `RandomPlayerbotMgr` remains the real live controller for helper acquisition, login scheduling, queue/lifecycle audits, and safe logout.
+  - `RtgQueueLedger` holds the in-memory semantic ownership ledger for RTG helper bots.
   - `RtgBgQueuePlanner` computes battleground demand overlays from real queue state.
-  - `RtgQueueLedger` holds the in-memory ownership ledger for RTG helper bots.
 - **Runtime loops**
-  - `RandomPlayerbotMgr::UpdateAIInternal` is the primary tick.
-  - `CheckBgQueue` and `CheckLfgQueue` compute demand and maintain queue/lifecycle state.
-  - `ProcessBot` is the login/update path for bots with a live `add` event.
+  - `RandomPlayerbotMgr::UpdateAIInternal` is the main live tick.
+  - `CheckBgQueue` computes battleground demand and refreshes helper assignment intent.
+  - `RTG_RunQueueOwnershipAudit` validates transitional ownership and safe-release timing.
 - **Data structures**
-  - `RtgHelperLedgerEntry` stores owner type, purpose, state, protection window, and retirement intent.
+  - `RtgHelperLedgerEntry` stores owner type, purpose, queue target, protection window, transition timestamps, and retirement intent.
 - **Ownership models**
-  - Demand ownership is represented as `QueueDemand`.
-  - Live battleground ownership is represented as `Battleground`.
+  - `QueueDemand` means the helper is still owned by active RTG demand / queue work.
+  - `Battleground` means the helper is owned by a live battleground lifecycle state.
 - **Lifecycle control**
-  - RTG helper bots transition through reserved/login/queued/invited/in-battleground/releasing/retired states.
-  - Safe retirement is gated through `EvaluateRetire` and `RTG_RequestSafeBotLogout`.
+  - Helpers transition through `LoggingIn`, `WorldIdle`, `Queued`, `Invited`, `InBattleground`, `Releasing`, and `Retired`.
+  - Successful login now explicitly promotes the helper into a protected owned-online state instead of leaving it in an unprotected transitional window.
 - **Event hooks**
-  - Login success and login failure are integrated through `OnBotLoginInternal` and `OnPlayerLoginError`.
+  - `OnBotLoginInternal` stamps live ownership and post-login protection.
+  - `OnPlayerLoginError` clears failed pending helper state and logs it.
 
 --------------------------------
 
 ## Runtime Control Path
 
-real player queues
-→ `CheckBgQueue` / `CheckLfgQueue` detect demand
-→ RTG demand events update `rtg_*` global keys
-→ `UpdateAIInternal` stays alive in standalone RTG mode even if `AiPlayerbot.RandomBotAutologin = 0`
-→ `AddRandomBots` selects offline helper candidates and stamps `add` + RTG pending events
-→ `RegisterPendingHelperLogin` creates immediate in-memory helper ownership records
-→ `ProcessBot` executes the real login path for those candidates
-→ `OnBotLoginInternal` applies RTG reservation metadata and pending queue ownership
-→ join actions queue helpers into the correct battleground/LFG path
-→ `SyncBgHelperState` upgrades ownership during queue / invite / battleground transitions
-→ lifecycle protection delays retirement while helpers are still battleground-owned
-→ `RTG_RequestSafeBotLogout` retires helpers when safe
+real player queues for battleground
+→ `CheckBgQueue` detects real demand and sets RTG demand events
+→ `UpdateAIInternal` remains alive for RTG control even with generic autologin disabled
+→ `AddRandomBots` selects offline helper candidates
+→ helper login request stamps `add` event + RTG pending flags + pending ownership ledger entry
+→ `ProcessBot` performs the actual live login path
+→ `OnBotLoginInternal` immediately upgrades the helper from pending login into a protected owned-online RTG helper
+→ battleground join logic queues the helper
+→ `SyncBgHelperState` upgrades helper state through queued / invited / battleground ownership
+→ generic shrink/logout gates now skip RTG-owned active helpers
+→ retirement is allowed only after demand is gone, queue/invite/BG ownership is gone, and lifecycle review says release is safe
 
 --------------------------------
 
@@ -58,13 +58,13 @@ real player queues
 
 - `RtgHelperLedgerEntry`
   - In-memory semantic record for one RTG-managed helper bot.
-  - Stores `purpose`, `state`, `ownerType`, target queue data, protection window, and retire flags.
+  - Stores `purpose`, `state`, `ownerType`, battleground target key, timestamps, protection window, and retirement flags.
 - `RtgHelperState`
   - Explicit helper states: `Reserved`, `LoggingIn`, `WorldIdle`, `Queued`, `Invited`, `InBattleground`, `Releasing`, `Retired`.
 - `RtgHelperOwnerType`
   - Explicit ownership split: `QueueDemand` or `Battleground`.
-- `BattlegroundInfo`
-  - Split queue-vs-active battleground counters used by RTG demand planning.
+- `RtgLifecycleResult`
+  - Safe-retirement decision object used to delay or allow helper release.
 
 --------------------------------
 
@@ -73,28 +73,30 @@ real player queues
 This revision uses the existing RTG config surface:
 
 - `AiPlayerbot.RTG.EventDriven.Enable`
-  - Enables the standalone RTG queue-assistance control path.
-  - In this revision, it also keeps the manager tick alive even when `AiPlayerbot.RandomBotAutologin` is disabled.
+  - Enables the standalone RTG queue-helper control path.
+  - In this revision it is documented as keeping the manager tick alive for RTG helper control even when `AiPlayerbot.RandomBotAutologin = 0`.
 - `AiPlayerbot.RTG.SmartQueue.Enable`
-  - Enables smarter battleground demand planning.
+  - Enables smarter battleground demand prioritization.
 - `AiPlayerbot.RTG.QueueGraceSeconds`
-  - Grace window for queue transitions and helper retirement timing.
+  - Grace timing for queue transitions and helper retirement churn control.
 - `AiPlayerbot.RTG.EventDriven.MaxBots`
-  - Caps the number of RTG-managed helpers.
+  - Caps RTG-managed helper count.
 - `AiPlayerbot.RTG.EventDriven.KeepWorldBots`
-  - Controls whether helpers can remain as world bots after RTG need ends.
+  - Controls whether helpers can remain online as world bots after RTG demand ends.
 - `AiPlayerbot.RTG.EventDriven.Debug`
-  - Enables RTG queue-assistance debug breadcrumbs.
+  - Enables focused event-driven RTG debug logging.
 - `AiPlayerbot.RTG.QueueOwnership.Enable`
-  - Enables the in-memory ownership ledger.
+  - Enables the in-memory helper ownership ledger.
 - `AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground`
-  - Applies battleground transition protection.
+  - Protects helpers during queue/invite/battleground lifecycle ownership.
 - `AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds`
-  - Retry delay for safe retirement.
+  - Retry delay for helpers whose retirement is delayed.
 - `AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds`
-  - Watchdog window for prolonged transitional states.
+  - Watchdog threshold for helpers stuck too long in transitional states.
 - `AiPlayerbot.RTG.QueueOwnership.Debug`
-  - Enables ownership-layer debug breadcrumbs.
+  - Enables focused ownership debug logging.
+- `AiPlayerbot.MaxRandomBots`
+  - Still acts as the global live randombot existence cap. In this revision the config documentation explicitly warns that it must be greater than 0 for RTG helpers to exist online.
 
 --------------------------------
 
@@ -109,50 +111,49 @@ RTG helper ownership, purpose, and lifecycle state remain in memory only in this
 ## Integration Points
 
 - `RandomPlayerbotMgr`
-- `ProcessBot` login/update path
-- `OnBotLoginInternal`
-- `OnPlayerLoginError`
+- `RtgQueueLifecycle`
+- `RtgQueueLedger`
 - `CheckBgQueue`
-- `CheckLfgQueue`
 - `BattleGroundJoinAction`
-- AzerothCore battleground queue / invite / battleground map lifecycle
+- AzerothCore battleground queue, invite, and battleground map lifecycle
 
 --------------------------------
 
 ## Lifecycle Model
 
-- Helper candidates are selected while offline.
-- A live `add` event reserves the helper for login.
-- `RegisterPendingHelperLogin` immediately creates a queue-demand ownership record.
-- On successful login, RTG battleground/LFG pending markers are reasserted and the ledger is refreshed.
-- While the helper is queued, invited, or inside a battleground, ownership protection can delay retirement.
-- When the helper is no longer needed and ownership clears, centralized safe logout retires it.
-- If login fails before world entry, this revision clears the `add` event, RTG pending flags, and any ownership-ledger record immediately.
+- Offline helper candidates are selected by RTG demand.
+- `RegisterPendingHelperLogin` records immediate pending ownership while the helper is still offline / logging in.
+- On successful login, `RecordHelperReservation` now promotes the helper into `WorldIdle` with `QueueDemand` ownership and a short protection window.
+- Generic shrink / logout logic now treats RTG-owned active helpers as protected.
+- `EvaluateRetire` now delays retirement when RTG demand or pending helper work is still active.
+- Retirement only proceeds after the helper is no longer queue-owned, no longer queued/invited/in-battleground, and the lifecycle gate allows it.
+- Failed login removes pending RTG state immediately.
 
 --------------------------------
 
 ## Known Constraints
 
-- Requires the playerbots runtime to be enabled.
-- Assumes existing RTG BG/LFG queue metadata and join actions remain wired.
-- Assumes RTG battleground demand is still driven by queue observation and helper assignment metadata.
-- Ownership remains in memory only; a world restart clears RTG helper semantic state.
-- Standalone RTG mode still depends on the standard playerbot manager tick being active through `AiPlayerbot.Enabled`.
+- Requires `AiPlayerbot.Enabled = 1`.
+- Requires `AiPlayerbot.MaxRandomBots > 0` so helper bots are allowed to exist online.
+- Ownership remains in memory only and is cleared on restart.
+- The system still relies on existing battleground join logic to finish queue entry after helper login.
+- This revision improves live protection and observability but does not introduce DB-backed persistence.
 
 --------------------------------
 
 ## Future Evolution Hooks
 
-- Stronger transition watchdog recovery for helpers stuck in `LoggingIn` / `Queued` / `Invited`.
-- Smarter offline candidate scoring per battleground role/class/spec.
-- Direct queue-purpose prioritization between starter fill and live-balance helpers.
-- Additional observability for helper lifecycle counts in GM/admin diagnostics.
+- Separate admin counters for helpers in `LoggingIn`, `WorldIdle`, `Queued`, `Invited`, and `InBattleground`.
+- Richer candidate diagnostics for “eligible vs skipped” helper selection.
+- Optional queue-purpose balancing between starter fill and live-balance helpers.
+- Better GM-facing summaries of helper protection and delayed retire reasons.
 
 --------------------------------
 
 ## Files Modified In This Revision
 
 - `src/Bot/RandomPlayerbotMgr.cpp`
+- `src/Bot/RtgQueueLifecycle.cpp`
 - `conf/playerbots.conf.dist`
 - `brain_addendum/mod-playerbots_brain_addendum.md`
 
@@ -160,10 +161,11 @@ RTG helper ownership, purpose, and lifecycle state remain in memory only in this
 
 ## Behavioral Changes In This Revision
 
-- RTG event-driven queue assistance now keeps `RandomPlayerbotMgr::UpdateAIInternal` alive even when generic `AiPlayerbot.RandomBotAutologin` is disabled.
-- This makes the RTG system capable of driving helper acquisition and login through the real live manager tick instead of depending on legacy generic randombot autologin.
-- Failed helper logins now clean up RTG pending queue state and ownership-ledger state immediately, reducing stale reservation drift.
-- Config documentation now explicitly states that RTG event-driven mode can operate as the standalone queue-helper path.
+- Successful RTG helper login now immediately creates a protected owned-online helper state instead of leaving the bot exposed to generic cleanup.
+- Generic shrink/logout selection now skips RTG-owned active helpers.
+- Lifecycle retirement evaluation now delays logout when RTG queue demand or pending helper work is still active.
+- Worldserver breadcrumbs are now emitted for helper acquisition requests, helper login success, protection-blocked retirement, allowed retirement, and failed helper login cleanup.
+- Config documentation now explicitly explains the RTG standalone tick behavior and the need for `AiPlayerbot.MaxRandomBots > 0`.
 
 --------------------------------
 
@@ -172,25 +174,30 @@ RTG helper ownership, purpose, and lifecycle state remain in memory only in this
 1. Set:
    - `AiPlayerbot.Enabled = 1`
    - `AiPlayerbot.RandomBotAutologin = 0`
+   - `AiPlayerbot.MaxRandomBots = 20` or higher
    - `AiPlayerbot.RandomBotJoinBG = 1`
    - `AiPlayerbot.RTG.EventDriven.Enable = 1`
    - `AiPlayerbot.RTG.QueueOwnership.Enable = 1`
    - `AiPlayerbot.RTG.EventDriven.Debug = 1`
    - `AiPlayerbot.RTG.QueueOwnership.Debug = 1`
 2. Restart worldserver.
-3. Confirm log line appears once:
-   - `Standalone queue-helper control active...`
-4. Log in one real level-19 player and queue Warsong Gulch.
-5. Wait for `CheckBgQueue` to detect real demand.
-6. Verify logs show RTG acquisition such as `[RTG][BG][ACQUIRE] ...`.
-7. Verify helper bots actually log in with generic autologin still disabled.
-8. Verify helpers queue for the assigned battleground rather than roaming as general world bots.
-9. When the battleground starts, verify ownership debug logs show queue/invite/battleground protection rather than immediate retirement.
-10. Finish or leave the battleground and confirm helpers retire only after battleground lifecycle ownership clears.
-11. Optionally force a helper login failure and confirm the login-error cleanup removes pending RTG markers instead of leaving stale reservations behind.
+3. Confirm the worldserver log shows:
+   - `[RTG][CONTROL] Standalone queue-helper control active...`
+4. Queue one real level-19 player into Warsong Gulch.
+5. Confirm the log shows helper acquisition requests:
+   - `[RTG][ACQUIRE][REQUEST] ...`
+6. Confirm successful helper logins now produce:
+   - `[RTG][LOGIN] helper=... online ...`
+7. Verify the helpers remain online long enough to queue instead of instantly logging out.
+8. If a generic retire path attempts to remove an active helper early, confirm the log shows:
+   - `[RTG][PROTECT] Blocking logout for helper bot ...`
+9. After the battleground ends and need is gone, confirm the log eventually shows:
+   - `[RTG][RETIRE] Allowing helper bot ... logout ...`
+10. Optionally force a login failure and confirm:
+   - `[RTG][LOGIN][FAIL] helper=... login failed; cleared RTG pending state`
 
 --------------------------------
 
 ## Notes For RTG Brain Ingestion
 
-This revision is important because it changes the control authority of RTG queue assistance. The event-driven RTG path is no longer conceptually secondary to generic randombot autologin. The real manager tick now remains live in standalone RTG mode, which makes the existing RTG acquisition, pending ownership, queue join, protection, and retirement layers actually drive runtime behavior on branches where generic autologin is intentionally disabled.
+This revision is the first meaningful pass that pushes RTG ownership directly into the real live logout gates rather than only into acquisition and battleground-state scaffolding. The semantic meaning for the RTG brain is that helper lifetime authority is shifting away from legacy randombot churn and toward explicit RTG ownership plus lifecycle review. Successful helper login is now treated as a protected semantic milestone in the runtime model.

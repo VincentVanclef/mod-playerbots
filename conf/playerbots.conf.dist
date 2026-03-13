@@ -2227,11 +2227,15 @@ AiPlayerbot.EnableICCBuffs = 1
 #                     This controls WHEN the RTG queue-assistance system is
 #                     allowed to react.
 #
-#                     When this setting is enabled, the RTG manager tick stays
-#                     active even if AiPlayerbot.RandomBotAutologin is disabled.
-#                     This allows RTG queue helpers to be acquired, logged in,
-#                     queued, protected, and retired through the standalone
-#                     RTG control path instead of generic randombot churn.
+#                     When enabled on the RTG branch, the manager update tick
+#                     may continue running for queue-helper control even if
+#                     AiPlayerbot.RandomBotAutologin is disabled. This allows
+#                     RTG to explicitly acquire, log in, queue, protect, and
+#                     retire helper bots through the event-driven path.
+#
+#                     Important: AiPlayerbot.MaxRandomBots must still be set to
+#                     a value greater than 0 so helper bots are allowed to exist
+#                     online at runtime.
 #
 #        Default:     0 - Disabled
 #                     1 - Enabled
@@ -2366,6 +2370,10 @@ AiPlayerbot.EnableICCBuffs = 1
 #
 #        Example:     AiPlayerbot.RTG.QueueOwnership.Debug = 1
 #                     Ownership-ledger debug logging is enabled.
+#
+#                     This setting complements the always-on RTG lifecycle
+#                     breadcrumbs written for helper acquisition, login,
+#                     protection, and retirement decisions in worldserver logs.
 #
 AiPlayerbot.RTG.EventDriven.Enable = 0
 AiPlayerbot.RTG.SmartQueue.Enable = 1

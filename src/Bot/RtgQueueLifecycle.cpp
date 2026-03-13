@@ -10,6 +10,79 @@
 
 namespace RTG
 {
+namespace
+{
+static bool RTG_IsActivelyOwnedHelperState(RtgHelperState state)
+{
+    switch (state)
+    {
+        case RtgHelperState::Reserved:
+        case RtgHelperState::LoggingIn:
+        case RtgHelperState::WorldIdle:
+        case RtgHelperState::Queued:
+        case RtgHelperState::Invited:
+        case RtgHelperState::InBattleground:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry const& entry)
+{
+    if (!bot)
+        return false;
+
+    ObjectGuid::LowType botId = bot->GetGUID().GetCounter();
+    if (sRandomPlayerbotMgr.GetEventValue(botId, "rtg_bg_pending") ||
+        sRandomPlayerbotMgr.GetEventValue(botId, "rtg_lfg_pending") ||
+        sRandomPlayerbotMgr.GetEventValue(botId, "rtg_dungeon_active"))
+    {
+        return true;
+    }
+
+    if (entry.pendingQueueJoin || entry.pendingBgJoin)
+        return true;
+
+    std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+    if (!IsQueueManagedAddData(addData))
+        return entry.ownerType == RtgHelperOwnerType::QueueDemand && RTG_IsActivelyOwnedHelperState(entry.state);
+
+    uint32 team = 0;
+    uint32 level = 0;
+    uint32 queueType = 0;
+    uint32 owner = 0;
+    if (ParseBgAddData(addData, team, level, queueType, &owner))
+    {
+        if (sRandomPlayerbotMgr.GetEventValue(0, "rtg_bg_need_total") != 0)
+            return true;
+
+        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueType));
+        if (bgTypeId != BATTLEGROUND_TYPE_NONE)
+        {
+            if (Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId))
+            {
+                if (PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), level ? level : bot->GetLevel()))
+                {
+                    std::string demandKey = std::string("rtg_bg_need_") + std::to_string(queueType) + "_" + std::to_string(uint32(pvpDiff->GetBracketId()));
+                    if (sRandomPlayerbotMgr.GetEventValue(0, demandKey) != 0)
+                        return true;
+                }
+            }
+        }
+    }
+    else if (ParseLfgAddData(addData, team, level, nullptr, &owner))
+    {
+        if (sRandomPlayerbotMgr.GetEventValue(0, "rtg_lfg_need_total") != 0)
+            return true;
+        if (owner && sRandomPlayerbotMgr.GetEventValue(owner, "rtg_lfg_real_demand") != 0)
+            return true;
+    }
+
+    return entry.ownerType == RtgHelperOwnerType::QueueDemand && RTG_IsActivelyOwnedHelperState(entry.state);
+}
+}
+
 RtgHelperPurpose DetermineBgHelperPurpose(BattlegroundInfo const& bgInfo, TeamId teamId)
 {
     uint32 queueReal = (teamId == TEAM_ALLIANCE) ? bgInfo.bgQueueAlliancePlayerCount : bgInfo.bgQueueHordePlayerCount;
@@ -31,7 +104,7 @@ void RecordHelperReservation(Player* bot, BattlegroundQueueTypeId queueTypeId, B
     entry.botGuid = bot->GetGUID().GetCounter();
     entry.accountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
     entry.isEventDrivenHelper = true;
-    entry.state = RtgHelperState::LoggingIn;
+    entry.state = RtgHelperState::WorldIdle;
     entry.ownerType = RtgHelperOwnerType::QueueDemand;
     entry.purpose = purpose;
     entry.target.bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
@@ -40,6 +113,7 @@ void RecordHelperReservation(Player* bot, BattlegroundQueueTypeId queueTypeId, B
     entry.target.preferredTeam = preferredTeam;
     entry.pendingQueueJoin = true;
     entry.creationReason = reason ? reason : "event-driven battleground helper login";
+    entry.protectedUntilMs = RTG_GetNowMs32() + std::max<uint32>(5u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds) * IN_MILLISECONDS;
     RtgQueueLedger::Instance().Upsert(entry);
 }
 
@@ -134,6 +208,14 @@ RtgLifecycleResult EvaluateRetire(Player* bot, uint32 retireRetrySeconds)
         result.decision = RtgLifecycleDecision::Delay;
         result.retryAfterMs = retireRetrySeconds * IN_MILLISECONDS;
         result.reason = "protection window active";
+        return result;
+    }
+
+    if (RTG_HelperHasOutstandingDemand(bot, *entry))
+    {
+        result.decision = RtgLifecycleDecision::Delay;
+        result.retryAfterMs = retireRetrySeconds * IN_MILLISECONDS;
+        result.reason = "helper still owned by active RTG queue demand";
         return result;
     }
 

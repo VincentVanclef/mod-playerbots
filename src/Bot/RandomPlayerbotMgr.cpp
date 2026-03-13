@@ -78,6 +78,52 @@ namespace
         return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgQueueOwnershipEnable && sPlayerbotAIConfig.rtgQueueOwnershipDebug;
     }
 
+    static bool RTG_IsActiveOwnedState(RTG::RtgHelperState state)
+    {
+        switch (state)
+        {
+            case RTG::RtgHelperState::Reserved:
+            case RTG::RtgHelperState::LoggingIn:
+            case RTG::RtgHelperState::WorldIdle:
+            case RTG::RtgHelperState::Queued:
+            case RTG::RtgHelperState::Invited:
+            case RTG::RtgHelperState::InBattleground:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static bool RTG_ShouldProtectFromGenericLogout(Player* bot)
+    {
+        if (!bot || !sPlayerbotAIConfig.rtgEventDriven || !sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+            return false;
+
+        ObjectGuid::LowType botId = bot->GetGUID().GetCounter();
+        RTG::RtgHelperLedgerEntry const* entry = RTG::RtgQueueLedger::Instance().Get(botId);
+        if (!entry)
+            return false;
+
+        if (entry->ownerType == RTG::RtgHelperOwnerType::Battleground ||
+            entry->pendingQueueJoin ||
+            entry->pendingBgJoin ||
+            entry->pendingRetire ||
+            RTG_IsActiveOwnedState(entry->state))
+        {
+            return true;
+        }
+
+        if (sRandomPlayerbotMgr.GetEventValue(botId, "rtg_bg_pending") ||
+            sRandomPlayerbotMgr.GetEventValue(botId, "rtg_lfg_pending") ||
+            sRandomPlayerbotMgr.GetEventValue(botId, "rtg_dungeon_active"))
+        {
+            return true;
+        }
+
+        std::string addData = sRandomPlayerbotMgr.GetEventData(botId, "add");
+        return RTG::IsQueueManagedAddData(addData);
+    }
+
     static bool RTG_IsQueueSupervisorEvent(std::string const& event)
     {
         return event == "add" || event == "logout" || RTG::HasPrefix(event, "rtg_");
@@ -672,11 +718,13 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
             {
                 ledger.RequestRetire(botId, reason ? reason : "rtg");
                 SetEventValue(botId, "rtg_bg_retire_when_safe", 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, GetEventData(botId, "add"));
+                LOG_INFO("playerbots", "[RTG][PROTECT] Blocking logout for helper bot {} reason={} detail='{}'", botId, reason ? reason : "rtg", lifecycle.reason);
                 if (RTG_QueueOwnershipDebugEnabled())
                     LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} retire delayed reason='{}' detail='{}'", botId, reason ? reason : "rtg", lifecycle.reason);
                 return false;
             }
             ledger.Release(botId, reason ? reason : "rtg");
+            LOG_INFO("playerbots", "[RTG][RETIRE] Allowing helper bot {} logout reason={}", botId, reason ? reason : "rtg");
         }
     }
 
@@ -1065,19 +1113,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
     totalPmo = sPerfMonitor.start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
 
-    bool const rtgStandaloneQueueControl = sPlayerbotAIConfig.enabled && sPlayerbotAIConfig.rtgEventDriven;
-    bool const managerAutologinActive = sPlayerbotAIConfig.enabled && (sPlayerbotAIConfig.randomBotAutologin || rtgStandaloneQueueControl);
-    if (!managerAutologinActive)
+    bool allowStandaloneRtgTick = sPlayerbotAIConfig.enabled && sPlayerbotAIConfig.rtgEventDriven;
+    if (!sPlayerbotAIConfig.enabled || (!sPlayerbotAIConfig.randomBotAutologin && !allowStandaloneRtgTick))
         return;
 
-    if (rtgStandaloneQueueControl && !sPlayerbotAIConfig.randomBotAutologin)
+    static bool rtgStandaloneTickLogged = false;
+    if (allowStandaloneRtgTick && !sPlayerbotAIConfig.randomBotAutologin && !rtgStandaloneTickLogged)
     {
-        static bool loggedStandaloneMode = false;
-        if (!loggedStandaloneMode)
-        {
-            loggedStandaloneMode = true;
-            LOG_INFO("playerbots", "[RTG] Standalone queue-helper control active. RandomBotAutologin is disabled; RTG event-driven manager tick remains live.");
-        }
+        LOG_INFO("playerbots", "[RTG][CONTROL] Standalone queue-helper control active with RandomBotAutologin=0");
+        rtgStandaloneTickLogged = true;
     }
 
     // Enforce community level cap as a hard XP ceiling for randombots.
@@ -1969,6 +2013,9 @@ auto isProtectedFromLogout = [&](Player* bot) -> bool
     if (isGroupWithRealPlayer(bot))
         return true;
 
+    if (RTG_ShouldProtectFromGenericLogout(bot))
+        return true;
+
     return false;
 };
 
@@ -2473,7 +2520,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 45, addData);
 
             if (!addData.empty())
+            {
                 RTG::RegisterPendingHelperLogin(charInfo.guid, charInfo.accountId, addData);
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][REQUEST] helper={} account={} addData='{}'", charInfo.guid, charInfo.accountId, addData);
+            }
 
             currentBots.push_back(charInfo.guid);
 
@@ -5494,6 +5544,11 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 {
                     RTG::RecordHelperReservation(bot, BattlegroundQueueTypeId(desiredQueueType), bracketId, TeamId(bot->GetTeamId()),
                                                  "event-driven battleground helper login", RTG::RtgHelperPurpose::StarterFill);
+                    if (RTG::RtgHelperLedgerEntry const* entry = RTG::RtgQueueLedger::Instance().Get(bot->GetGUID().GetCounter()))
+                    {
+                        LOG_INFO("playerbots", "[RTG][LOGIN] helper={} online queue={} bracket={} team={} state={} protectedUntilMs={}",
+                                 bot->GetGUID().GetCounter(), desiredQueueType, uint32(bracketId), bot->GetTeamId(), uint32(entry->state), entry->protectedUntilMs);
+                    }
                     if (RTG_QueueOwnershipDebugEnabled())
                         LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} reserved queue={} bracket={} team={}", bot->GetGUID().GetCounter(), desiredQueueType, uint32(bracketId), bot->GetTeamId());
                 }
@@ -5605,7 +5660,6 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
 
 void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
 {
-    std::string addData = GetEventData(bot, "add");
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
@@ -5615,8 +5669,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
         RTG::RtgQueueLedger::Instance().Remove(bot);
 
-    if (sPlayerbotAIConfig.rtgEventDriven && !addData.empty() && RTG_QueueDebugEnabled())
-        LOG_INFO("playerbots", "[RTGDBG][LOGIN] helper={} login failed addData='{}'", bot, addData);
+    LOG_INFO("playerbots", "[RTG][LOGIN][FAIL] helper={} login failed; cleared RTG pending state", bot);
 }
 
 Player* RandomPlayerbotMgr::GetRandomPlayer()
