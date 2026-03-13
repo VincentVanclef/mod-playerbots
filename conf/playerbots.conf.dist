@@ -2227,6 +2227,12 @@ AiPlayerbot.EnableICCBuffs = 1
 #                     This controls WHEN the RTG queue-assistance system is
 #                     allowed to react.
 #
+#                     When this setting is enabled, the RTG manager tick stays
+#                     active even if AiPlayerbot.RandomBotAutologin is disabled.
+#                     This allows RTG queue helpers to be acquired, logged in,
+#                     queued, protected, and retired through the standalone
+#                     RTG control path instead of generic randombot churn.
+#
 #        Default:     0 - Disabled
 #                     1 - Enabled
 #
