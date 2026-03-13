@@ -35,11 +35,10 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
 
     ObjectGuid::LowType botId = bot->GetGUID().GetCounter();
     if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
+        sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_queue_grace") ||
         sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
         sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active"))
-    {
         return true;
-    }
 
     if (entry.pendingQueueJoin || entry.pendingBgJoin)
         return true;
@@ -64,19 +63,12 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
             {
                 if (PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), level ? level : bot->GetLevel()))
                 {
-                    std::string demandKey = std::string("rtg_bg_need_") + std::to_string(queueType) + "_" + std::to_string(uint32(pvpDiff->GetBracketId()));
+                    std::string demandKey = std::string("rtg_bg_need_") + std::to_string(queueType) + ":" + std::to_string(uint32(pvpDiff->GetBracketId()));
                     if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0)
                         return true;
                 }
             }
         }
-    }
-    else if (ParseLfgAddData(addData, team, level, nullptr, &owner))
-    {
-        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, "rtg_lfg_need_total") != 0)
-            return true;
-        if (owner && sRandomPlayerbotMgr.RTG_GetBotEventValue(owner, "rtg_lfg_real_demand") != 0)
-            return true;
     }
 
     return entry.ownerType == RtgHelperOwnerType::QueueDemand && RTG_IsActivelyOwnedHelperState(entry.state);
@@ -113,7 +105,7 @@ void RecordHelperReservation(Player* bot, BattlegroundQueueTypeId queueTypeId, B
     entry.target.preferredTeam = preferredTeam;
     entry.pendingQueueJoin = true;
     entry.creationReason = reason ? reason : "event-driven battleground helper login";
-    entry.protectedUntilMs = RTG_GetNowMs32() + std::max<uint32>(5u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds) * IN_MILLISECONDS;
+    entry.protectedUntilMs = RTG_GetNowMs32() + std::max<uint32>(20u, sPlayerbotAIConfig.rtgQueueGraceSeconds) * IN_MILLISECONDS;
     RtgQueueLedger::Instance().Upsert(entry);
 }
 
@@ -211,15 +203,8 @@ RtgLifecycleResult EvaluateRetire(Player* bot, uint32 retireRetrySeconds)
         return result;
     }
 
-    if (RTG_HelperHasOutstandingDemand(bot, *entry))
-    {
-        result.decision = RtgLifecycleDecision::Delay;
-        result.retryAfterMs = retireRetrySeconds * IN_MILLISECONDS;
-        result.reason = "helper still owned by active RTG queue demand";
-        return result;
-    }
-
-    if (entry->ownerType == RtgHelperOwnerType::Battleground ||
+    if (RTG_HelperHasOutstandingDemand(bot, *entry) ||
+        entry->ownerType == RtgHelperOwnerType::Battleground ||
         entry->state == RtgHelperState::InBattleground ||
         entry->state == RtgHelperState::Invited ||
         entry->state == RtgHelperState::Queued ||
@@ -227,7 +212,7 @@ RtgLifecycleResult EvaluateRetire(Player* bot, uint32 retireRetrySeconds)
     {
         result.decision = RtgLifecycleDecision::Delay;
         result.retryAfterMs = retireRetrySeconds * IN_MILLISECONDS;
-        result.reason = "helper still lifecycle-owned by battleground state";
+        result.reason = RTG_HelperHasOutstandingDemand(bot, *entry) ? "helper still owned by active RTG queue demand" : "helper still lifecycle-owned by battleground state";
         return result;
     }
 
@@ -246,7 +231,7 @@ void RegisterPendingHelperLogin(ObjectGuid::LowType botGuid, uint32 accountId, s
     entry.accountId = accountId;
     entry.isEventDrivenHelper = true;
     entry.pendingQueueJoin = true;
-    entry.state = RtgHelperState::LoggingIn;
+    entry.state = RtgHelperState::WorldIdle;
     entry.ownerType = RtgHelperOwnerType::QueueDemand;
     entry.creationReason = "pending helper acquisition";
 

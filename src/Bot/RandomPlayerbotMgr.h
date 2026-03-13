@@ -216,12 +216,12 @@ public:
 
     // RTG: public wrappers for global event cache (keyed at bot=0)
     uint32 RTG_GetGlobalEvent(std::string const& key) { return GetEventValue(0, key); }
-    uint32 RTG_GetBotEventValue(uint32 bot, std::string const& key) { return GetEventValue(bot, key); }
     void RTG_SetGlobalEvent(std::string const& key, uint32 value, uint32 ttlSeconds, std::string const& data = "")
     {
         SetEventValue(0, key, value, ttlSeconds, data);
     }
     std::string RTG_GetBotEventData(uint32 bot, std::string const& key) { return GetEventData(bot, key); }
+    uint32 RTG_GetBotEventValue(uint32 bot, std::string const& key) { return GetEventValue(bot, key); }
 
 protected:
     void OnBotLoginInternal(Player* const bot) override;
