@@ -4,6 +4,7 @@
 #include "GameTime.h"
 #include "Map.h"
 #include "Player.h"
+#include "RandomPlayerbotMgr.h"
 #include "PlayerbotAIConfig.h"
 
 namespace RTG

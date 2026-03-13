@@ -3,6 +3,8 @@
 #include "Battleground.h"
 #include "RtgQueueLedger.h"
 
+struct BattlegroundInfo;
+
 namespace RTG
 {
 RtgHelperPurpose DetermineBgHelperPurpose(BattlegroundInfo const& bgInfo, TeamId teamId);
