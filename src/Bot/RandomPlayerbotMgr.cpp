@@ -2459,6 +2459,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             else if (RTG::HasPrefix(addData, "rtg_bg:"))
                 SetEventValue(charInfo.guid, "rtg_bg_pending", 1, 45, addData);
+
+            if (!addData.empty())
+                RTG::RegisterPendingHelperLogin(charInfo.guid, charInfo.accountId, addData);
+
             currentBots.push_back(charInfo.guid);
 
             return true;
@@ -2666,6 +2670,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             uint32 rtgNow = static_cast<uint32>(time(nullptr));
+            if (RTG_QueueDebugEnabled())
+            {
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} currentBots={} targetBots={}",
+                         static_cast<uint32>(allCharacters.size()),
+                         static_cast<uint32>(lfgBuckets.size()),
+                         static_cast<uint32>(bgBuckets.size()),
+                         static_cast<uint32>(currentBots.size()),
+                         maxAllowedBotCount);
+            }
             for (auto& kv : lfgBuckets)
             {
                 RtgLfgBucket& bucket = kv.second;
@@ -2808,6 +2821,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
+            uint32 rtgLfgLogged = 0;
+            uint32 rtgBgLogged = 0;
+
             auto tryFillLfgRole = [&](RtgLfgBucket& bucket, uint32 desiredRole, uint32& capacity) -> bool
             {
                 if (!capacity)
@@ -2827,8 +2843,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][LFG] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
+                    LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
 
+                    ++rtgLfgLogged;
                     --capacity;
                     --remainingCapacity;
                     if (desiredRole == lfg::PLAYER_ROLE_TANK)
@@ -2890,7 +2907,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][BG] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
+                    LOG_INFO("playerbots", "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
+                    ++rtgBgLogged;
                     --capacity;
                     --remainingCapacity;
                     ++bucket.assignedExtra;
@@ -2911,10 +2929,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
+            if (RTG_QueueDebugEnabled())
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} remainingCapacity={} totalLfgNeed={} totalBgNeed={}", rtgLfgLogged, rtgBgLogged, remainingCapacity, totalLfgNeed, totalBgNeed);
+
             if (remainingCapacity)
             {
                 if (missingBotsTimer == 0)
                     missingBotsTimer = time(nullptr);
+
+                if (RTG_QueueDebugEnabled())
+                {
+                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
+                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()));
+                }
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
                 {

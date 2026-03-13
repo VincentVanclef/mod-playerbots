@@ -1,5 +1,6 @@
 #include "RtgQueueLifecycle.h"
 
+#include "RtgQueueMetadata.h"
 #include "BattlegroundMgr.h"
 #include "GameTime.h"
 #include "Map.h"
@@ -151,5 +152,53 @@ RtgLifecycleResult EvaluateRetire(Player* bot, uint32 retireRetrySeconds)
     result.decision = RtgLifecycleDecision::Allow;
     result.reason = "safe to retire";
     return result;
+}
+
+void RegisterPendingHelperLogin(ObjectGuid::LowType botGuid, uint32 accountId, std::string const& addData)
+{
+    if (!botGuid || addData.empty() || !RTG::IsQueueManagedAddData(addData))
+        return;
+
+    RtgHelperLedgerEntry entry;
+    entry.botGuid = botGuid;
+    entry.accountId = accountId;
+    entry.isEventDrivenHelper = true;
+    entry.pendingQueueJoin = true;
+    entry.state = RtgHelperState::LoggingIn;
+    entry.ownerType = RtgHelperOwnerType::QueueDemand;
+    entry.creationReason = "pending helper acquisition";
+
+    uint32 team = 0;
+    uint32 level = 0;
+    uint32 queueType = 0;
+    uint32 owner = 0;
+    if (RTG::ParseBgAddData(addData, team, level, queueType, &owner))
+    {
+        entry.purpose = RtgHelperPurpose::StarterFill;
+        entry.target.queueTypeId = BattlegroundQueueTypeId(queueType);
+        entry.target.bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueType));
+        entry.target.preferredTeam = TeamId(team);
+        if (entry.target.bgTypeId != BATTLEGROUND_TYPE_NONE)
+        {
+            if (Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(entry.target.bgTypeId))
+            {
+                if (PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), level))
+                    entry.target.bracketId = pvpDiff->GetBracketId();
+            }
+        }
+        entry.creationReason = owner ? (std::string("pending bg helper owner=") + std::to_string(owner)) : "pending bg helper";
+    }
+    else if (RTG::ParseLfgAddData(addData, team, level, nullptr, &owner))
+    {
+        entry.purpose = RtgHelperPurpose::StarterFill;
+        entry.target.preferredTeam = TeamId(team);
+        entry.creationReason = owner ? (std::string("pending lfg helper owner=") + std::to_string(owner)) : "pending lfg helper";
+    }
+    else
+    {
+        return;
+    }
+
+    RtgQueueLedger::Instance().Upsert(entry);
 }
 }

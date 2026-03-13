@@ -12,4 +12,5 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
 void RecordHelperReservation(Player* bot, BattlegroundQueueTypeId queueTypeId, BattlegroundBracketId bracketId, TeamId preferredTeam,
                              char const* reason = nullptr, RtgHelperPurpose purpose = RtgHelperPurpose::StarterFill);
 RtgLifecycleResult EvaluateRetire(Player* bot, uint32 retireRetrySeconds);
+void RegisterPendingHelperLogin(ObjectGuid::LowType botGuid, uint32 accountId, std::string const& addData);
 }
