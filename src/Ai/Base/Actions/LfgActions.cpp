@@ -250,6 +250,7 @@ bool LfgJoinAction::JoinLFG()
         }
         else
         {
+            RTG_ClearDungeonQueuePenalties(bot);
             rtgNextJoinAttempt[botId] = now + 5;
         }
     }

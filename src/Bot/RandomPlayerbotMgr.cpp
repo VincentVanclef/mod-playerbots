@@ -323,6 +323,7 @@ namespace
 
         bot->RemoveAura(26013); // Deserter
         bot->RemoveAura(71041); // Dungeon Deserter
+        bot->RemoveAura(71328); // LFG Deserter / cooldown-style dungeon penalty
     }
 
     static void RTG_PrepareBotForLogout(Player* bot)

@@ -474,6 +474,9 @@ bool BGJoinAction::isUseful()
     if (bot->IsInCombat())
         return false;
 
+    if (isRtgBgBot)
+        RTG_ClearQueuePenalties(bot);
+
     // check Deserter debuff
     if (!bot->CanJoinToBattleground())
         return false;
@@ -794,6 +797,7 @@ bool BGLeaveAction::Execute(Event event)
     Battleground* currentBg = bot->GetBattleground();
     if (currentBg && currentBg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
+        RTG_ClearQueuePenalties(bot);
         LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(currentBg->GetStatus()), currentBg->GetMapId());
         return false;
@@ -855,6 +859,7 @@ bool BGStatusAction::LeaveBG(PlayerbotAI* botAI)
 
     if (bg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
+        RTG_ClearQueuePenalties(bot);
         LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(bg->GetStatus()), bg->GetMapId());
         return false;

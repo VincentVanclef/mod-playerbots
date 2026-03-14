@@ -41,6 +41,11 @@ namespace
         return std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+    static std::string RTG_MakeBgActiveStartKey(uint32 queueType, uint32 bracketId)
+    {
+        return std::string("rtg_bg_active_start:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
     static char const* RTG_GetBgPhaseName(uint32 phase)
     {
         switch (phase)
@@ -48,6 +53,7 @@ namespace
             case 1: return "starter_fill";
             case 2: return "pop_or_invite";
             case 3: return "live_refill";
+            case 4: return "bg_started";
             default: return "dormant";
         }
     }
@@ -178,19 +184,42 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             {
                 if (activeCurrentAlliance || activeCurrentHorde)
                 {
-                    phase = 3; // live_refill
-                    uint32 liveTarget = std::max(activeCurrentAlliance, activeCurrentHorde);
-                    if (minPerTeam)
-                        liveTarget = std::max(liveTarget, minPerTeam);
-                    if (maxPerTeam)
-                        liveTarget = std::min(liveTarget, maxPerTeam);
-                    allianceTarget = liveTarget;
-                    hordeTarget = liveTarget;
+                    uint32 activeStart = mgr.RTG_GetGlobalEvent(RTG_MakeBgActiveStartKey(uint32(queueTypeId), uint32(bracketId)));
+                    uint32 now = static_cast<uint32>(time(nullptr));
+                    if (!activeStart)
+                    {
+                        activeStart = now;
+                        mgr.RTG_SetGlobalEvent(RTG_MakeBgActiveStartKey(uint32(queueTypeId), uint32(bracketId)), activeStart, ttl);
+                    }
+
+                    bool matureStarted = now >= (activeStart + sPlayerbotAIConfig.rtgQueueGraceSeconds);
+                    if (matureStarted)
+                    {
+                        phase = 4; // bg_started
+                        uint32 startedTarget = maxPerTeam ? maxPerTeam : std::max(activeCurrentAlliance, activeCurrentHorde);
+                        if (minPerTeam)
+                            startedTarget = std::max(startedTarget, minPerTeam);
+                        allianceTarget = startedTarget;
+                        hordeTarget = startedTarget;
+                    }
+                    else
+                    {
+                        phase = 3; // live_refill
+                        uint32 liveTarget = std::max(activeCurrentAlliance, activeCurrentHorde);
+                        if (minPerTeam)
+                            liveTarget = std::max(liveTarget, minPerTeam);
+                        if (maxPerTeam)
+                            liveTarget = std::min(liveTarget, maxPerTeam);
+                        allianceTarget = liveTarget;
+                        hordeTarget = liveTarget;
+                    }
+
                     allianceNeed = allianceTarget > activeCurrentAlliance ? (allianceTarget - activeCurrentAlliance) : 0u;
                     hordeNeed = hordeTarget > activeCurrentHorde ? (hordeTarget - activeCurrentHorde) : 0u;
                 }
                 else
                 {
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgActiveStartKey(uint32(queueTypeId), uint32(bracketId)), 0, 0);
                     phase = (queueCurrentAlliance || queueCurrentHorde || bgInfo.activeBgQueue) ? 2u : 1u; // pop_or_invite : starter_fill
                     uint32 realQueuePeak = std::max(queueRealAlliance, queueRealHorde);
                     uint32 startupTarget = std::max(minPerTeam, realQueuePeak);
@@ -240,6 +269,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
         mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(queueType, bracketId, uint32(TEAM_ALLIANCE)), 0, 0);
         mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(queueType, bracketId, uint32(TEAM_HORDE)), 0, 0);
         mgr.RTG_SetGlobalEvent(RTG_MakeBgPhaseKey(queueType, bracketId), 0, 0, "dormant");
+        mgr.RTG_SetGlobalEvent(RTG_MakeBgActiveStartKey(queueType, bracketId), 0, 0);
         if (sPlayerbotAIConfig.rtgEventDebug)
             RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason=stale_key", queueType, bracketId);
     }
