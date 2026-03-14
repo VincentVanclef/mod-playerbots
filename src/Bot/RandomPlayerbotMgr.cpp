@@ -1681,12 +1681,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
 
             bool bgHasRealDemand = false;
+            PvPDifficultyEntry const* desiredBracket = nullptr;
             BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
             if (desiredBgType != BATTLEGROUND_TYPE_NONE)
             {
                 if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
                 {
-                    if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
+                    desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel());
+                    if (desiredBracket)
                         bgHasRealDemand = GetEventValue(0, RTG_MakeBgDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
                 }
             }
@@ -1705,7 +1707,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
 
-            if (!noLongerNeeded && RTG_ShouldForceRecycleOutsideHelper(bot, botId, desiredQueueType, desiredBracket->GetBracketId(), inQueueState))
+            if (!noLongerNeeded && desiredBracket && RTG_ShouldForceRecycleOutsideHelper(bot, botId, desiredQueueType, desiredBracket->GetBracketId(), inQueueState))
             {
                 SetEventValue(botId, "rtg_bg_pending", 0, 0);
                 SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
