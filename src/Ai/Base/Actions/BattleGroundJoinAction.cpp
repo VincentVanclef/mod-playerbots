@@ -90,6 +90,16 @@ namespace
         uint32 queueType = 0;
         return RTG_GetAssignedBgQueue(bot, queueType) && queueType != 0;
     }
+
+    static void RTG_ClearQueuePenalties(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        bot->RemoveAura(26013); // Deserter
+        bot->RemoveAura(71041); // Dungeon Deserter
+        bot->RemoveAura(71328); // LFG cooldown / penalty-style aura on this branch
+    }
 }
 
 #include "PositionValue.h"
@@ -474,9 +484,6 @@ bool BGJoinAction::isUseful()
     if (bot->IsInCombat())
         return false;
 
-    if (isRtgBgBot)
-        RTG_ClearQueuePenalties(bot);
-
     // check Deserter debuff
     if (!bot->CanJoinToBattleground())
         return false;
@@ -797,7 +804,6 @@ bool BGLeaveAction::Execute(Event event)
     Battleground* currentBg = bot->GetBattleground();
     if (currentBg && currentBg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
-        RTG_ClearQueuePenalties(bot);
         LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(currentBg->GetStatus()), currentBg->GetMapId());
         return false;
@@ -859,7 +865,6 @@ bool BGStatusAction::LeaveBG(PlayerbotAI* botAI)
 
     if (bg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
-        RTG_ClearQueuePenalties(bot);
         LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(bg->GetStatus()), bg->GetMapId());
         return false;
