@@ -1075,7 +1075,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
     totalPmo = sPerfMonitor.start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
 
-    if (!sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
+    if (!sPlayerbotAIConfig.enabled)
+        return;
+
+    bool rtgStandaloneControl = sPlayerbotAIConfig.rtgEventDriven && !sPlayerbotAIConfig.randomBotAutologin;
+    if (!sPlayerbotAIConfig.randomBotAutologin && !rtgStandaloneControl)
         return;
 
     // Enforce community level cap as a hard XP ceiling for randombots.
@@ -1167,6 +1171,39 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             maxAllowedBotCount = 0;
 
         SetEventValue(0, "rtg_target", maxAllowedBotCount, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
+
+        if (sPlayerbotAIConfig.rtgEventDebug)
+        {
+            static bool sLoggedStandaloneControl = false;
+            if (rtgStandaloneControl && !sLoggedStandaloneControl)
+            {
+                LOG_INFO("playerbots", "[RTG][CONTROL] standalone queue-helper control active (MaxRandomBots={}, AccountCount={})",
+                         sPlayerbotAIConfig.maxRandomBots, sPlayerbotAIConfig.randomBotAccountCount);
+                sLoggedStandaloneControl = true;
+            }
+
+            static uint32 sLastLoggedLfgNeed = UINT32_MAX;
+            static uint32 sLastLoggedBgNeed = UINT32_MAX;
+            static uint32 sLastLoggedTarget = UINT32_MAX;
+            static bool sLastLoggedLfgReady = false;
+            static bool sLastLoggedBgReady = false;
+            uint32 loggedLfgNeed = rtgLfgDemand ? lfgNeed : 0u;
+            uint32 loggedBgNeed = rtgBgDemand ? bgNeed : 0u;
+            if (loggedLfgNeed != sLastLoggedLfgNeed || loggedBgNeed != sLastLoggedBgNeed ||
+                maxAllowedBotCount != sLastLoggedTarget || rtgLfgReady != sLastLoggedLfgReady ||
+                rtgBgReady != sLastLoggedBgReady)
+            {
+                LOG_INFO("playerbots", "[RTG][DEMAND] lfgNeed={} bgNeed={} lfgReady={} bgReady={} targetBots={} keepWorld={} autologin={}",
+                         loggedLfgNeed, loggedBgNeed, rtgLfgReady ? 1u : 0u, rtgBgReady ? 1u : 0u,
+                         maxAllowedBotCount, sPlayerbotAIConfig.rtgKeepWorldBots ? 1u : 0u,
+                         sPlayerbotAIConfig.randomBotAutologin ? 1u : 0u);
+                sLastLoggedLfgNeed = loggedLfgNeed;
+                sLastLoggedBgNeed = loggedBgNeed;
+                sLastLoggedTarget = maxAllowedBotCount;
+                sLastLoggedLfgReady = rtgLfgReady;
+                sLastLoggedBgReady = rtgBgReady;
+            }
+        }
     }
 
     GetBots();

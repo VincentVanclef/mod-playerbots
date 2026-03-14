@@ -25,6 +25,11 @@ namespace
         return std::string("rtg_bg_need_") + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+    static std::string RTG_MakeBgRealDemandKey(uint32 queueType, uint32 bracketId)
+    {
+        return std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
     static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
     {
         return std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
@@ -146,6 +151,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 (bgInfo.activeBgQueue || hasRealDemand);
 
             mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
+            mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
 
             uint32 allianceNeed = 0;
             uint32 hordeNeed = 0;
@@ -201,7 +207,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                          uint32(queueTypeId), uint32(bracketId), RTG_GetBgPhaseName(phase), allianceTarget, hordeTarget,
                          queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde,
                          queueRealAlliance, queueRealHorde, minPerTeam, maxPerTeam);
-                LOG_INFO("playerbots", "[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={}",
+                LOG_INFO("playerbots", "[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={} planner=starter_vs_live_handoff",
                          uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u,
                          sPlayerbotAIConfig.rtgEventMaxBots);
             }
