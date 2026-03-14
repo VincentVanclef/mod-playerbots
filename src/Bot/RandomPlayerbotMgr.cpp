@@ -86,11 +86,6 @@ namespace
         LOG_INFO("playerbots", "{}", message);
     }
 
-    static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
-    {
-        return fmt::format("rtg_bg_team_need:{}:{}:{}", queueType, bracketId, teamId);
-    }
-
     static uint32 RTG_GetQueueGraceTtlSeconds()
     {
         return std::max<uint32>(20u, sPlayerbotAIConfig.rtgQueueGraceSeconds);
@@ -316,6 +311,11 @@ namespace
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
+    {
+        return "rtg_bg_team_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
     }
 
     static void RTG_ClearQueueDebuffs(Player* bot)
@@ -1948,25 +1948,11 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
 
         if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
         {
-            if (sPlayerbotAIConfig.rtgEventDriven)
-            {
-                if (sPlayerbotAIConfig.randomBotJoinBG)
-                    sRandomPlayerbotMgr.CheckBgQueue();
-                if (sPlayerbotAIConfig.randomBotJoinLfg)
-                    sRandomPlayerbotMgr.CheckLfgQueue();
-            }
             AddRandomBots();
         }
     }
     else if (availableBotCount < maxAllowedBotCount)
     {
-        if (sPlayerbotAIConfig.rtgEventDriven)
-        {
-            if (sPlayerbotAIConfig.randomBotJoinBG)
-                sRandomPlayerbotMgr.CheckBgQueue();
-            if (sPlayerbotAIConfig.randomBotJoinLfg)
-                sRandomPlayerbotMgr.CheckLfgQueue();
-        }
         AddRandomBots();
     }
 
@@ -2427,10 +2413,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         uint32 onlineHeadroom = maxAllowedBotCount > currentOnline ? (maxAllowedBotCount - currentOnline) : 0u;
         botsToAddThisInterval = std::min(rtgManagedNeed, onlineHeadroom);
 
-        if (rtgManagedNeed || RTG_QueueDebugEnabled())
+        if (RTG_QueueDebugEnabled())
         {
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][HEADROOM] need={} online={} maxAllowed={} headroom={} addInterval={}",
-                rtgManagedNeed, currentOnline, maxAllowedBotCount, onlineHeadroom, botsToAddThisInterval));
+            LOG_INFO("playerbots", "[RTG][ACQUIRE][HEADROOM] need={} online={} maxAllowed={} headroom={} addInterval={}",
+                     rtgManagedNeed, currentOnline, maxAllowedBotCount, onlineHeadroom, botsToAddThisInterval);
         }
     }
 
@@ -2555,10 +2541,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             if (RTG::HasPrefix(addData, "rtg_lfg:"))
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             else if (RTG::HasPrefix(addData, "rtg_bg:"))
-            {
                 SetEventValue(charInfo.guid, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(charInfo.guid, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
-            }
 
             if (!addData.empty())
                 RTG::RegisterPendingHelperLogin(charInfo.guid, charInfo.accountId, addData);
@@ -2770,14 +2754,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             uint32 rtgNow = static_cast<uint32>(time(nullptr));
-            if (RTG_QueueDebugEnabled() || !lfgBuckets.empty() || !bgBuckets.empty())
+            if (RTG_QueueDebugEnabled())
             {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} currentBots={} targetBots={}",
-                    static_cast<uint32>(allCharacters.size()),
-                    static_cast<uint32>(lfgBuckets.size()),
-                    static_cast<uint32>(bgBuckets.size()),
-                    static_cast<uint32>(currentBots.size()),
-                    maxAllowedBotCount));
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} currentBots={} targetBots={}",
+                         static_cast<uint32>(allCharacters.size()),
+                         static_cast<uint32>(lfgBuckets.size()),
+                         static_cast<uint32>(bgBuckets.size()),
+                         static_cast<uint32>(currentBots.size()),
+                         maxAllowedBotCount);
             }
             for (auto& kv : lfgBuckets)
             {
@@ -2797,59 +2781,36 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 bucket.need = needTank + needHeal + needDps;
             }
 
-            for (auto const& queueTypePair : BattlegroundData)
+            for (auto const& qkv : bgQueueTotals)
             {
-                uint32 queueTypeId = queueTypePair.first;
-                if (BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueTypeId)))
-                    continue;
+                uint32 queueTypeId = qkv.first.first;
+                uint32 level = qkv.first.second;
+                uint32 realQueued = qkv.second;
+                BattlegroundBracketId bracketId = bgBrackets[qkv.first];
+                uint32 teamSize = bgTeamSizes[qkv.first];
+                BattlegroundInfo& bgInfo = BattlegroundData[queueTypeId][bracketId];
 
-                for (auto const& bracketPair : queueTypePair.second)
+                for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
                 {
-                    BattlegroundBracketId bracketId = BattlegroundBracketId(bracketPair.first);
-                    BattlegroundInfo const& bgInfo = bracketPair.second;
-                    if (!bgInfo.minLevel)
-                        continue;
-
-                    uint32 level = bgInfo.maxLevel ? bgInfo.maxLevel : bgInfo.minLevel;
-                    uint32 queueRealTotal = bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueHordePlayerCount;
-
-                    for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
+                    auto key = std::make_tuple(queueTypeId, team, level);
+                    auto it = bgBuckets.find(key);
+                    if (it == bgBuckets.end())
                     {
-                        uint32 plannerNeed = GetEventValue(0, RTG_MakeBgTeamNeedKey(queueTypeId, uint32(bracketId), team));
-                        auto key = std::make_tuple(queueTypeId, team, level);
-                        auto it = bgBuckets.find(key);
-                        if (it == bgBuckets.end())
-                        {
-                            RtgBgBucket bucket;
-                            bucket.queueTypeId = queueTypeId;
-                            bucket.team = team;
-                            bucket.level = level;
-                            bucket.bracketId = bracketId;
-                            bucket.teamSize = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount + plannerNeed)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount + plannerNeed);
-                            bucket.realQueued = queueRealTotal;
-                            bucket.currentTeamCount = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-                            it = bgBuckets.emplace(key, bucket).first;
-                        }
-                        else
-                        {
-                            it->second.bracketId = bracketId;
-                            it->second.realQueued = std::max(it->second.realQueued, queueRealTotal);
-                            it->second.currentTeamCount = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-                        }
-
-                        uint32 unresolvedNeed = plannerNeed;
-                        if (it->second.assignedExtra >= unresolvedNeed)
-                            unresolvedNeed = 0u;
-                        else
-                            unresolvedNeed -= it->second.assignedExtra;
-                        it->second.need = unresolvedNeed;
+                        RtgBgBucket bucket;
+                        bucket.queueTypeId = queueTypeId;
+                        bucket.team = team;
+                        bucket.level = level;
+                        bucket.bracketId = bracketId;
+                        bucket.teamSize = teamSize;
+                        bucket.realQueued = realQueued;
+                        bucket.currentTeamCount = (team == TEAM_ALLIANCE)
+                            ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
+                            : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+                        it = bgBuckets.emplace(key, bucket).first;
                     }
+
+                    uint32 alreadyReserved = it->second.currentTeamCount + it->second.assignedExtra;
+                    it->second.need = alreadyReserved < it->second.teamSize ? (it->second.teamSize - alreadyReserved) : 0u;
                 }
             }
 
@@ -3053,18 +3014,18 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
-            if (RTG_QueueDebugEnabled() || totalLfgNeed || totalBgNeed || rtgLfgLogged || rtgBgLogged)
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} remainingCapacity={} totalLfgNeed={} totalBgNeed={}", rtgLfgLogged, rtgBgLogged, remainingCapacity, totalLfgNeed, totalBgNeed));
+            if (RTG_QueueDebugEnabled())
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} remainingCapacity={} totalLfgNeed={} totalBgNeed={}", rtgLfgLogged, rtgBgLogged, remainingCapacity, totalLfgNeed, totalBgNeed);
 
             if (remainingCapacity)
             {
                 if (missingBotsTimer == 0)
                     missingBotsTimer = time(nullptr);
 
-                if (totalLfgNeed || totalBgNeed || RTG_QueueDebugEnabled())
+                if (RTG_QueueDebugEnabled())
                 {
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
-                        remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size())));
+                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
+                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()));
                 }
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
@@ -3249,7 +3210,8 @@ void RandomPlayerbotMgr::CheckBgQueue()
         SetEventValue(0, "rtg_bg_need_total", 0, 0);
         SetEventValue(0, "rtg_bg_start", 0, 0);
 
-        RTG_RuntimeBreadcrumb("[RTG][BG][SKIP] reason=no_real_players_online");
+        if (RTG_QueueDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][BG] skip check: no real players online");
         return;
     }
 
@@ -3636,7 +3598,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         SetEventValue(0, "rtg_lfg_need_total", 0, 0);
         SetEventValue(0, "rtg_lfg_start", 0, 0);
 
-        RTG_RuntimeBreadcrumb("[RTG][RDF][SKIP] reason=no_real_players_online");
+        if (RTG_QueueDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFG] skip check: no real players online");
         return;
     }
 
