@@ -75,7 +75,16 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             uint32 allianceTarget = teamSize;
             uint32 hordeTarget = teamSize;
 
-            if (!bgInfo.activeBgQueue && hasRealDemand)
+            // RTG: once a battleground has actually started, stop treating the template
+            // max team size as unresolved demand. Instead, balance to the larger currently
+            // active side so surplus freshly-logged helpers can be released cleanly.
+            if (activeCurrentAlliance || activeCurrentHorde)
+            {
+                uint32 activeBalanceTarget = std::min<uint32>(teamSize, std::max(activeCurrentAlliance, activeCurrentHorde));
+                allianceTarget = activeBalanceTarget;
+                hordeTarget = activeBalanceTarget;
+            }
+            else if (!bgInfo.activeBgQueue && hasRealDemand)
             {
                 uint32 replacementCap = 3;
                 allianceTarget = std::min<uint32>(teamSize, bgInfo.bgAlliancePlayerCount + replacementCap);
