@@ -84,6 +84,8 @@ namespace
     {
         LOG_WARN("playerbots", "{}", message);
         LOG_INFO("playerbots", "{}", message);
+        LOG_WARN("server.loading", "{}", message);
+        LOG_INFO("server.loading", "{}", message);
     }
 
     static uint32 RTG_GetQueueGraceTtlSeconds()
