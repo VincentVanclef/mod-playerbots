@@ -313,6 +313,11 @@ namespace
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+    static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
+    {
+        return "rtg_bg_team_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
+    }
+
     static void RTG_ClearQueueDebuffs(Player* bot)
     {
         if (!bot)
@@ -2576,8 +2581,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 team = 0;
                 uint32 level = 0;
                 uint32 bracketId = 0;
-                uint32 targetTeamCount = 0;
-                uint32 plannerNeed = 0;
+                uint32 teamSize = 0;
                 uint32 realQueued = 0;
                 uint32 assignedExtra = 0;
                 uint32 currentTeamCount = 0;
@@ -2588,6 +2592,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             std::map<std::pair<uint32, uint32>, uint32> bgQueueTotals;
             std::map<std::tuple<uint32, uint32, uint32>, RtgBgBucket> bgBuckets;
             std::map<std::pair<uint32, uint32>, BattlegroundBracketId> bgBrackets;
+            std::map<std::pair<uint32, uint32>, uint32> bgTeamSizes;
 
             for (Player* player : players)
             {
@@ -2659,54 +2664,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     auto bgKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetLevel()));
                     ++bgQueueTotals[bgKey];
                     bgBrackets[bgKey] = pvpDiff->GetBracketId();
-                }
-            }
-
-            for (auto const& queueTypePair : BattlegroundData)
-            {
-                uint32 queueTypeId = queueTypePair.first;
-                if (BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueTypeId)))
-                    continue;
-
-                for (auto const& bracketPair : queueTypePair.second)
-                {
-                    BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketPair.first);
-                    BattlegroundInfo const& bgInfo = bracketPair.second;
-                    if (!bgInfo.minLevel)
-                        continue;
-
-                    for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
-                    {
-                        std::string needKey = std::string("rtg_bg_team_need:") + std::to_string(queueTypeId) + ":" +
-                                              std::to_string(uint32(bracketId)) + ":" + std::to_string(team);
-                        uint32 plannerNeed = GetEventValue(0, needKey);
-                        if (!plannerNeed)
-                            continue;
-
-                        uint32 level = bgInfo.maxLevel ? bgInfo.maxLevel : bgInfo.minLevel;
-                        auto key = std::make_tuple(queueTypeId, team, level);
-                        RtgBgBucket& bucket = bgBuckets[key];
-                        bucket.queueTypeId = queueTypeId;
-                        bucket.team = team;
-                        bucket.level = level;
-                        bucket.bracketId = uint32(bracketId);
-                        bucket.plannerNeed = plannerNeed;
-                        bucket.realQueued = (team == TEAM_ALLIANCE) ? bgInfo.bgQueueAlliancePlayerCount : bgInfo.bgQueueHordePlayerCount;
-                        bucket.currentTeamCount = (team == TEAM_ALLIANCE)
-                            ? (bgInfo.bgActiveAlliancePlayerCount + bgInfo.bgActiveAllianceBotCount)
-                            : (bgInfo.bgActiveHordePlayerCount + bgInfo.bgActiveHordeBotCount);
-
-                        if (!bucket.currentTeamCount)
-                        {
-                            bucket.currentTeamCount = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueAllianceBotCount)
-                                : (bgInfo.bgQueueHordePlayerCount + bgInfo.bgQueueHordeBotCount);
-                        }
-
-                        uint32 plannerTarget = bucket.currentTeamCount + plannerNeed;
-                        if (plannerTarget > bucket.targetTeamCount)
-                            bucket.targetTeamCount = plannerTarget;
-                    }
+                    bgTeamSizes[bgKey] = bgTemplate->GetMaxPlayersPerTeam();
                 }
             }
 
@@ -2774,23 +2732,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.team = dataTeam;
                         bucket.level = dataLevel;
                         bucket.bracketId = bracketId;
+                        bucket.teamSize = bgTeamSizes[qKey];
                         bucket.realQueued = qit->second;
 
                         BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
                         bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
-                            ? (bgInfo.bgActiveAlliancePlayerCount + bgInfo.bgActiveAllianceBotCount)
-                            : (bgInfo.bgActiveHordePlayerCount + bgInfo.bgActiveHordeBotCount);
-
-                        if (!bucket.currentTeamCount)
-                        {
-                            bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
-                                ? (bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueAllianceBotCount)
-                                : (bgInfo.bgQueueHordePlayerCount + bgInfo.bgQueueHordeBotCount);
-                        }
-
-                        uint32 fallbackTarget = bucket.currentTeamCount + 1u;
-                        if (fallbackTarget > bucket.targetTeamCount)
-                            bucket.targetTeamCount = fallbackTarget;
+                            ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
+                            : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
 
                         it = bgBuckets.emplace(key, bucket).first;
                     }
@@ -2841,6 +2789,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 level = qkv.first.second;
                 uint32 realQueued = qkv.second;
                 BattlegroundBracketId bracketId = bgBrackets[qkv.first];
+                uint32 teamSize = bgTeamSizes[qkv.first];
                 BattlegroundInfo& bgInfo = BattlegroundData[queueTypeId][bracketId];
 
                 for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
@@ -2854,24 +2803,68 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.team = team;
                         bucket.level = level;
                         bucket.bracketId = bracketId;
+                        bucket.teamSize = teamSize;
                         bucket.realQueued = realQueued;
                         bucket.currentTeamCount = (team == TEAM_ALLIANCE)
-                            ? (bgInfo.bgActiveAlliancePlayerCount + bgInfo.bgActiveAllianceBotCount)
-                            : (bgInfo.bgActiveHordePlayerCount + bgInfo.bgActiveHordeBotCount);
-                        if (!bucket.currentTeamCount)
-                        {
-                            bucket.currentTeamCount = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueAllianceBotCount)
-                                : (bgInfo.bgQueueHordePlayerCount + bgInfo.bgQueueHordeBotCount);
-                        }
+                            ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
+                            : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
                         it = bgBuckets.emplace(key, bucket).first;
                     }
 
-                    if (!it->second.targetTeamCount && it->second.plannerNeed)
-                        it->second.targetTeamCount = it->second.currentTeamCount + it->second.plannerNeed;
+                    uint32 plannerNeed = GetEventValue(0, RTG_MakeBgTeamNeedKey(queueTypeId, uint32(bracketId), team));
+                    if (plannerNeed)
+                    {
+                        it->second.need = std::max(it->second.need, plannerNeed);
+                    }
+                    else if (!it->second.need)
+                    {
+                        uint32 alreadyReserved = it->second.currentTeamCount + it->second.assignedExtra;
+                        it->second.need = alreadyReserved < it->second.teamSize ? (it->second.teamSize - alreadyReserved) : 0u;
+                    }
+                }
+            }
 
-                    uint32 alreadyReserved = it->second.currentTeamCount + it->second.assignedExtra;
-                    it->second.need = alreadyReserved < it->second.targetTeamCount ? (it->second.targetTeamCount - alreadyReserved) : 0u;
+            for (auto const& queueTypePair : BattlegroundData)
+            {
+                uint32 queueTypeId = queueTypePair.first;
+                for (auto const& bracketPair : queueTypePair.second)
+                {
+                    BattlegroundBracketId bracketId = BattlegroundBracketId(bracketPair.first);
+                    BattlegroundInfo const& bgInfo = bracketPair.second;
+                    if (!bgInfo.minLevel)
+                        continue;
+
+                    BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueTypeId));
+                    Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+                    uint32 teamSize = bgTemplate ? bgTemplate->GetMaxPlayersPerTeam() : 0u;
+
+                    for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
+                    {
+                        uint32 plannerNeed = GetEventValue(0, RTG_MakeBgTeamNeedKey(queueTypeId, uint32(bracketId), team));
+                        if (!plannerNeed)
+                            continue;
+
+                        auto key = std::make_tuple(queueTypeId, team, uint32(bgInfo.minLevel));
+                        auto it = bgBuckets.find(key);
+                        if (it == bgBuckets.end())
+                        {
+                            RtgBgBucket bucket;
+                            bucket.queueTypeId = queueTypeId;
+                            bucket.team = team;
+                            bucket.level = bgInfo.minLevel;
+                            bucket.bracketId = bracketId;
+                            bucket.teamSize = teamSize;
+                            bucket.realQueued = (team == TEAM_ALLIANCE) ? bgInfo.bgQueueAlliancePlayerCount : bgInfo.bgQueueHordePlayerCount;
+                            bucket.currentTeamCount = (team == TEAM_ALLIANCE)
+                                ? std::max(bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueAllianceBotCount,
+                                           bgInfo.bgActiveAlliancePlayerCount + bgInfo.bgActiveAllianceBotCount)
+                                : std::max(bgInfo.bgQueueHordePlayerCount + bgInfo.bgQueueHordeBotCount,
+                                           bgInfo.bgActiveHordePlayerCount + bgInfo.bgActiveHordeBotCount);
+                            it = bgBuckets.emplace(key, bucket).first;
+                        }
+
+                        it->second.need = std::max(it->second.need, plannerNeed);
+                    }
                 }
             }
 
@@ -2915,8 +2908,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 if (a.need != b.need)
                     return a.need > b.need;
-                if (a.plannerNeed != b.plannerNeed)
-                    return a.plannerNeed > b.plannerNeed;
                 if (a.realQueued != b.realQueued)
                     return a.realQueued > b.realQueued;
                 if (a.queueTypeId != b.queueTypeId)
@@ -3060,6 +3051,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     --capacity;
                     --remainingCapacity;
                     ++bucket.assignedExtra;
+                    if (bucket.need)
+                        --bucket.need;
                     return true;
                 }
                 return false;
@@ -3067,11 +3060,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             for (RtgBgBucket& bucket : orderedBgBuckets)
             {
-                while (bgCapacity && remainingCapacity)
+                while (bgCapacity && remainingCapacity && bucket.need)
                 {
-                    uint32 alreadyReserved = bucket.currentTeamCount + bucket.assignedExtra;
-                    if (alreadyReserved >= bucket.targetTeamCount)
-                        break;
                     if (!tryFillBgBucket(bucket, bgCapacity))
                         break;
                 }
