@@ -323,6 +323,7 @@ namespace
 
         bot->RemoveAura(26013); // Deserter
         bot->RemoveAura(71041); // Dungeon Deserter
+        bot->RemoveAura(71328); // LFG Deserter / cooldown-style dungeon penalty
     }
 
     static void RTG_PrepareBotForLogout(Player* bot)
@@ -465,29 +466,6 @@ namespace
             return BattlegroundQueueTypeId(desiredQueueType);
 
         return BATTLEGROUND_QUEUE_NONE;
-    }
-
-
-    static bool RTG_ForceLeaveBgQueue(Player* bot, BattlegroundQueueTypeId queueTypeId)
-    {
-        if (!bot || !bot->GetSession())
-            return false;
-        if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
-            return false;
-
-        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
-        uint8 type = false;
-        uint16 unk = 0x1F90;
-        uint8 unk2 = 0x0;
-
-        ArenaType arenaType = ArenaType(BattlegroundMgr::BGArenaType(queueTypeId));
-        if (arenaType)
-            type = arenaType;
-
-        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
-        packet << type << unk2 << (uint32)bgTypeId << unk << uint8(0);
-        bot->GetSession()->QueuePacket(new WorldPacket(packet));
-        return true;
     }
 }
 
@@ -1701,35 +1679,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
 
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
-            uint32 bgPhase = 0;
-            if (desiredBgType != BATTLEGROUND_TYPE_NONE)
-            {
-                if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
-                {
-                    if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
-                        bgPhase = GetEventValue(0, RTG_MakeBgPhaseKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId())));
-                }
-            }
             bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || !rtgBgReady || wrongTeam || bgTeamNeed == 0;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
-            bool queuedForDesired = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType));
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {
                 RTG::SyncBgHelperState(bot, desiredQueueType, BG_BRACKET_ID_FIRST, nullptr);
                 RTG::RtgQueueLedger::Instance().ClearRetireRequest(botId);
-            }
-
-            if (noLongerNeeded && bgPhase == 0 && queuedForDesired && !bot->InBattleground() && !bot->IsInvitedForBattlegroundInstance())
-            {
-                RTG_ForceLeaveBgQueue(bot, BattlegroundQueueTypeId(desiredQueueType));
-                SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                SetEventValue(botId, "rtg_bg_dispatch_retry", 0, 0);
-                SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-                rtgBgLogout.push_back(botGuid);
-                if (RTG_QueueDebugEnabled())
-                    RTG_WorldLog("[RTG][BG][ORPHAN] helper={} queue={} team={} phase={} action=force_leave_and_logout", botId, desiredQueueType, desiredTeam, bgPhase);
-                continue;
             }
 
             // Layer 2: lifecycle safety. If battleground state still owns this helper,
@@ -2463,17 +2419,21 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
     uint32 botsToAddThisInterval = 0;
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        uint32 hardOnlineCap = GetMaxAllowedBotCount();
-        uint32 hardHeadroom = hardOnlineCap > currentBots.size() ? (hardOnlineCap - currentBots.size()) : 0u;
-        uint32 rtgIncrementalNeed = std::min<uint32>(GetEventValue(0, "rtg_lfg_need_total") + GetEventValue(0, "rtg_bg_need_total"), sPlayerbotAIConfig.rtgEventMaxBots);
-        botsToAddThisInterval = std::min<uint32>(rtgIncrementalNeed, hardHeadroom);
-
-        if (sPlayerbotAIConfig.rtgKeepWorldBots)
+        uint32 rtgManagedNeed = std::min<uint32>(GetEventValue(0, "rtg_lfg_need_total") + GetEventValue(0, "rtg_bg_need_total"), sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 rtgManagedOnline = 0;
+        for (uint32 botId : currentBots)
         {
-            uint32 targetGap = maxAllowedBotCount > currentBots.size() ? (maxAllowedBotCount - currentBots.size()) : 0u;
-            if (targetGap > botsToAddThisInterval)
-                botsToAddThisInterval = std::min<uint32>(targetGap, hardHeadroom);
+            std::string addData = GetEventData(botId, "add");
+            if (RTG::IsQueueManagedAddData(addData) || GetEventValue(botId, "rtg_dungeon_active") || GetEventValue(botId, "rtg_bg_pending") || GetEventValue(botId, "rtg_lfg_pending"))
+                ++rtgManagedOnline;
         }
+
+        if (rtgManagedNeed > rtgManagedOnline)
+            botsToAddThisInterval = rtgManagedNeed - rtgManagedOnline;
+
+        uint32 targetGap = maxAllowedBotCount > currentBots.size() ? (maxAllowedBotCount - currentBots.size()) : 0u;
+        if (targetGap > botsToAddThisInterval)
+            botsToAddThisInterval = targetGap;
     }
 
     if ((sPlayerbotAIConfig.rtgEventDriven && botsToAddThisInterval > 0) || (!sPlayerbotAIConfig.rtgEventDriven && currentBots.size() < maxAllowedBotCount))
@@ -2483,7 +2443,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             maxAllowedBotCount = botsToAddThisInterval;
         else
             maxAllowedBotCount -= currentBots.size();
-        maxAllowedBotCount = std::min(sPlayerbotAIConfig.randomBotsPerInterval, maxAllowedBotCount);
+
+        // RTG queue assistance must be able to burst-log helpers for startup and refill
+        // demand. Stock randomBotsPerInterval pacing is kept for legacy randombot churn,
+        // but event-driven RTG helper demand uses the full computed interval need here.
+        if (!sPlayerbotAIConfig.rtgEventDriven)
+            maxAllowedBotCount = std::min(sPlayerbotAIConfig.randomBotsPerInterval, maxAllowedBotCount);
+        else if (RTG_QueueDebugEnabled())
+            RTG_WorldLog("[RTG][ACQUIRE][BURST] requested={} cap={} reason=event_driven", maxAllowedBotCount, maxAllowedBotCount);
 
         // Single RNG instance for all shuffling
         std::mt19937 rng(std::chrono::steady_clock::now().time_since_epoch().count());
