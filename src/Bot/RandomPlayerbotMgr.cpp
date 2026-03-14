@@ -34,6 +34,7 @@
 #include "DatabaseEnv.h"
 #include "Define.h"
 #include "FleeManager.h"
+#include "Event.h"
 #include "FlightMasterCache.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
@@ -289,6 +290,30 @@ namespace
     static void RTG_WorldLog(std::string const& fmt, Args&&... args)
     {
         LOG_INFO("server.loading", fmt, std::forward<Args>(args)...);
+    }
+
+    static bool RTG_DispatchBgJoinNow(Player* bot, uint32 queueType, char const* reason)
+    {
+        if (!bot || !queueType)
+            return false;
+
+        if ((!bot->IsInWorld() && !bot->IsBeingTeleported()) || bot->InBattleground())
+            return false;
+
+        if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(queueType)))
+            return false;
+
+        PlayerbotAI* ai = GET_PLAYERBOT_AI(bot);
+        if (!ai)
+            return false;
+
+        ai->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(queueType);
+        bool result = ai->DoSpecificAction("bg join", Event(), true);
+
+        if (RTG_QueueDebugEnabled())
+            RTG_WorldLog("[RTG][QUEUE][DISPATCH] helper={} queue={} reason={} result={}", bot->GetGUID().GetCounter(), queueType, reason ? reason : "unknown", result ? 1 : 0);
+
+        return result;
     }
 
     static void RTG_ClearQueueDebuffs(Player* bot)
@@ -701,6 +726,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "add", 0, 0);
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_dispatch_retry", 0, 0);
         SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
     }
 
@@ -1691,6 +1717,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (!noLongerNeeded)
                 {
                     SetEventValue(botId, "rtg_bg_pending", 1, 15, addData);
+
+                    if (!lifecycleOwned && !bot->InBattleground() && !bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)))
+                    {
+                        if (!GetEventValue(botId, "rtg_bg_dispatch_retry"))
+                        {
+                            RTG_DispatchBgJoinNow(bot, desiredQueueType, "pending_retry");
+                            SetEventValue(botId, "rtg_bg_dispatch_retry", 1, 2);
+                        }
+                    }
                     continue;
                 }
 
@@ -5527,6 +5562,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_dispatch_retry", 0, 0);
+            RTG_DispatchBgJoinNow(bot, desiredQueueType, "login_success");
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {

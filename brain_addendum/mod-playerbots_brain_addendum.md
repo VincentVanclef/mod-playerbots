@@ -1,142 +1,124 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: 1.0.0
+Module Version: 2.3.7f
 RTG Brain Compatibility Version: 5.4.0
-Commit Title: Restore worldserver RTG breadcrumbs and stabilize planner demand state
-Commit Description: Rebuilds the current queue-assistance pass on the uploaded mod-playerbots source by keeping the standalone RTG control path intact, routing key RTG breadcrumbs to a worldserver-visible log channel, and hardening battleground planner state cleanup so stale queue/bracket demand keys do not linger after demand disappears.
+Commit Title: Immediate BG queue burst dispatch for RTG helpers
+Commit Description: Restores near-simultaneous battleground helper queueing by dispatching battleground join immediately on helper login and retrying pending helpers on a short cadence while demand still exists.
 
 --------------------------------
 
 ## Module Purpose
 
-Provide RTG standalone queue assistance for battleground and dungeon helper bots inside mod-playerbots, allowing offline helpers to be acquired, logged in, queued, protected, and retired according to real realm demand instead of generic randombot churn.
+This revision improves RTG battleground startup responsiveness so helpers do not drift into slow staggered queue joins after logging in.
 
 --------------------------------
 
 ## Architecture Overview
 
-- RandomPlayerbotMgr remains the live runtime controller for helper login/logout and ownership handoff.
-- RtgBgQueuePlanner computes battleground demand and writes event-cache keys consumed by the manager.
-- Event-cache keys are the integration seam between planner math and helper lifecycle.
-- BattleGroundJoinAction contains the leave-guard for protected RTG BG helpers.
+- `RandomPlayerbotMgr` remains the live RTG helper acquisition and retention controller.
+- Battleground planner still computes demand and team targets.
+- This revision adds a direct post-login queue-dispatch path plus a short pending retry loop for online helpers.
 
 --------------------------------
 
 ## Runtime Control Path
 
 real player queues
-→ CheckBgQueue refreshes BattlegroundData
-→ RtgBgQueuePlanner writes phase + per-team need + global need events
-→ UpdateAIInternal recalculates RTG target bot budget
-→ RandomPlayerbotMgr acquires offline helpers for BG/LFG buckets
-→ helper login stamps pending state and queue ownership
-→ helper queues / enters BG
-→ cleanup releases only when demand and ownership state allow it
+→ planner computes BG demand
+→ RTG acquires helpers
+→ helper logs in
+→ `RandomPlayerbotMgr::OnBotLoginInternal` dispatches `bg join` immediately
+→ pending helpers retry dispatch every short interval until queued or demand disappears
+→ normal lifecycle / retirement rules apply afterward
 
 --------------------------------
 
 ## Data Structures
 
-- `RtgBgQueuePlanner`
-- `RtgBgBucket`
-- `RtgLfgBucket`
-- event keys:
-  - `rtg_bg_need_total`
-  - `rtg_bg_real_demand:<queue>:<bracket>`
-  - `rtg_bg_team_need:<queue>:<bracket>:<team>`
-  - `rtg_bg_phase:<queue>:<bracket>`
+- existing RTG event cache entries
+- `rtg_bg_pending`
+- `rtg_bg_dispatch_retry`
+- existing BG planner demand keys
 
 --------------------------------
 
 ## Config Interface
 
-Used / relied on in this revision:
+No new config entries in this revision.
 
-- `AiPlayerbot.Enabled`
-- `AiPlayerbot.RandomBotAutologin`
-- `AiPlayerbot.MaxRandomBots`
-- `AiPlayerbot.RandomBotAccountCount`
-- `AiPlayerbot.RandomBotJoinBG`
+Relevant existing config:
 - `AiPlayerbot.RTG.EventDriven.Enable`
 - `AiPlayerbot.RTG.EventDriven.Debug`
 - `AiPlayerbot.RTG.SmartQueue.Enable`
 - `AiPlayerbot.RTG.QueueGraceSeconds`
-- `AiPlayerbot.RTG.QueueOwnership.Enable`
-- `AiPlayerbot.RTG.QueueOwnership.Debug`
+- `AiPlayerbot.MaxRandomBots`
+- `AiPlayerbot.RandomBotAutologin`
 
 --------------------------------
 
 ## Database Structures
 
-Uses read-only access to `world.battleground_template` to obtain battleground-specific startup minima/maxima.
+Uses existing battleground planner inputs only. Module currently uses no new DB persistence.
 
 --------------------------------
 
 ## Integration Points
 
 - `RandomPlayerbotMgr`
-- `RtgBgQueuePlanner`
+- `PlayerbotAI::DoSpecificAction`
 - `BattleGroundJoinAction`
-- `BattlegroundMgr`
-- `WorldDatabase`
-- RTG Brain 5.4.0 queue-assistance doctrine and module addendum
+- RTG battleground planner demand events
 
 --------------------------------
 
 ## Lifecycle Model
 
-- Startup demand is planner-driven and DB-backed.
-- Helpers are acquired as offline candidates and brought online through the manager.
-- Planner events are explicitly cleared when queue/bracket pairs disappear so stale helpers can lose protection.
-- Key RTG breadcrumbs now route through a worldserver-visible channel for runtime verification.
+Helpers stay RTG-owned through pending queue work, but now receive an immediate queue action on login and a short retry pulse while pending and still needed.
 
 --------------------------------
 
 ## Known Constraints
 
-- Still depends on the mod-playerbots event-cache and acquisition path in `RandomPlayerbotMgr`.
-- BG helper behavior remains sensitive to queue/bracket accounting and battleground core timing.
-- This revision intentionally preserves the currently working standalone RTG runtime gate rather than redesigning the whole subsystem.
+- Requires the RTG standalone control tick to already be working.
+- Assumes `bg join` action is valid immediately after bot login on this branch.
+- Retry cadence is event-driven and intentionally short to favor synchronized startup pops.
 
 --------------------------------
 
 ## Future Evolution Hooks
 
-- Dedicated phase transition from startup fill to invite-pop to mature live refill.
-- Stronger per-helper stale classification and synchronized release waves.
-- Optional cache refresh/invalidation for battleground template data if DB values change at runtime.
+- Burst dispatch grouping by queue/bracket/team
+- Explicit invite detection metrics
+- Smarter retry backoff for mature live-refill phases
 
 --------------------------------
 
 ## Files Modified In This Revision
 
 - `src/Bot/RandomPlayerbotMgr.cpp`
-- `src/Bot/RtgBgQueuePlanner.cpp`
-- `src/Ai/Base/Actions/BattleGroundJoinAction.cpp`
 - `brain_addendum/mod-playerbots_brain_addendum.md`
 
 --------------------------------
 
 ## Behavioral Changes In This Revision
 
-- RTG control, demand, planner, and acquisition breadcrumbs are routed to `server.loading` so they show in worldserver more reliably.
-- Planner now clears stale queue/bracket event keys when previously-seen battleground demand pairs disappear.
-- This reduces stale demand state after unqueue / demand collapse and makes runtime diagnosis easier.
+- BG helpers now attempt queue join immediately on login.
+- Pending helpers retry queue join on a short cadence instead of idling until slower generic AI timing catches up.
+- Queue-dispatch breadcrumbs now show login-success and pending-retry reasons.
 
 --------------------------------
 
 ## Test Plan
 
-1. Build and restart worldserver.
-2. Confirm `[RTG][CONTROL]` appears in worldserver when RTG standalone mode is enabled.
-3. Queue solo for WSG and EOTS.
-4. Confirm `[RTG][BG][PHASE]`, `[RTG][BG][DEMAND]`, `[RTG][DEMAND]`, and `[RTG][BG][ACQUIRE]` appear in worldserver.
-5. For EOTS, verify startup uses DB-backed minimum team size and emits both per-team demand figures.
-6. Unqueue and confirm planner demand collapses and stale queue/bracket keys are cleared.
+1. Start worldserver with standalone RTG queue assistance enabled.
+2. Queue solo for WSG and confirm multiple helpers log in and queue nearly together.
+3. Watch for `[RTG][QUEUE][DISPATCH]` lines with `reason=login_success` across the acquired helper set.
+4. Confirm remaining pending helpers emit `reason=pending_retry` if they are not queued immediately.
+5. Repeat with EOTS and verify startup is no longer slow/staggered.
 
 --------------------------------
 
 ## Notes For RTG Brain Ingestion
 
-This revision is intentionally conservative. It treats the uploaded mod-playerbots source as truth, preserves the known-good standalone RTG gate, and focuses on two things the user explicitly needs for safe iteration: dependable worldserver breadcrumbs and planner state cleanup when battleground demand disappears.
+This revision is intentionally narrow: it restores synchronized queue burst behavior without redesigning planner demand. It should be evaluated on top of the currently working visible-logging standalone RTG baseline.
