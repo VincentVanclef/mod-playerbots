@@ -2,26 +2,22 @@
 
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "DatabaseEnv.h"
 #include "PlayerbotAIConfig.h"
 #include "RandomPlayerbotMgr.h"
-#include "DatabaseEnv.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <ctime>
+#include <mutex>
 #include <string>
 #include <unordered_map>
-#include <mutex>
-#include <fmt/format.h>
 
 namespace
 {
-    enum RTG_BgDemandPhase : uint32
+    struct RTG_BgTemplateBounds
     {
-        RTG_BG_PHASE_DORMANT = 0,
-        RTG_BG_PHASE_STARTER_FILL = 1,
-        RTG_BG_PHASE_POP_OR_INVITE = 2,
-        RTG_BG_PHASE_LIVE_REFILL = 3,
+        uint32 minPerTeam = 0;
+        uint32 maxPerTeam = 0;
     };
 
     static std::string RTG_MakeBgDemandKey_Overlay(uint32 queueType, uint32 bracketId)
@@ -29,88 +25,74 @@ namespace
         return std::string("rtg_bg_need_") + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
-    static std::string RTG_MakeBgPhaseKey_Overlay(uint32 queueType, uint32 bracketId)
+    static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
     {
-        return std::string("rtg_bg_phase_") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+        return std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
     }
 
-    static char const* RTG_BgPhaseName(uint32 phase)
+    static std::string RTG_MakeBgPhaseKey(uint32 queueType, uint32 bracketId)
+    {
+        return std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static char const* RTG_GetBgPhaseName(uint32 phase)
     {
         switch (phase)
         {
-            case RTG_BG_PHASE_STARTER_FILL: return "starter_fill";
-            case RTG_BG_PHASE_POP_OR_INVITE: return "pop_or_invite";
-            case RTG_BG_PHASE_LIVE_REFILL: return "live_refill";
+            case 1: return "starter_fill";
+            case 2: return "pop_or_invite";
+            case 3: return "live_refill";
             default: return "dormant";
         }
     }
 
-    struct RTG_BgTemplateTeamBounds
+    static RTG_BgTemplateBounds RTG_GetFallbackBounds(Battleground* bgTemplate)
     {
-        uint32 minPlayersPerTeam = 0;
-        uint32 maxPlayersPerTeam = 0;
-    };
+        RTG_BgTemplateBounds bounds;
+        if (!bgTemplate)
+            return bounds;
 
-    static std::unordered_map<uint32, RTG_BgTemplateTeamBounds>& RTG_GetBgTemplateBoundsCache()
-    {
-        static std::unordered_map<uint32, RTG_BgTemplateTeamBounds> cache;
-        static std::once_flag once;
-
-        std::call_once(once, []()
-        {
-            if (QueryResult result = WorldDatabase.Query("SELECT `ID`, `MinPlayersPerTeam`, `MaxPlayersPerTeam` FROM `battleground_template`"))
-            {
-                do
-                {
-                    Field* fields = result->Fetch();
-                    uint32 id = fields[0].Get<uint32>();
-                    RTG_BgTemplateTeamBounds bounds;
-                    bounds.minPlayersPerTeam = fields[1].Get<uint16>();
-                    bounds.maxPlayersPerTeam = fields[2].Get<uint16>();
-                    cache[id] = bounds;
-                } while (result->NextRow());
-            }
-        });
-
-        return cache;
-    }
-
-    static RTG_BgTemplateTeamBounds RTG_GetBgTemplateTeamBounds(uint32 bgTemplateId, uint32 fallbackMaxPlayersPerTeam)
-    {
-        RTG_BgTemplateTeamBounds bounds;
-        bounds.maxPlayersPerTeam = fallbackMaxPlayersPerTeam;
-
-        auto const& cache = RTG_GetBgTemplateBoundsCache();
-        if (auto itr = cache.find(bgTemplateId); itr != cache.end())
-        {
-            bounds = itr->second;
-            if (!bounds.maxPlayersPerTeam)
-                bounds.maxPlayersPerTeam = fallbackMaxPlayersPerTeam;
-        }
-
-        if (!bounds.minPlayersPerTeam)
-        {
-            if (bounds.maxPlayersPerTeam <= 5)
-                bounds.minPlayersPerTeam = bounds.maxPlayersPerTeam;
-            else if (bounds.maxPlayersPerTeam <= 15)
-                bounds.minPlayersPerTeam = 5;
-            else
-                bounds.minPlayersPerTeam = 10;
-        }
-
+        bounds.maxPerTeam = bgTemplate->GetMaxPlayersPerTeam();
+        bounds.minPerTeam = bounds.maxPerTeam;
         return bounds;
     }
 
-    static void RTG_PlannerBreadcrumb(std::string const& message)
+    static RTG_BgTemplateBounds RTG_GetBgTemplateBounds(BattlegroundTypeId bgTypeId, Battleground* bgTemplate)
     {
-        LOG_ERROR("server.loading", "{}", message);
-        LOG_WARN("server.loading", "{}", message);
-        LOG_INFO("server.loading", "{}", message);
-        LOG_ERROR("playerbots", "{}", message);
-        LOG_WARN("playerbots", "{}", message);
-        LOG_INFO("playerbots", "{}", message);
-        std::fprintf(stderr, "%s\n", message.c_str());
-        std::fflush(stderr);
+        static std::once_flag once;
+        static std::unordered_map<uint32, RTG_BgTemplateBounds> cache;
+
+        std::call_once(once, []()
+        {
+            QueryResult result = WorldDatabase.Query("SELECT `ID`, `MinPlayersPerTeam`, `MaxPlayersPerTeam` FROM `battleground_template`");
+            if (!result)
+                return;
+
+            do
+            {
+                Field* fields = result->Fetch();
+                RTG_BgTemplateBounds bounds;
+                uint32 id = fields[0].Get<uint32>();
+                bounds.minPerTeam = fields[1].Get<uint16>();
+                bounds.maxPerTeam = fields[2].Get<uint16>();
+                cache[id] = bounds;
+            } while (result->NextRow());
+        });
+
+        auto it = cache.find(uint32(bgTypeId));
+        if (it != cache.end())
+        {
+            RTG_BgTemplateBounds bounds = it->second;
+            if (!bounds.maxPerTeam && bgTemplate)
+                bounds.maxPerTeam = bgTemplate->GetMaxPlayersPerTeam();
+            if (!bounds.minPerTeam)
+                bounds.minPerTeam = bounds.maxPerTeam;
+            if (bounds.minPerTeam > bounds.maxPerTeam)
+                bounds.minPerTeam = bounds.maxPerTeam;
+            return bounds;
+        }
+
+        return RTG_GetFallbackBounds(bgTemplate);
     }
 }
 
@@ -136,9 +118,10 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
         if (!bgTemplate)
             continue;
 
-        RTG_BgTemplateTeamBounds templateBounds = RTG_GetBgTemplateTeamBounds(uint32(bgTypeId), bgTemplate->GetMaxPlayersPerTeam());
-        uint32 teamSize = templateBounds.maxPlayersPerTeam;
-        uint32 starterFloorPerTeam = std::min<uint32>(teamSize, templateBounds.minPlayersPerTeam);
+        RTG_BgTemplateBounds bounds = RTG_GetBgTemplateBounds(bgTypeId, bgTemplate);
+        uint32 minPerTeam = bounds.minPerTeam;
+        uint32 maxPerTeam = bounds.maxPerTeam;
+
         for (auto const& bracketIdPair : queueTypePair.second)
         {
             BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketIdPair.first);
@@ -161,76 +144,73 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             bool queueOrMatchActive = sPlayerbotAIConfig.rtgSmartQueue ?
                 (bgInfo.activeBgQueue || activeCurrentAlliance || activeCurrentHorde || queueCurrentAlliance || queueCurrentHorde) :
                 (bgInfo.activeBgQueue || hasRealDemand);
+
             mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
+
+            uint32 allianceNeed = 0;
+            uint32 hordeNeed = 0;
+            uint32 phase = 0;
+            uint32 allianceTarget = 0;
+            uint32 hordeTarget = 0;
+
+            if (queueOrMatchActive)
+            {
+                if (activeCurrentAlliance || activeCurrentHorde)
+                {
+                    phase = 3; // live_refill
+                    uint32 liveTarget = std::max(activeCurrentAlliance, activeCurrentHorde);
+                    if (minPerTeam)
+                        liveTarget = std::max(liveTarget, minPerTeam);
+                    if (maxPerTeam)
+                        liveTarget = std::min(liveTarget, maxPerTeam);
+                    allianceTarget = liveTarget;
+                    hordeTarget = liveTarget;
+                    allianceNeed = allianceTarget > activeCurrentAlliance ? (allianceTarget - activeCurrentAlliance) : 0u;
+                    hordeNeed = hordeTarget > activeCurrentHorde ? (hordeTarget - activeCurrentHorde) : 0u;
+                }
+                else
+                {
+                    phase = (queueCurrentAlliance || queueCurrentHorde || bgInfo.activeBgQueue) ? 2u : 1u; // pop_or_invite : starter_fill
+                    uint32 realQueuePeak = std::max(queueRealAlliance, queueRealHorde);
+                    uint32 startupTarget = std::max(minPerTeam, realQueuePeak);
+                    if (maxPerTeam)
+                        startupTarget = std::min(startupTarget, maxPerTeam);
+                    allianceTarget = startupTarget;
+                    hordeTarget = startupTarget;
+                    allianceNeed = allianceTarget > queueCurrentAlliance ? (allianceTarget - queueCurrentAlliance) : 0u;
+                    hordeNeed = hordeTarget > queueCurrentHorde ? (hordeTarget - queueCurrentHorde) : 0u;
+                }
+            }
+
+            mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_ALLIANCE)), allianceNeed, allianceNeed ? ttl : 0);
+            mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_HORDE)), hordeNeed, hordeNeed ? ttl : 0);
+            mgr.RTG_SetGlobalEvent(RTG_MakeBgPhaseKey(uint32(queueTypeId), uint32(bracketId)), phase, phase ? ttl : 0, RTG_GetBgPhaseName(phase));
+
             if (!queueOrMatchActive)
                 continue;
 
             if (hasRealDemand)
                 anyRealBgDemand = true;
 
-            uint32 demandPhase = RTG_BG_PHASE_DORMANT;
-            uint32 allianceCurrent = 0;
-            uint32 hordeCurrent = 0;
-            uint32 allianceTarget = 0;
-            uint32 hordeTarget = 0;
-            uint32 realQueuePeak = std::max(queueRealAlliance, queueRealHorde);
-            uint32 startupTargetPerTeam = std::min<uint32>(teamSize, std::max(starterFloorPerTeam, realQueuePeak));
+            rtgBgNeedTotal += allianceNeed + hordeNeed;
 
-            if (activeCurrentAlliance || activeCurrentHorde)
+            if (sPlayerbotAIConfig.rtgEventDebug)
             {
-                demandPhase = RTG_BG_PHASE_LIVE_REFILL;
-                uint32 liveBalanceTarget = std::max(activeCurrentAlliance, activeCurrentHorde);
-                allianceTarget = std::min<uint32>(teamSize, liveBalanceTarget);
-                hordeTarget = std::min<uint32>(teamSize, liveBalanceTarget);
-                allianceCurrent = activeCurrentAlliance;
-                hordeCurrent = activeCurrentHorde;
+                LOG_INFO("playerbots",
+                         "[RTG][BG][PHASE] queue={} bracket={} phase={} targetA={} targetH={} queueA={} queueH={} activeA={} activeH={} realQueueA={} realQueueH={} minPerTeam={} maxPerTeam={}",
+                         uint32(queueTypeId), uint32(bracketId), RTG_GetBgPhaseName(phase), allianceTarget, hordeTarget,
+                         queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde,
+                         queueRealAlliance, queueRealHorde, minPerTeam, maxPerTeam);
+                LOG_INFO("playerbots", "[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={}",
+                         uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u,
+                         sPlayerbotAIConfig.rtgEventMaxBots);
             }
-            else if (hasRealDemand && (queueCurrentAlliance || queueCurrentHorde || bgInfo.activeBgQueue))
-            {
-                demandPhase = RTG_BG_PHASE_POP_OR_INVITE;
-                allianceTarget = startupTargetPerTeam;
-                hordeTarget = startupTargetPerTeam;
-                allianceCurrent = queueCurrentAlliance;
-                hordeCurrent = queueCurrentHorde;
-            }
-            else if (hasRealDemand)
-            {
-                demandPhase = RTG_BG_PHASE_STARTER_FILL;
-                allianceTarget = startupTargetPerTeam;
-                hordeTarget = startupTargetPerTeam;
-                allianceCurrent = queueCurrentAlliance;
-                hordeCurrent = queueCurrentHorde;
-            }
-
-            std::string phaseKey = RTG_MakeBgPhaseKey_Overlay(uint32(queueTypeId), uint32(bracketId));
-            uint32 previousPhase = mgr.RTG_GetGlobalEvent(phaseKey);
-            mgr.RTG_SetGlobalEvent(phaseKey, demandPhase, ttl);
-            if (previousPhase != demandPhase)
-            {
-                RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][PHASE] queue={} bgTemplate={} bracket={} phase={} targetA={} targetH={} minPerTeam={} maxPerTeam={} queueA={} queueH={} activeA={} activeH={} realQueueA={} realQueueH={}",
-                    uint32(queueTypeId), uint32(bgTypeId), uint32(bracketId), RTG_BgPhaseName(demandPhase), allianceTarget, hordeTarget, starterFloorPerTeam, teamSize,
-                    queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde, queueRealAlliance, queueRealHorde));
-            }
-
-            if (allianceCurrent < allianceTarget)
-                rtgBgNeedTotal += (allianceTarget - allianceCurrent);
-
-            if (hordeCurrent < hordeTarget)
-                rtgBgNeedTotal += (hordeTarget - hordeCurrent);
         }
     }
 
-    uint32 cappedBgNeedTotal = std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots);
-    uint32 previousBgNeedTotal = mgr.RTG_GetGlobalEvent("rtg_bg_need_total");
-
     mgr.RTG_SetGlobalEvent("rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl);
     mgr.RTG_SetGlobalEvent("rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
-    mgr.RTG_SetGlobalEvent("rtg_bg_need_total", cappedBgNeedTotal, ttl);
-
-    if (previousBgNeedTotal != cappedBgNeedTotal)
-    {
-        RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][DEMAND] totalNeed={} anyRealDemand={} maxBots={} planner=starter_vs_live_handoff source=battleground_template", cappedBgNeedTotal, anyRealBgDemand ? 1 : 0, sPlayerbotAIConfig.rtgEventMaxBots));
-    }
+    mgr.RTG_SetGlobalEvent("rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
 
     if (anyRealBgDemand && rtgBgNeedTotal)
     {
@@ -242,7 +222,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
     else
     {
         mgr.RTG_SetGlobalEvent("rtg_bg_start", 0, 0);
-		mgr.RTG_SetGlobalEvent("rtg_bg_need_total", 0, 0);
+        mgr.RTG_SetGlobalEvent("rtg_bg_need_total", 0, 0);
     }
 }
 }
