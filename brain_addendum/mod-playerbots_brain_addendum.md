@@ -1,10 +1,10 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: 2.3.8j
+Module Version: 2.3.8i
 RTG Brain Compatibility Version: 5.4.0
-Commit Title: Restore planner-first RTG ticks and always-on queue breadcrumbs
-Commit Description: Repairs RTG queue assistance by running BG/RDF planner refresh before helper acquisition, restoring always-on RTG demand and acquisition breadcrumbs, and keeping battleground planner phase/demand logs visible without requiring debug-only flags.
+Commit Title: Restore planner-driven BG acquisition ticks and always-on RTG breadcrumbs
+Commit Description: Repairs RTG queue assistance after post-2.3.8 regressions by refreshing BG/RDF planner state before acquisition, consuming planner-authored per-team BG need directly during acquisition, and restoring visible acquisition breadcrumbs even when verbose debug is off.
 
 --------------------------------
 
