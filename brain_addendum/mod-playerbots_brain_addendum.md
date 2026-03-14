@@ -1,50 +1,51 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: RTG Queue Assistance 2.3.4
+Module Version: RTG Queue Assistance 2.3.6
 RTG Brain Compatibility Version: 2.3.0
-Commit Title: Surface RTG breadcrumbs and add battleground demand phase handoff
-Commit Description: Routes RTG runtime breadcrumbs through a worldserver-visible log channel and upgrades battleground demand planning to use explicit maturity phases so started battlegrounds hand off from starter-fill logic to live refill logic.
+Commit Title: Protect active BG helpers and recycle stale live-refill outsiders
+Commit Description: Builds on the 2.3.4 planner/logging baseline without the 2.3.5 regression. This revision blocks RTG battleground helpers from voluntarily leaving active battlegrounds and recycles stale outside-instance helpers during live refill so freed slots can be replaced by fresh refill helpers.
 
 --------------------------------
 
 ## Module Purpose
 
-This module revision improves RTG queue-assistance observability and battleground maturity handling. It helps operators see RTG control-path activity in worldserver logs and makes battleground demand evolve as a battleground moves from queue formation to live-match refill behavior.
+This revision keeps RTG battleground helpers inside live battlegrounds once they are part of the active match, while also ensuring stale outside helpers do not consume limited MaxRandomBots capacity during mature refill demand.
 
 --------------------------------
 
 ## Architecture Overview
 
-- RandomPlayerbotMgr remains the live runtime controller for RTG helper acquisition, queue dispatch, protection, and retirement.
-- RtgBgQueuePlanner computes battleground helper demand and now assigns a maturity phase per battleground queue bucket.
-- RTG breadcrumbs are emitted through both playerbots and server.loading log channels for better visibility.
-- RTG queue ownership and lifecycle protection continue to live in the in-memory queue ledger and lifecycle helpers.
+- RandomPlayerbotMgr remains the live runtime controller for helper acquisition, login, queue dispatch, protection, and retirement.
+- RtgBgQueuePlanner continues to compute battleground demand phases, including live_refill for active matches.
+- BattleGroundJoinAction now treats RTG-owned helpers as protected participants that should not voluntarily abandon active battlegrounds.
+- Mature battleground refill can now recycle stale outside helpers when they stop making progress and are blocking refill capacity.
 
 --------------------------------
 
 ## Runtime Control Path
 
-real player battleground activity
-→ RandomPlayerbotMgr updates battleground snapshots
-→ RtgBgQueuePlanner computes demand phase and helper need
-→ RTG helper acquisition / login runs
-→ helpers queue immediately
-→ planner transitions from starter fill to pop/invite to live refill as the battleground matures
-→ surplus helpers can release while active-side imbalance can still request refill helpers
+real player queues battleground
+→ planner computes starter fill / pop demand
+→ helpers log in and queue
+→ battleground starts and planner transitions to live_refill
+→ helpers inside active BG are protected from voluntary leave
+→ stale outside helpers in live_refill are recycled
+→ freed slots allow replacement helpers to log in if refill demand still exists
 
 --------------------------------
 
 ## Data Structures
 
-- BattlegroundInfo
-  - queue and active player/bot counters used by the planner
-- RTG battleground demand phase key
+- RTG battleground phase key
   - `rtg_bg_phase_<queue>:<bracket>`
-- RTG global helper demand key
-  - `rtg_bg_need_<queue>:<bracket>`
+- RTG battleground helper event flags
+  - `rtg_bg_pending`
+  - `rtg_bg_queue_grace`
+  - `rtg_bg_queue_retry`
+  - `rtg_bg_retire_when_safe`
 - RtgQueueLedger / RtgHelperLedgerEntry
-  - in-memory helper ownership and lifecycle state
+  - in-memory ownership/lifecycle tracking remains authoritative
 
 --------------------------------
 
@@ -56,11 +57,11 @@ Documented and used by this revision:
 - `AiPlayerbot.RTG.SmartQueue.Enable`
 - `AiPlayerbot.RTG.QueueGraceSeconds`
 - `AiPlayerbot.RTG.QueueOwnership.Enable`
-- `AiPlayerbot.RTG.QueueOwnership.Debug`
 - `AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds`
 - `AiPlayerbot.RTG.EventDriven.Debug`
+- `AiPlayerbot.MaxRandomBots`
 
-This revision does not add new config keys.
+This revision adds no new config keys.
 
 --------------------------------
 
@@ -72,71 +73,64 @@ Module currently uses no DB persistence.
 
 ## Integration Points
 
-- RandomPlayerbotMgr
-- RtgBgQueuePlanner
-- RtgQueueLifecycle
-- BattlegroundMgr / Battleground templates
-- worldserver logging channels (`playerbots`, `server.loading`)
+- `RandomPlayerbotMgr`
+- `RtgBgQueuePlanner`
+- `BattleGroundJoinAction` / `BGStatusAction`
+- battleground runtime status and queue APIs
 
 --------------------------------
 
 ## Lifecycle Model
 
-RTG battleground helpers remain lifecycle-owned in memory. This revision improves the planner side of lifecycle control by changing how helper demand is interpreted based on battleground maturity:
-
-- starter_fill: build the first pop
-- pop_or_invite: queue is live and invitations / final fill are in flight
-- live_refill: battleground has active players; demand becomes refill/balance-oriented instead of template-max starter fill
+- RTG helpers inside an active battleground are protected from voluntary leave until the battleground reaches `STATUS_WAIT_LEAVE`.
+- RTG helpers outside the battleground during live_refill are allowed only a brief retry window.
+- If such a helper is still outside and not queued once the retry window expires, it is recycled so a replacement helper can take its slot.
 
 --------------------------------
 
 ## Known Constraints
 
-- Requires mod-playerbots and the RTG queue-assistance code path already present in the branch.
-- Runtime breadcrumb visibility still depends on the server writing standard logging output to worldserver logs.
-- Planner maturity is inferred from queue and active participant counts already collected in BattlegroundInfo.
+- This revision intentionally targets battleground helper behavior only.
+- Dungeon/RDF removal policy is not changed here.
+- Refill quality still depends on battleground snapshots collected by the current mod-playerbots branch.
 
 --------------------------------
 
 ## Future Evolution Hooks
 
-- explicit invite-window phase if the branch later exposes stronger pop-state signals
-- battleground-instance-specific refill ownership
-- smarter side-aware refill targeting based on deserter / disconnect / late-join patterns
-- scoreboard / worldpvp integration for helper demand visualization
+- explicit battleground instance ownership for refill helpers
+- synchronized end-of-match release waves
+- side-priority refill based on score differential / attrition pressure
 
 --------------------------------
 
 ## Files Modified In This Revision
 
 - `src/Bot/RandomPlayerbotMgr.cpp`
-- `src/Bot/RtgBgQueuePlanner.cpp`
+- `src/Ai/Base/Actions/BattleGroundJoinAction.cpp`
 - `brain_addendum/mod-playerbots_brain_addendum.md`
 
 --------------------------------
 
 ## Behavioral Changes In This Revision
 
-- RTG breadcrumbs are emitted to `server.loading` in addition to `playerbots`.
-- Battleground planner now tracks demand maturity phases per queue bucket.
-- Once a battleground has active players, demand switches to live-refill behavior and uses active-side counts instead of queue-side counts.
-- Phase transitions and total battleground demand changes now emit visible RTG planner breadcrumbs.
+- RTG battleground helpers no longer voluntarily leave active battlegrounds.
+- Outside stale helpers in live_refill are recycled after their retry window instead of occupying `MaxRandomBots` slots indefinitely.
+- This revision is designed to preserve the successful 2.3.4 mass-login/mass-queue behavior while fixing match attrition and refill starvation.
 
 --------------------------------
 
 ## Test Plan
 
-1. Build and start worldserver with RTG event-driven queue assistance enabled.
-2. Queue one real player into WSG.
-3. Verify worldserver shows RTG planner/control breadcrumbs.
-4. Confirm helpers log in and queue.
-5. Allow WSG to pop.
-6. Verify phase transitions appear, especially movement into `live_refill` after the battleground starts.
-7. Confirm helpers outside the battleground are no longer kept alive by stale starter-fill demand.
-8. Confirm started battlegrounds can still request refill demand if live-side imbalance appears.
+1. Build and start worldserver with the 2.3.4-style standalone RTG configuration.
+2. Queue one real player into WSG and confirm mass helper login/queue still happens.
+3. Allow the battleground to start.
+4. Confirm helpers inside the active battleground do not voluntarily leave.
+5. If one helper remains outside the battleground during live_refill, confirm it is eventually recycled and a replacement can log in if demand remains.
+6. Confirm end-of-match cleanup still occurs.
 
 --------------------------------
 
 ## Notes For RTG Brain Ingestion
 
-This revision introduces the semantic rule that battleground helper demand is not static. Demand must mature with the battleground lifecycle. Starter-fill logic is appropriate before a battleground begins, but once a battleground is active the planner should hand off to refill/balance logic keyed off active participants, not queued-but-outside helpers.
+The key semantic rule added by this revision is that active battleground participants and stale outside-instance helpers are different lifecycle classes. Active participants should be sticky; stale outsiders should be recyclable. Treating them the same causes both match collapse and refill starvation under limited MaxRandomBots capacity.

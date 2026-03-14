@@ -53,24 +53,6 @@ namespace
         return true;
     }
 
-    static bool RTG_IsProtectedBgHelper(Player* bot)
-    {
-        if (!bot || !sPlayerbotAIConfig.rtgEventDriven || !sRandomPlayerbotMgr.IsRandomBot(bot))
-            return false;
-
-        uint32 botId = bot->GetGUID().GetCounter();
-        uint32 team = 0;
-        uint32 level = 0;
-        uint32 queueType = 0;
-        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
-        if (!RTG_ParseBgBotAssignment(addData, team, level, queueType))
-            return false;
-
-        return bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance() ||
-               bot->InBattlegroundQueue() || sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
-               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_queue_grace");
-    }
-
     static BattlegroundQueueTypeId RTG_FindBotQueueTypeForLeave(Player* bot)
     {
         if (!bot)
@@ -92,6 +74,21 @@ namespace
             return BattlegroundQueueTypeId(queueType);
 
         return BATTLEGROUND_QUEUE_NONE;
+    }
+
+    static bool RTG_IsProtectedBgHelper(Player* bot)
+    {
+        if (!bot || !sPlayerbotAIConfig.rtgEventDriven || !sRandomPlayerbotMgr.IsRandomBot(bot))
+            return false;
+
+        uint32 botId = bot->GetGUID().GetCounter();
+        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") != 0)
+            return true;
+        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_retire_when_safe") != 0)
+            return true;
+
+        uint32 queueType = 0;
+        return RTG_GetAssignedBgQueue(bot, queueType) && queueType != 0;
     }
 }
 
@@ -794,11 +791,11 @@ bool BGLeaveAction::Execute(Event event)
     if (!(bot->InBattlegroundQueue() || bot->InBattleground()))
         return false;
 
-    Battleground* activeBg = bot->GetBattleground();
-    if (RTG_IsProtectedBgHelper(bot) && activeBg && activeBg->GetStatus() != STATUS_WAIT_LEAVE)
+    Battleground* currentBg = bot->GetBattleground();
+    if (currentBg && currentBg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
-        LOG_ERROR("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} bg={} status={} action=queue_or_bg_leave", bot->GetGUID().GetCounter(), uint32(activeBg->GetBgTypeID()), uint32(activeBg->GetStatus()));
-        LOG_ERROR("playerbots", "[RTG][BG][LEAVE][BLOCK] helper={} bg={} status={} action=queue_or_bg_leave", bot->GetGUID().GetCounter(), uint32(activeBg->GetBgTypeID()), uint32(activeBg->GetStatus()));
+        LOG_INFO("playerbots", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
+            bot->GetGUID().GetCounter(), uint32(currentBg->GetStatus()), currentBg->GetMapId());
         return false;
     }
 
@@ -856,10 +853,10 @@ bool BGStatusAction::LeaveBG(PlayerbotAI* botAI)
     if (!bg)
         return false;
 
-    if (RTG_IsProtectedBgHelper(bot) && bg->GetStatus() != STATUS_WAIT_LEAVE)
+    if (bg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
-        LOG_ERROR("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} bg={} status={} action=leave_bg", bot->GetGUID().GetCounter(), uint32(bg->GetBgTypeID()), uint32(bg->GetStatus()));
-        LOG_ERROR("playerbots", "[RTG][BG][LEAVE][BLOCK] helper={} bg={} status={} action=leave_bg", bot->GetGUID().GetCounter(), uint32(bg->GetBgTypeID()), uint32(bg->GetStatus()));
+        LOG_INFO("playerbots", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
+            bot->GetGUID().GetCounter(), uint32(bg->GetStatus()), bg->GetMapId());
         return false;
     }
     bool isArena = bg->isArena();
