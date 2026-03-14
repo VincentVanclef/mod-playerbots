@@ -28,6 +28,34 @@ static bool RTG_IsActivelyOwnedHelperState(RtgHelperState state)
     }
 }
 
+static bool RTG_IsOrphanQueuedBgHelper(Player* bot, RtgHelperLedgerEntry const& entry)
+{
+    if (!bot)
+        return false;
+
+    if (!(bot->InBattlegroundQueue() || bot->InBattlegroundQueueForBattlegroundQueueType(entry.target.queueTypeId)))
+        return false;
+
+    if (bot->InBattleground() || bot->InArena() || (bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena()))
+        return false;
+
+    if (entry.target.queueTypeId <= BATTLEGROUND_QUEUE_NONE)
+        return false;
+
+    uint32 queueType = uint32(entry.target.queueTypeId);
+    uint32 bracketId = uint32(entry.target.bracketId);
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) != 0)
+        return false;
+
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) != 0)
+        return false;
+
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending") != 0)
+        return false;
+
+    return true;
+}
+
 static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry const& entry)
 {
     if (!bot)
@@ -203,21 +231,23 @@ RtgLifecycleResult EvaluateRetire(Player* bot, uint32 retireRetrySeconds)
         return result;
     }
 
-    if (RTG_HelperHasOutstandingDemand(bot, *entry) ||
+    bool orphanQueuedBgHelper = RTG_IsOrphanQueuedBgHelper(bot, *entry);
+
+    if ((RTG_HelperHasOutstandingDemand(bot, *entry) && !orphanQueuedBgHelper) ||
         entry->ownerType == RtgHelperOwnerType::Battleground ||
         entry->state == RtgHelperState::InBattleground ||
         entry->state == RtgHelperState::Invited ||
-        entry->state == RtgHelperState::Queued ||
+        (entry->state == RtgHelperState::Queued && !orphanQueuedBgHelper) ||
         entry->state == RtgHelperState::LoggingIn)
     {
         result.decision = RtgLifecycleDecision::Delay;
         result.retryAfterMs = retireRetrySeconds * IN_MILLISECONDS;
-        result.reason = RTG_HelperHasOutstandingDemand(bot, *entry) ? "helper still owned by active RTG queue demand" : "helper still lifecycle-owned by battleground state";
+        result.reason = (RTG_HelperHasOutstandingDemand(bot, *entry) && !orphanQueuedBgHelper) ? "helper still owned by active RTG queue demand" : "helper still lifecycle-owned by battleground state";
         return result;
     }
 
     result.decision = RtgLifecycleDecision::Allow;
-    result.reason = "safe to retire";
+    result.reason = orphanQueuedBgHelper ? "orphan queued helper with no real demand" : "safe to retire";
     return result;
 }
 
