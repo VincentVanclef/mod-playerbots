@@ -6,8 +6,10 @@
 #include "RandomPlayerbotMgr.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <ctime>
 #include <string>
+#include <fmt/format.h>
 
 namespace
 {
@@ -38,6 +40,18 @@ namespace
             case RTG_BG_PHASE_LIVE_REFILL: return "live_refill";
             default: return "dormant";
         }
+    }
+
+    static void RTG_PlannerBreadcrumb(std::string const& message)
+    {
+        LOG_ERROR("server.loading", "{}", message);
+        LOG_WARN("server.loading", "{}", message);
+        LOG_INFO("server.loading", "{}", message);
+        LOG_ERROR("playerbots", "{}", message);
+        LOG_WARN("playerbots", "{}", message);
+        LOG_INFO("playerbots", "{}", message);
+        std::fprintf(stderr, "%s\n", message.c_str());
+        std::fflush(stderr);
     }
 }
 
@@ -127,10 +141,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             mgr.RTG_SetGlobalEvent(phaseKey, demandPhase, ttl);
             if (previousPhase != demandPhase)
             {
-                LOG_WARN("server.loading", "[RTG][BG][PHASE] queue={} bracket={} phase={} queueA={} queueH={} activeA={} activeH={}",
-                    uint32(queueTypeId), uint32(bracketId), RTG_BgPhaseName(demandPhase), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde);
-                LOG_INFO("playerbots", "[RTG][BG][PHASE] queue={} bracket={} phase={} queueA={} queueH={} activeA={} activeH={}",
-                    uint32(queueTypeId), uint32(bracketId), RTG_BgPhaseName(demandPhase), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde);
+                RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][PHASE] queue={} bracket={} phase={} queueA={} queueH={} activeA={} activeH={}",
+                    uint32(queueTypeId), uint32(bracketId), RTG_BgPhaseName(demandPhase), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde));
             }
 
             if (allianceCurrent < allianceTarget)
@@ -150,8 +162,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
     if (previousBgNeedTotal != cappedBgNeedTotal)
     {
-        LOG_WARN("server.loading", "[RTG][BG][DEMAND] totalNeed={} anyRealDemand={} maxBots={}", cappedBgNeedTotal, anyRealBgDemand ? 1 : 0, sPlayerbotAIConfig.rtgEventMaxBots);
-        LOG_INFO("playerbots", "[RTG][BG][DEMAND] totalNeed={} anyRealDemand={} maxBots={}", cappedBgNeedTotal, anyRealBgDemand ? 1 : 0, sPlayerbotAIConfig.rtgEventMaxBots);
+        RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][DEMAND] totalNeed={} anyRealDemand={} maxBots={}", cappedBgNeedTotal, anyRealBgDemand ? 1 : 0, sPlayerbotAIConfig.rtgEventMaxBots));
     }
 
     if (anyRealBgDemand && rtgBgNeedTotal)

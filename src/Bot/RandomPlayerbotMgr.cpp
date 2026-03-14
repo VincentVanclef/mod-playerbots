@@ -12,6 +12,7 @@
 #include <thread>
 #include <shared_mutex>
 #include <cstdlib>
+#include <cstdio>
 #include <cmath>
 #include <ctime>
 #include <iomanip>
@@ -82,10 +83,14 @@ namespace
 
     static void RTG_RuntimeBreadcrumb(std::string const& message)
     {
+        LOG_ERROR("playerbots", "{}", message);
         LOG_WARN("playerbots", "{}", message);
         LOG_INFO("playerbots", "{}", message);
+        LOG_ERROR("server.loading", "{}", message);
         LOG_WARN("server.loading", "{}", message);
         LOG_INFO("server.loading", "{}", message);
+        std::fprintf(stderr, "%s\n", message.c_str());
+        std::fflush(stderr);
     }
 
     static uint32 RTG_GetQueueGraceTtlSeconds()
@@ -313,6 +318,16 @@ namespace
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static constexpr uint32 RTG_BG_PHASE_DORMANT = 0;
+    static constexpr uint32 RTG_BG_PHASE_STARTER_FILL = 1;
+    static constexpr uint32 RTG_BG_PHASE_POP_OR_INVITE = 2;
+    static constexpr uint32 RTG_BG_PHASE_LIVE_REFILL = 3;
+
+    static std::string RTG_MakeBgPhaseKey(uint32 queueType, uint32 bracketId)
+    {
+        return "rtg_bg_phase_" + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
     static void RTG_ClearQueueDebuffs(Player* bot)
@@ -682,6 +697,34 @@ uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
     return count;
 }
 
+static void RTG_ForceReleaseBgHelper(RandomPlayerbotMgr& mgr, Player* bot, char const* reason)
+{
+    if (!bot)
+        return;
+
+    uint32 botId = bot->GetGUID().GetCounter();
+    std::string addData = mgr.RTG_GetBotEventData(botId, "add");
+    mgr.RTG_SetBotEventValue(botId, "rtg_bg_pending", 0, 0);
+    mgr.RTG_SetBotEventValue(botId, "rtg_bg_queue_grace", 0, 0);
+    mgr.RTG_SetBotEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+    mgr.RTG_SetBotEventValue(botId, "rtg_bg_queue_miss", 0, 0);
+    mgr.RTG_SetBotEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+
+    if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+    {
+        RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
+        if (ledger.Has(botId))
+        {
+            ledger.ClearRetireRequest(botId);
+            ledger.ClearOwnership(botId, reason ? reason : "rtg force release");
+            ledger.Protect(botId, 0, reason ? reason : "rtg force release");
+            ledger.MarkState(botId, RTG::RtgHelperState::WorldIdle, reason ? reason : "rtg force release");
+        }
+    }
+
+    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RELEASE] helper={} reason={} add='{}'", botId, reason ? reason : "rtg_force_release", addData));
+}
+
 bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
 {
     Player* bot = GetPlayerBot(guid);
@@ -725,6 +768,9 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "add", 0, 0);
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
+        SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+        SetEventValue(botId, "rtg_bg_queue_miss", 0, 0);
         SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
     }
 
@@ -1651,16 +1697,21 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
 
             bool bgHasRealDemand = false;
+            uint32 demandPhase = RTG_BG_PHASE_DORMANT;
             BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
             if (desiredBgType != BATTLEGROUND_TYPE_NONE)
             {
                 if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
                 {
                     if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
+                    {
                         bgHasRealDemand = GetEventValue(0, RTG_MakeBgDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
+                        demandPhase = GetEventValue(0, RTG_MakeBgPhaseKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId())));
+                    }
                 }
             }
 
+            bool liveRefillPhase = demandPhase == RTG_BG_PHASE_LIVE_REFILL;
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
             bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || !rtgBgReady || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
@@ -1675,6 +1726,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
 
+            if (inQueueState)
+                SetEventValue(botId, "rtg_bg_queue_miss", 0, 0);
+
             if (!noLongerNeeded && !inQueueState)
             {
                 SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
@@ -1682,14 +1736,35 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                 if (!GetEventValue(botId, "rtg_bg_queue_retry"))
                 {
-                    bool queuedNow = RTG_DispatchImmediateBgQueueJoin(bot, desiredQueueType, queueGrace ? "queue_retry" : "login_or_idle");
+                    bool queuedNow = RTG_DispatchImmediateBgQueueJoin(bot, desiredQueueType, liveRefillPhase ? "live_refill" : (queueGrace ? "queue_retry" : "login_or_idle"));
                     SetEventValue(botId, "rtg_bg_queue_retry", 1, RTG_GetQueueRetryWindowSeconds(), addData);
                     if (queuedNow)
                     {
                         SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                         SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
+                        SetEventValue(botId, "rtg_bg_queue_miss", 0, 0);
+                    }
+                    else if (liveRefillPhase)
+                    {
+                        uint32 missCount = GetEventValue(botId, "rtg_bg_queue_miss") + 1;
+                        SetEventValue(botId, "rtg_bg_queue_miss", missCount, 45, addData);
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][MISS] helper={} queue={} phase=live_refill miss={} team={}", botId, desiredQueueType, missCount, bot->GetTeamId()));
                     }
                 }
+
+                if (liveRefillPhase && GetEventValue(botId, "rtg_bg_queue_miss") >= 2)
+                {
+                    RTG_ForceReleaseBgHelper(*this, bot, "bg live refill stale outside instance");
+                    rtgBgLogout.push_back(botGuid);
+                    continue;
+                }
+            }
+
+            if (noLongerNeeded && !inQueueState && !lifecycleOwned)
+            {
+                RTG_ForceReleaseBgHelper(*this, bot, liveRefillPhase ? "bg surplus helper after refill handoff" : "bg demand gone or helper invalid");
+                rtgBgLogout.push_back(botGuid);
+                continue;
             }
 
             // Layer 2: lifecycle safety. If battleground state still owns this helper,
@@ -5701,6 +5776,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
+    SetEventValue(bot, "rtg_bg_queue_miss", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     currentBots.remove(bot);
