@@ -1,49 +1,53 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: 2.3.8p
+Module Version: 2.3.8q
 RTG Brain Compatibility Version: 5.4.0
-Commit Title: Honor planner team demand and alternate BG helper acquisition across factions
-Commit Description: Fixes RTG battleground startup skew where acquisition could consume the full helper burst into a single faction. BG acquisition now reads planner-authored per-team need keys and fills BG buckets round-robin so Alliance and Horde unresolved demand are both honored during startup and mature ramp.
+Commit Title: Restore RTG queue runtime baseline and apply focused BG acquisition repair
+Commit Description: Repairs the standalone RTG queue-helper runtime so logs and helper acquisition remain active with RandomBotAutologin disabled, runs planners before acquisition, restores visible RTG breadcrumbs, re-separates RTG helper cap handling from stock target drift, and applies a focused battleground per-team acquisition repair that honors planner team-need keys without re-expanding legacy randombot behavior.
 
 --------------------------------
 
 ## Module Purpose
 
-This revision repairs a battleground acquisition skew in RTG queue assistance where helper bursts could all be consumed by one faction even when the planner was explicitly publishing unresolved need for both teams. The goal is to make startup fill and mature ramp honor planner team demand instead of accidentally starving one side.
+This revision restores the playable RTG queue-assistance baseline for battlegrounds and RDF after repeated regressions in the queue runtime control path. The purpose of this pass is not a broad rewrite. It is a focused recovery pass that preserves the live RTG event-driven architecture while repairing the exact baseline needed for logs, helper login, and planner-to-acquisition handoff.
 
 --------------------------------
 
 ## Architecture Overview
 
-- `RandomPlayerbotMgr` remains the live runtime manager for helper acquisition, login, dispatch, and retirement.
-- `RtgBgQueuePlanner` remains the planner authority for battleground team demand.
-- RTG battleground acquisition now consumes planner-authored per-team need keys first.
-- BG helper login no longer drains the whole burst into the first large bucket; it iterates round-robin across queued team buckets.
+- `RandomPlayerbotMgr` remains the live runtime manager for queue observation, helper acquisition, login, dispatch, and safe retirement.
+- `RtgBgQueuePlanner` remains the RTG battleground demand planner and authoritative writer of battleground team-need event keys.
+- RTG helper intent continues to flow through `add` event metadata (`rtg_bg:*` and `rtg_lfg:*`).
+- RTG queue ownership and lifecycle protection remain separate from demand planning.
+- Stock randombot churn behavior is not reintroduced.
 
 --------------------------------
 
 ## Runtime Control Path
 
-real player creates BG or RDF demand
-→ planner computes unresolved RTG helper demand
-→ BG planner publishes `rtg_bg_team_need:<queue>:<bracket>:<team>`
+real player queue activity
+→ RTG BG/RDF planners refresh demand state first
 → RTG runtime computes `rtg_target`
-→ acquisition reads `rtg_target`
-→ BG helper acquisition consumes unresolved per-team planner need
-→ acquisition alternates across available BG buckets until burst capacity or team need is exhausted
+→ `AddRandomBots()` consumes RTG demand using RTG headroom instead of stock bot-count drift
+→ helper login begins with RTG metadata attached
+→ login success dispatches helper into BG or RDF flow
+→ lifecycle/ownership protection keeps helper alive until queue/BG/group state is safely resolved
 
 --------------------------------
 
 ## Data Structures
 
-- Existing RTG runtime event keys:
+- `BattlegroundData`
+- `RtgHelperLedgerEntry`
+- `RtgHelperState`
+- `RtgHelperOwnerType`
+- `RtgHelperPurpose`
+- RTG event markers used in this revision:
   - `rtg_target`
-  - `rtg_lfg_need_total`
   - `rtg_bg_need_total`
+  - `rtg_lfg_need_total`
   - `rtg_bg_team_need:<queue>:<bracket>:<team>`
-- Existing helper metadata:
-  - `add`
   - `rtg_bg_pending`
   - `rtg_bg_queue_grace`
   - `rtg_lfg_pending`
@@ -52,54 +56,64 @@ real player creates BG or RDF demand
 
 ## Config Interface
 
-Primary RTG authority settings for this revision:
+This revision relies on existing settings:
 
 - `AiPlayerbot.RTG.EventDriven.Enable`
 - `AiPlayerbot.RTG.EventDriven.MaxBots`
-- `AiPlayerbot.RTG.EventDriven.KeepWorldBots`
+- `AiPlayerbot.RTG.SmartQueue.Enable`
 - `AiPlayerbot.RTG.QueueGraceSeconds`
+- `AiPlayerbot.RTG.QueueOwnership.Enable`
 - `AiPlayerbot.RandomBotAutologin`
+- `AiPlayerbot.RandomBotJoinBG`
+- `AiPlayerbot.RandomBotJoinLfg`
 - `AiPlayerbot.RandomBotAccountCount`
+- `AiPlayerbot.MaxRandomBots`
 
-Important rule formalized by this revision:
-
-- When `AiPlayerbot.RTG.EventDriven.Enable = 1`, RTG helper acquisition must not be capped by stock `bot_count` churn state or `AiPlayerbot.MaxRandomBots` randomization logic.
+When RTG event-driven mode is enabled, helper acquisition in this revision is again controlled by RTG runtime target state instead of drifting back to stock randombot target authority.
 
 --------------------------------
 
 ## Database Structures
 
-No new DB structures. Battleground minima/maxima still come from cached `world.battleground_template` reads.
+Module currently uses no DB persistence for this revision.
 
 --------------------------------
 
 ## Integration Points
 
 - `src/Bot/RandomPlayerbotMgr.cpp`
-- RTG planner event cache
-- existing helper queue metadata / lifecycle path
+- `src/Bot/RtgBgQueuePlanner.cpp`
+- battleground queue / battleground manager APIs
+- LFG manager role and queue APIs
+- RTG queue ownership / lifecycle helpers already present in module
 
 --------------------------------
 
 ## Lifecycle Model
 
-This revision does not change retirement doctrine. It changes battleground acquisition distribution so helper bursts respect unresolved planner demand on both factions instead of front-loading all helpers into the first bucket visited.
+- Planners write queue demand first.
+- Acquisition reads RTG demand and RTG target headroom.
+- BG helper metadata is attached only inside the BG helper path.
+- BG acquisition honors planner-authored per-team need when available.
+- BG bucket fill alternates across unresolved team buckets instead of draining one faction first.
+- No helper retirement semantics were loosened in this revision.
 
 --------------------------------
 
 ## Known Constraints
 
-- RTG standalone queue assistance still depends on helper account supply.
-- If `rtg_target` is zero, no helpers will be acquired.
-- `AiPlayerbot.RTG.EventDriven.KeepWorldBots` can still reserve world bots on top of event demand according to existing RTG runtime policy.
+- This revision is a focused runtime-repair pass, not the final RDF refill/state-machine pass.
+- RDF initial demand and acquisition telemetry remain active, but deeper RDF refill/role-check recovery still belongs to later focused work.
+- BG helper faction balance now depends on planner-authored team-need keys remaining accurate.
 
 --------------------------------
 
 ## Future Evolution Hooks
 
-- Dedicated RDF planner buckets equivalent to mature BG team-need handling.
-- Explicit queue-family fairness budget when BG and RDF both demand helpers at the same time.
-- Additional BG telemetry line showing planner team need versus assigned helper count per bucket.
+- RDF orphan cleanup and replacement refill pass
+- forced role-check and requeue role selection for RDF helpers
+- extraction of more RTG queue policy out of `RandomPlayerbotMgr` and into overlay-owned queue components
+- stronger queue audit telemetry for helper ownership and retirement reasons
 
 --------------------------------
 
@@ -112,26 +126,39 @@ This revision does not change retirement doctrine. It changes battleground acqui
 
 ## Behavioral Changes In This Revision
 
-- BG acquisition now reads planner-authored `rtg_bg_team_need:<queue>:<bracket>:<team>` first when computing unresolved battleground need.
-- BG helper burst fill now proceeds round-robin across team buckets instead of exhausting one faction bucket before the other.
-- Startup fill and later mature ramp now preserve faction balance much more closely when both teams need helpers.
-- Existing fallback logic still remains if a planner team-need key is absent.
+- Standalone RTG runtime now stays alive when `AiPlayerbot.RandomBotAutologin = 0`.
+- BG and RDF planners run before helper acquisition in the live update cycle.
+- Critical RTG breadcrumbs are mirrored into `server.loading` as well as `playerbots`.
+- RTG acquisition headroom uses `rtg_target` again instead of stock random bot count drift.
+- BG helper metadata scoping is corrected so `rtg_bg_queue_grace` is only applied to BG helpers.
+- BG acquisition uses planner-authored team-need keys when present and fills unresolved BG buckets round-robin across factions.
 
 ## Test Plan
 
 1. Set `AiPlayerbot.RTG.EventDriven.Enable = 1`.
 2. Set `AiPlayerbot.RTG.EventDriven.MaxBots = 60`.
 3. Set `AiPlayerbot.RandomBotAutologin = 0`.
-4. Keep `AiPlayerbot.RandomBotAccountCount` high enough for helper supply.
-5. Restart `worldserver`.
-6. Queue one real level-19 player into Eye of the Storm.
-7. Confirm planner shows demand on both factions, for example Alliance need plus Horde need.
-8. Confirm acquisition no longer logs a whole startup burst to only one team.
-9. Confirm startup fill approaches the expected split instead of `queueH=13 queueA=1` style skew.
-10. Confirm later mature phases continue to add helpers to the team that still has unresolved planner need.
+4. Keep `AiPlayerbot.RandomBotAccountCount` high enough to supply helpers.
+5. Enable `AiPlayerbot.RandomBotJoinBG = 1` and `AiPlayerbot.RandomBotJoinLfg = 1`.
+6. Restart `worldserver`.
+7. Confirm startup breadcrumbs appear:
+   - `[RTG][CONTROL] queue runtime initialized ...`
+   - `[RTG][CONTROL] standalone queue-helper control active ...`
+8. With no real players online, confirm idle breadcrumbs appear:
+   - `[RTG][BG][IDLE] skip_check=no_real_players`
+   - `[RTG][LFG][IDLE] skip_check=no_real_players`
+9. Queue one real level-19 player into a battleground.
+10. Confirm planner and acquisition breadcrumbs appear in order:
+    - `[RTG][BG][PHASE]`
+    - `[RTG][BG][DEMAND]`
+    - `[RTG][ACQUIRE][HEADROOM]`
+    - `[RTG][ACQUIRE][PLAN]`
+    - `[RTG][ACQUIRE][RESULT]`
+11. Confirm helpers no longer all spawn to one faction when both Alliance and Horde need are non-zero.
+12. Queue RDF and confirm `[RTG][RDF][DEMAND]` and RDF helper acquisition still appear.
 
 --------------------------------
 
 ## Notes For RTG Brain Ingestion
 
-This revision formalizes another important RTG queue-assistance rule: **planner-authored battleground team demand must remain the authority for faction-side helper acquisition**. When both teams need support, helper burst distribution must not collapse into whichever bucket happens to be visited first.
+This revision should be treated as a baseline-recovery checkpoint, not a final queue-assistance milestone. The key semantic repair is that RTG queue runtime control, RTG planner timing, and RTG per-team BG acquisition are again aligned to RTG-owned event truth instead of silently drifting back to stock randombot control paths.
