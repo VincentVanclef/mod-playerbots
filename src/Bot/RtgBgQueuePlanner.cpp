@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <ctime>
 #include <mutex>
+#include <set>
 #include <string>
 #include <unordered_map>
 
@@ -49,6 +50,17 @@ namespace
             case 3: return "live_refill";
             default: return "dormant";
         }
+    }
+
+    template <typename... Args>
+    static void RTG_WorldLog(std::string const& fmt, Args&&... args)
+    {
+        LOG_INFO("server.loading", fmt, std::forward<Args>(args)...);
+    }
+
+    static uint64 RTG_MakeSeenKey(uint32 queueType, uint32 bracketId)
+    {
+        return (uint64(queueType) << 32) | uint64(bracketId);
     }
 
     static RTG_BgTemplateBounds RTG_GetFallbackBounds(Battleground* bgTemplate)
@@ -111,6 +123,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
     uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
     uint32 rtgBgNeedTotal = 0;
     bool anyRealBgDemand = false;
+    std::set<uint64> seenKeys;
+    static std::set<uint64> sPrevSeenKeys;
 
     for (auto const& queueTypePair : mgr.BattlegroundData)
     {
@@ -130,6 +144,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
         for (auto const& bracketIdPair : queueTypePair.second)
         {
             BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketIdPair.first);
+            seenKeys.insert(RTG_MakeSeenKey(uint32(queueTypeId), uint32(bracketId)));
             BattlegroundInfo const& bgInfo = bracketIdPair.second;
             if (!bgInfo.minLevel)
                 continue;
@@ -202,17 +217,33 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
             if (sPlayerbotAIConfig.rtgEventDebug)
             {
-                LOG_INFO("playerbots",
-                         "[RTG][BG][PHASE] queue={} bracket={} phase={} targetA={} targetH={} queueA={} queueH={} activeA={} activeH={} realQueueA={} realQueueH={} minPerTeam={} maxPerTeam={}",
+                RTG_WorldLog("[RTG][BG][PHASE] queue={} bracket={} phase={} targetA={} targetH={} queueA={} queueH={} activeA={} activeH={} realQueueA={} realQueueH={} minPerTeam={} maxPerTeam={}",
                          uint32(queueTypeId), uint32(bracketId), RTG_GetBgPhaseName(phase), allianceTarget, hordeTarget,
                          queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde,
                          queueRealAlliance, queueRealHorde, minPerTeam, maxPerTeam);
-                LOG_INFO("playerbots", "[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={} planner=starter_vs_live_handoff",
+                RTG_WorldLog("[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={} planner=starter_vs_live_handoff",
                          uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u,
                          sPlayerbotAIConfig.rtgEventMaxBots);
             }
         }
     }
+
+    for (uint64 staleKey : sPrevSeenKeys)
+    {
+        if (seenKeys.find(staleKey) != seenKeys.end())
+            continue;
+
+        uint32 queueType = uint32(staleKey >> 32);
+        uint32 bracketId = uint32(staleKey & 0xFFFFFFFFu);
+        mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(queueType, bracketId), 0, 0);
+        mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(queueType, bracketId), 0, 0);
+        mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(queueType, bracketId, uint32(TEAM_ALLIANCE)), 0, 0);
+        mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(queueType, bracketId, uint32(TEAM_HORDE)), 0, 0);
+        mgr.RTG_SetGlobalEvent(RTG_MakeBgPhaseKey(queueType, bracketId), 0, 0, "dormant");
+        if (sPlayerbotAIConfig.rtgEventDebug)
+            RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason=stale_key", queueType, bracketId);
+    }
+    sPrevSeenKeys = seenKeys;
 
     mgr.RTG_SetGlobalEvent("rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl);
     mgr.RTG_SetGlobalEvent("rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);

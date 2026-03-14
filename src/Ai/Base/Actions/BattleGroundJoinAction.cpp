@@ -794,7 +794,7 @@ bool BGLeaveAction::Execute(Event event)
     Battleground* currentBg = bot->GetBattleground();
     if (currentBg && currentBg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
-        LOG_INFO("playerbots", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
+        LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(currentBg->GetStatus()), currentBg->GetMapId());
         return false;
     }
@@ -855,7 +855,7 @@ bool BGStatusAction::LeaveBG(PlayerbotAI* botAI)
 
     if (bg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
     {
-        LOG_INFO("playerbots", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
+        LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(bg->GetStatus()), bg->GetMapId());
         return false;
     }
