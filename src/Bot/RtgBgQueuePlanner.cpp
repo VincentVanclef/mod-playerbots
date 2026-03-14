@@ -42,6 +42,15 @@ namespace
         }
     }
 
+    static uint32 RTG_GetStarterFloorPerTeam(uint32 teamSize)
+    {
+        if (teamSize <= 5)
+            return teamSize;
+        if (teamSize <= 15)
+            return 5;
+        return 10;
+    }
+
     static void RTG_PlannerBreadcrumb(std::string const& message)
     {
         LOG_ERROR("server.loading", "{}", message);
@@ -108,10 +117,13 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 anyRealBgDemand = true;
 
             uint32 demandPhase = RTG_BG_PHASE_DORMANT;
-            uint32 allianceCurrent = sPlayerbotAIConfig.rtgSmartQueue ? std::max(queueCurrentAlliance, activeCurrentAlliance) : (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount);
-            uint32 hordeCurrent = sPlayerbotAIConfig.rtgSmartQueue ? std::max(queueCurrentHorde, activeCurrentHorde) : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-            uint32 allianceTarget = teamSize;
-            uint32 hordeTarget = teamSize;
+            uint32 allianceCurrent = 0;
+            uint32 hordeCurrent = 0;
+            uint32 allianceTarget = 0;
+            uint32 hordeTarget = 0;
+            uint32 starterFloor = RTG_GetStarterFloorPerTeam(teamSize);
+            uint32 realQueuePeak = std::max(queueRealAlliance, queueRealHorde);
+            uint32 startupTargetPerTeam = std::min<uint32>(teamSize, std::max(starterFloor, realQueuePeak));
 
             if (activeCurrentAlliance || activeCurrentHorde)
             {
@@ -122,18 +134,21 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 allianceCurrent = activeCurrentAlliance;
                 hordeCurrent = activeCurrentHorde;
             }
-            else if (queueCurrentAlliance || queueCurrentHorde || bgInfo.activeBgQueue)
+            else if (hasRealDemand && (queueCurrentAlliance || queueCurrentHorde || bgInfo.activeBgQueue))
             {
                 demandPhase = RTG_BG_PHASE_POP_OR_INVITE;
-                allianceTarget = std::min<uint32>(teamSize, std::max(queueRealAlliance, queueRealHorde));
-                hordeTarget = std::min<uint32>(teamSize, std::max(queueRealAlliance, queueRealHorde));
+                allianceTarget = startupTargetPerTeam;
+                hordeTarget = startupTargetPerTeam;
+                allianceCurrent = queueCurrentAlliance;
+                hordeCurrent = queueCurrentHorde;
             }
             else if (hasRealDemand)
             {
                 demandPhase = RTG_BG_PHASE_STARTER_FILL;
-                uint32 replacementCap = 3;
-                allianceTarget = std::min<uint32>(teamSize, bgInfo.bgAlliancePlayerCount + replacementCap);
-                hordeTarget = std::min<uint32>(teamSize, bgInfo.bgHordePlayerCount + replacementCap);
+                allianceTarget = startupTargetPerTeam;
+                hordeTarget = startupTargetPerTeam;
+                allianceCurrent = queueCurrentAlliance;
+                hordeCurrent = queueCurrentHorde;
             }
 
             std::string phaseKey = RTG_MakeBgPhaseKey_Overlay(uint32(queueTypeId), uint32(bracketId));
@@ -141,8 +156,9 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             mgr.RTG_SetGlobalEvent(phaseKey, demandPhase, ttl);
             if (previousPhase != demandPhase)
             {
-                RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][PHASE] queue={} bracket={} phase={} queueA={} queueH={} activeA={} activeH={}",
-                    uint32(queueTypeId), uint32(bracketId), RTG_BgPhaseName(demandPhase), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde));
+                RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][PHASE] queue={} bracket={} phase={} targetA={} targetH={} queueA={} queueH={} activeA={} activeH={} realQueueA={} realQueueH={}",
+                    uint32(queueTypeId), uint32(bracketId), RTG_BgPhaseName(demandPhase), allianceTarget, hordeTarget,
+                    queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde, queueRealAlliance, queueRealHorde));
             }
 
             if (allianceCurrent < allianceTarget)
@@ -162,7 +178,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
     if (previousBgNeedTotal != cappedBgNeedTotal)
     {
-        RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][DEMAND] totalNeed={} anyRealDemand={} maxBots={}", cappedBgNeedTotal, anyRealBgDemand ? 1 : 0, sPlayerbotAIConfig.rtgEventMaxBots));
+        RTG_PlannerBreadcrumb(fmt::format("[RTG][BG][DEMAND] totalNeed={} anyRealDemand={} maxBots={} planner=starter_vs_live_handoff", cappedBgNeedTotal, anyRealBgDemand ? 1 : 0, sPlayerbotAIConfig.rtgEventMaxBots));
     }
 
     if (anyRealBgDemand && rtgBgNeedTotal)
