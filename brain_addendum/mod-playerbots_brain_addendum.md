@@ -1,120 +1,135 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: RTG Queue Assistance 2.3.7a
-RTG Brain Compatibility Version: 2.3.0+
-Commit Title: Fix desiredBracket scope in live-refill recycle guard
-Commit Description: Hoists desired battleground bracket lookup out of the inner scope in RandomPlayerbotMgr so live-refill stale-helper recycling can compile correctly when referencing the bracket for recycle checks and breadcrumbs.
+Module Version: 2.3.7b
+RTG Brain Compatibility Version: 4.0.0
+Commit Title: Use battleground_template startup targets for RTG BG planner
+Commit Description: Replaces the planner’s generic starter-floor heuristic with cached battleground-specific MinPlayersPerTeam and MaxPlayersPerTeam values loaded from world.battleground_template, so startup demand for each battleground uses the real queue requirements before handing off to live refill.
 
 --------------------------------
 
 ## Module Purpose
 
-Provides RTG-controlled helper acquisition, queueing, protection, refill, and retirement behavior for battleground assistance without depending on generic randombot autologin.
+Implements RTG standalone helper acquisition, queue control, protection, and retirement for playerbots, with battleground-specific startup fill and mature live-refill behavior.
 
 --------------------------------
 
 ## Architecture Overview
 
-- RandomPlayerbotMgr runtime tick controls live helper lifecycle.
-- RtgBgQueuePlanner computes battleground demand and maturity phase.
-- RTG queue ledger tracks ownership/lifecycle.
-- Event cache stores transient helper intent and protection markers.
+- RandomPlayerbotMgr remains the live runtime controller for helper acquisition, login, queue dispatch, and release.
+- RtgBgQueuePlanner computes battleground helper demand and publishes per-queue/per-bracket global demand events.
+- RtgQueueLedger and lifecycle logic track ownership and retirement eligibility in memory.
+- Planner maturity phases distinguish starter fill, pop/invite, and live refill behavior.
 
 --------------------------------
 
 ## Runtime Control Path
 
-real player queues
-→ planner computes starter-fill or live-refill demand
-→ helper acquired and logged in
-→ helper queued
-→ lifecycle keeps helper protected while needed
-→ stale outsider recycled or helper retired when demand ends
+real player queues battleground
+→ RtgBgQueuePlanner reads battleground-specific startup bounds
+→ planner computes starter-fill demand using battleground_template MinPlayersPerTeam / MaxPlayersPerTeam
+→ RandomPlayerbotMgr acquires offline helpers
+→ helpers log in and queue
+→ planner transitions to live_refill when active battleground population exists
+→ lifecycle releases stale or unneeded helpers when demand disappears
 
 --------------------------------
 
 ## Data Structures
 
-- `RTG::RtgQueueLedger`
-- RTG event-cache keys such as `rtg_bg_pending`, `rtg_bg_queue_grace`, `rtg_bg_phase_*`
-- planner phase values for battleground maturity
+- `RTG_BgTemplateTeamBounds`
+- `RTG_BgDemandPhase`
+- `BattlegroundInfo`
+- `RtgQueueLedgerEntry`
 
 --------------------------------
 
 ## Config Interface
 
-Uses existing RTG queue-assistance config from prior revisions, including:
+This revision does not add new config keys.
 
+Relevant existing keys:
 - `AiPlayerbot.RTG.EventDriven.Enable`
 - `AiPlayerbot.RTG.SmartQueue.Enable`
-- `AiPlayerbot.RTG.QueueOwnership.Enable`
 - `AiPlayerbot.RTG.QueueGraceSeconds`
-- `AiPlayerbot.RTG.EventDriven.Debug`
-- `AiPlayerbot.RTG.QueueOwnership.Debug`
+- `AiPlayerbot.RTG.QueueOwnership.Enable`
+- `AiPlayerbot.MaxRandomBots`
+- `AiPlayerbot.RandomBotAccountCount`
 
 --------------------------------
 
 ## Database Structures
 
-Module currently uses no DB persistence.
+Uses `world.battleground_template` as a read-only source for battleground startup sizing.
+
+This revision loads and caches:
+- `ID`
+- `MinPlayersPerTeam`
+- `MaxPlayersPerTeam`
+
+The table is read once into a process-local cache via `std::call_once`, avoiding per-tick SQL churn.
 
 --------------------------------
 
 ## Integration Points
 
 - `RandomPlayerbotMgr`
-- `RtgBgQueuePlanner`
-- battleground queue/join actions
-- AzerothCore battleground templates and bracket helpers
+- `BattlegroundMgr`
+- `Battleground` templates
+- `WorldDatabase`
+- RTG ownership/lifecycle systems
 
 --------------------------------
 
 ## Lifecycle Model
 
-Helpers are acquired, logged in, queued, protected while needed, and recycled or retired once demand or phase state no longer justifies them.
+- Starter-fill demand now honors battleground-specific startup minimums from the DB.
+- Live refill still takes over once active battleground participants exist.
+- Helpers remain RTG-owned in memory until lifecycle release conditions are satisfied.
 
 --------------------------------
 
 ## Known Constraints
 
-- depends on battleground bracket lookup succeeding for recycle checks
-- assumes RTG event-driven queue assistance is enabled
-- assumes helper lifecycle state lives in memory
+- Startup demand accuracy depends on `battleground_template` containing correct RTG min/max values.
+- Arenas are still skipped by this planner path.
+- Logging still duplicates because multiple enabled sinks/channels are active.
 
 --------------------------------
 
 ## Future Evolution Hooks
 
-- richer per-helper refill diagnostics
-- tighter synchronized release when demand collapses
-- planner handoff refinements for mature battleground refill
+- Cache invalidation / reload hook if battleground_template is hot-reloaded.
+- Optional battleground-specific RTG override layer on top of DB values.
+- Mature per-map refill policies beyond symmetric live balancing.
 
 --------------------------------
 
 ## Files Modified In This Revision
 
-- `src/Bot/RandomPlayerbotMgr.cpp`
+- `src/Bot/RtgBgQueuePlanner.cpp`
 - `brain_addendum/mod-playerbots_brain_addendum.md`
 
 --------------------------------
 
 ## Behavioral Changes In This Revision
 
-No intended gameplay behavior change. This is a compile-safety hotfix that preserves live-refill recycle behavior while fixing the bracket variable lifetime.
+- A battleground’s startup target now comes from `battleground_template.MinPlayersPerTeam` instead of a hardcoded heuristic.
+- EOTS/AB startup demand now scales to 7 per team on the user’s RTG data instead of incorrectly using WSG-style 5 per team.
+- Planner breadcrumbs now show `bgTemplate`, `minPerTeam`, and `maxPerTeam` to make queue sizing decisions auditable in logs.
 
 --------------------------------
 
 ## Test Plan
 
-1. Apply this hotfix over the prior RTG queue-assistance patch set.
-2. Rebuild mod-playerbots.
-3. Confirm `RandomPlayerbotMgr.cpp` no longer errors on `desiredBracket` being undeclared.
-4. Run the one-player WSG startup test.
-5. Confirm planner and helper acquisition still behave as before.
+1. Build and restart worldserver.
+2. Queue solo for WSG and verify planner shows `minPerTeam=5` and startup demand of 9 helpers.
+3. Queue solo for Eye of the Storm and verify planner shows `minPerTeam=7` and startup demand of 13 helpers.
+4. Confirm helpers log in up to the battleground-specific startup floor.
+5. Confirm planner later hands off to `live_refill` once players are active inside the battleground.
 
 --------------------------------
 
 ## Notes For RTG Brain Ingestion
 
-This revision fixes a C++ scope regression introduced in the live-refill recycle path. The bug was not in planner math; it was caused by referencing `desiredBracket` outside the `if` initializer that declared it.
+This revision formalizes battleground startup sizing as data-driven from `world.battleground_template` instead of relying on a generic heuristic. The planner now better matches RTG’s customized low-level battleground startup thresholds while keeping SQL impact minimal through one-time cached reads.
