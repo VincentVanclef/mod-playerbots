@@ -1,10 +1,10 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: 2.3.8h
+Module Version: 2.3.8i
 RTG Brain Compatibility Version: 5.4.0
-Commit Title: Restore compile-safe planner team-need acquisition bridge
-Commit Description: Fixes the planner-to-acquisition team-need bridge after the 2.3.8g compile regression by using a local compile-safe RTG team-need key helper inside RandomPlayerbotMgr. This preserves planner-driven mature BG demand handling without reverting RTG event-driven behavior.
+Commit Title: Restore planner-driven BG acquisition ticks and always-on RTG breadcrumbs
+Commit Description: Repairs RTG queue assistance after post-2.3.8 regressions by refreshing BG/RDF planner state before acquisition, consuming planner-authored per-team BG need directly during acquisition, and restoring visible acquisition breadcrumbs even when verbose debug is off.
 
 --------------------------------
 
