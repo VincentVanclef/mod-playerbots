@@ -256,16 +256,13 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
             rtgBgNeedTotal += allianceNeed + hordeNeed;
 
-            if (sPlayerbotAIConfig.rtgEventDebug || allianceNeed || hordeNeed || hasActiveMatch || hasRealQueuedSeed)
-            {
-                RTG_WorldLog("[RTG][BG][PHASE] queue={} bracket={} phase={} targetA={} targetH={} queueA={} queueH={} activeA={} activeH={} realQueueA={} realQueueH={} minPerTeam={} maxPerTeam={}",
-                         uint32(queueTypeId), uint32(bracketId), RTG_GetBgPhaseName(phase), allianceTarget, hordeTarget,
-                         queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde,
-                         queueRealAlliance, queueRealHorde, minPerTeam, maxPerTeam);
-                RTG_WorldLog("[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={} planner={}",
-                         uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u,
-                         sPlayerbotAIConfig.rtgEventMaxBots, RTG_GetBgPlannerObjective(phase));
-            }
+            RTG_WorldLog("[RTG][BG][PHASE] queue={} bracket={} phase={} targetA={} targetH={} queueA={} queueH={} activeA={} activeH={} realQueueA={} realQueueH={} minPerTeam={} maxPerTeam={}",
+                     uint32(queueTypeId), uint32(bracketId), RTG_GetBgPhaseName(phase), allianceTarget, hordeTarget,
+                     queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde,
+                     queueRealAlliance, queueRealHorde, minPerTeam, maxPerTeam);
+            RTG_WorldLog("[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={} planner={}",
+                     uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u,
+                     sPlayerbotAIConfig.rtgEventMaxBots, RTG_GetBgPlannerObjective(phase));
         }
     }
 
