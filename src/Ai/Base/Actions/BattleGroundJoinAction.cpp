@@ -148,6 +148,13 @@ namespace
 
 bool BGJoinAction::Execute(Event event)
 {
+    if (sPlayerbotAIConfig.rtgEventDriven && sRandomPlayerbotMgr.IsRandomBot(bot))
+    {
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+        if (addData.rfind("rtg_lfg:", 0) == 0)
+            return false;
+    }
+
     uint32 queueType = AI_VALUE(uint32, "bg type");
 
     uint32 assignedQueueType = 0;

@@ -2652,11 +2652,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 team = 0;
                 uint32 level = 0;
                 uint32 bracketId = 0;
+                uint32 phase = 0;
                 uint32 teamSize = 0;
                 uint32 realQueued = 0;
                 uint32 assignedExtra = 0;
                 uint32 currentTeamCount = 0;
-                uint32 phase = 0;
                 uint32 need = 0;
             };
 
@@ -2818,12 +2818,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.bracketId = bracketId;
                         bucket.teamSize = bgTeamSizes[qKey];
                         bucket.realQueued = qit->second;
+                        bucket.phase = GetEventValue(0, RTG_MakeBgPhaseKey(desiredQueueType, uint32(bracketId)));
 
                         BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
                         bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
                             ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
                             : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-                        bucket.phase = GetEventValue(0, RTG_MakeBgPhaseKey(desiredQueueType, uint32(bracketId)));
 
                         it = bgBuckets.emplace(key, bucket).first;
                     }
@@ -2893,10 +2893,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.bracketId = bracketId;
                         bucket.teamSize = teamSize;
                         bucket.realQueued = realQueued;
+                        bucket.phase = GetEventValue(0, RTG_MakeBgPhaseKey(queueTypeId, uint32(bracketId)));
                         bucket.currentTeamCount = (team == TEAM_ALLIANCE)
                             ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
                             : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-                        bucket.phase = GetEventValue(0, RTG_MakeBgPhaseKey(queueTypeId, uint32(bracketId)));
                         it = bgBuckets.emplace(key, bucket).first;
                     }
                 }
@@ -2958,18 +2958,17 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 {
                     switch (phase)
                     {
-                        case 3: return 0; // live_refill first
-                        case 4: return 1; // finish_fill next
-                        case 2: return 2; // pop_or_invite
-                        case 1: return 3; // starter_fill
-                        default: return 4;
+                        case 2: return 0; // live_refill
+                        case 3: return 1; // finish_fill
+                        case 1: return 2; // pop_or_invite
+                        default: return 3;
                     }
                 };
 
-                uint32 aPhasePriority = phasePriority(a.phase);
-                uint32 bPhasePriority = phasePriority(b.phase);
-                if (aPhasePriority != bPhasePriority)
-                    return aPhasePriority < bPhasePriority;
+                uint32 ap = phasePriority(a.phase);
+                uint32 bp = phasePriority(b.phase);
+                if (ap != bp)
+                    return ap < bp;
                 if (a.need != b.need)
                     return a.need > b.need;
                 if (a.realQueued != b.realQueued)
@@ -3032,50 +3031,33 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 std::string addData = RTG::MakeLfgAddData(bucket.team, bucket.level, desiredRole, bucket.owner);
-                for (uint32 pass = 0; pass < 2; ++pass)
+                for (auto const& charInfo : allCharacters)
                 {
-                    bool exactRolePass = (pass == 0);
-                    for (auto const& charInfo : allCharacters)
-                    {
-                        if (!capacity)
-                            return false;
+                    if (!capacity)
+                        return false;
 
-                        uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
-                        if (charTeam != bucket.team)
-                            continue;
+                    uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
+                    if (charTeam != bucket.team)
+                        continue;
+                    if (RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass) != desiredRole)
+                        continue;
+                    if (!tryLoginBot(charInfo, addData))
+                        continue;
 
-                        uint32 offlineRole = RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass);
-                        if (exactRolePass)
-                        {
-                            if (offlineRole != desiredRole)
-                                continue;
-                        }
-                        else
-                        {
-                            if (offlineRole == desiredRole)
-                                continue;
-                            if (!RTG_ClassCanRole(charInfo.rClass, desiredRole))
-                                continue;
-                        }
+                    LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ACQUIRE] helper={} owner={} role={} team={} level={}",
+                        charInfo.guid, bucket.owner, desiredRole, bucket.team, bucket.level));
 
-                        if (!tryLoginBot(charInfo, addData))
-                            continue;
-
-                        LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {}, pass={})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass, exactRolePass ? "exact" : "capable");
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ACQUIRE] helper={} owner={} role={} team={} level={} pass={}",
-                            charInfo.guid, bucket.owner, desiredRole, bucket.team, bucket.level, exactRolePass ? "exact" : "capable"));
-
-                        ++rtgLfgLogged;
-                        --capacity;
-                        --remainingCapacity;
-                        if (desiredRole == lfg::PLAYER_ROLE_TANK)
-                            ++bucket.assignedTank;
-                        else if (desiredRole == lfg::PLAYER_ROLE_HEALER)
-                            ++bucket.assignedHeal;
-                        else
-                            ++bucket.assignedDps;
-                        return true;
-                    }
+                    ++rtgLfgLogged;
+                    --capacity;
+                    --remainingCapacity;
+                    if (desiredRole == lfg::PLAYER_ROLE_TANK)
+                        ++bucket.assignedTank;
+                    else if (desiredRole == lfg::PLAYER_ROLE_HEALER)
+                        ++bucket.assignedHeal;
+                    else
+                        ++bucket.assignedDps;
+                    return true;
                 }
                 return false;
             };
@@ -3108,6 +3090,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
+            bgCapacity += lfgCapacity;
+            lfgCapacity = 0;
 
             auto tryFillBgBucket = [&](RtgBgBucket& bucket, uint32& capacity) -> bool
             {
