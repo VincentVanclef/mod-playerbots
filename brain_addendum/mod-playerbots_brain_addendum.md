@@ -220,3 +220,25 @@ This keeps battleground startup from losing helper capacity to RDF groups that a
 - When battleground demand is active, queued RDF acquisition must not consume helper capacity needed to launch battlegrounds.
 - Active dungeon/LFG-group support may still proceed, but plain queued RDF buckets should be deferred until BG startup pressure clears.
 - This is an acquisition deferral rule, not an abandonment rule. Existing RDF helpers should still only be abandoned on true owner BG-map entry.
+
+
+--------------------------------
+
+## Formula Repair Addendum — RTG Queue Controller / Acquisition Alignment
+
+This repair corrects a structural math mismatch between RTG planner demand and `RandomPlayerbotMgr::AddRandomBots()` acquisition.
+
+### Problem
+The RTG controller was computing a temporary queue-helper target in `rtg_target`, but `AddRandomBots()` was still initializing its acquisition ceiling from the legacy `GetMaxAllowedBotCount()` random-bot target. That created a hidden small-wave limiter unrelated to actual RTG queue demand.
+
+### Corrected Math Contract
+- `rtg_lfg_need_total` and `rtg_bg_need_total` are unresolved incremental helper demand.
+- `trackedManaged` is the currently tracked queue-managed helper population.
+- `rtg_target` must be composed as `trackedManaged + unresolvedNeed`, clamped to `AiPlayerbot.RTG.EventDriven.MaxBots`.
+- acquisition headroom must be derived from `rtg_target - trackedManaged`, not from the legacy randomized bot count.
+
+### Result
+RTG planner demand and acquisition now share the same formula contract:
+- controller computes `rtg_target`
+- acquisition consumes `rtg_target`
+- helper spawn waves are limited by RTG unresolved need and RTG ceiling instead of the legacy random-bot target path
