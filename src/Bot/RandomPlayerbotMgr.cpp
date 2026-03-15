@@ -1114,7 +1114,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
     totalPmo = sPerfMonitor.start(PERF_MON_TOTAL, "RandomPlayerbotMgr::FullTick");
 
-    if (!sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
+    if (!sPlayerbotAIConfig.enabled)
+        return;
+
+    // RTG standalone queue-helper mode intentionally runs with
+    // RandomBotAutologin disabled. Do not short-circuit the full tick in
+    // that mode or queue demand/acquisition/logging will never execute.
+    if (!sPlayerbotAIConfig.randomBotAutologin && !sPlayerbotAIConfig.rtgEventDriven)
         return;
 
     // Enforce community level cap as a hard XP ceiling for randombots.
