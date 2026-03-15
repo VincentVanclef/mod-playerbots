@@ -105,10 +105,10 @@ namespace
         uint32 count = 0;
         for (uint32 bot : currentBots)
         {
-            if (!sRandomPlayerbotMgr.GetEventValue(bot, "add"))
+            std::string addData = sRandomPlayerbotMgr.GetEventData(bot, "add");
+            if (addData.empty())
                 continue;
 
-            std::string addData = sRandomPlayerbotMgr.GetEventData(bot, "add");
             if (!RTG::IsQueueManagedAddData(addData))
                 continue;
 
