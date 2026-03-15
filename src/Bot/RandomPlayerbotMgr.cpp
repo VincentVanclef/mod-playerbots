@@ -122,6 +122,18 @@ namespace
         return owner->InBattleground() || owner->InArena();
     }
 
+    static bool RTG_IsOwnerInBattlegroundFlow(uint32 ownerGuid)
+    {
+        if (!ownerGuid)
+            return false;
+
+        Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ownerGuid));
+        if (!owner)
+            return false;
+
+        return owner->InBattleground() || owner->InArena() || owner->InBattlegroundQueue() || owner->IsInvitedForBattlegroundInstance();
+    }
+
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
     {
         if (!bot || !desiredQueueType || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
@@ -2918,15 +2930,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             uint32 totalLfgNeed = 0;
             uint32 totalBgNeed = 0;
 
-            for (auto const& kv : lfgBuckets)
-            {
-                if (kv.second.need)
-                {
-                    orderedLfgBuckets.push_back(kv.second);
-                    totalLfgNeed += kv.second.need;
-                }
-            }
-
             for (auto const& kv : bgBuckets)
             {
                 if (kv.second.need)
@@ -2934,6 +2937,26 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     orderedBgBuckets.push_back(kv.second);
                     totalBgNeed += kv.second.need;
                 }
+            }
+
+            bool mixedBgLfgDemand = totalBgNeed != 0;
+            for (auto const& kv : lfgBuckets)
+            {
+                if (!kv.second.need)
+                    continue;
+
+                bool ownerInBgFlow = mixedBgLfgDemand && RTG_IsOwnerInBattlegroundFlow(kv.second.owner);
+                if (ownerInBgFlow)
+                {
+                    if (RTG_QueueDebugEnabled())
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][DEFER] owner={} reason=owner_in_bg_queue_flow need={}", kv.second.owner, kv.second.need));
+                    }
+                    continue;
+                }
+
+                orderedLfgBuckets.push_back(kv.second);
+                totalLfgNeed += kv.second.need;
             }
 
             std::sort(orderedLfgBuckets.begin(), orderedLfgBuckets.end(), [](RtgLfgBucket const& a, RtgLfgBucket const& b)
@@ -3230,8 +3253,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 if (RTG_QueueDebugEnabled())
                 {
-                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
-                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()));
+                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={} busyAccounts={}",
+                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()), static_cast<uint32>(busyAccountIds.size()));
                 }
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))

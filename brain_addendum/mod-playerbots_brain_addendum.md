@@ -197,3 +197,19 @@ Expected outcomes:
 - pending and online helper reservations must respect account-level session exclusivity
 - RDF helpers remain valid while the owner is only in battleground queue flow
 - RDF helpers are cancelled only once the owner has crossed into battleground map state, because that is the point where the dungeon path is truly abandoned
+
+
+## Queue checkpoint addendum – mixed BG/RDF owner arbitration
+
+### Purpose
+Prevent RDF helper acquisition from starving battleground startup when the same real player is queued for both systems at once.
+
+### Rule
+When battleground demand exists, RDF helper **acquisition** for an owner currently in battleground queue/invite/map flow is deferred rather than spawned immediately.
+
+### Important distinction
+- **Defer acquisition** when the owner is only in BG queue flow.
+- **Abandon existing RDF helpers** only when the owner actually enters a battleground/arena map.
+
+### Intent
+This keeps battleground startup from losing helper capacity to RDF groups that are likely to be superseded by a near-immediate BG pop, while still avoiding premature RDF abandonment.
