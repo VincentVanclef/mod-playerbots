@@ -242,3 +242,7 @@ RTG planner demand and acquisition now share the same formula contract:
 - controller computes `rtg_target`
 - acquisition consumes `rtg_target`
 - helper spawn waves are limited by RTG unresolved need and RTG ceiling instead of the legacy random-bot target path
+
+
+## Hotfix
+- Fixed compile error in battleground helper retirement path by removing an out-of-scope `rtgBgReady` reference from the formula-alignment patch.

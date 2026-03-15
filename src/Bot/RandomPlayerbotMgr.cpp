@@ -1710,7 +1710,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
 
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
-            bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || !rtgBgReady || wrongTeam;
+            bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
