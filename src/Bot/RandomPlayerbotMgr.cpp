@@ -84,6 +84,7 @@ namespace
     {
         LOG_WARN("playerbots", "{}", message);
         LOG_INFO("playerbots", "{}", message);
+        LOG_INFO("server.loading", "{}", message);
     }
 
     static uint32 RTG_GetQueueGraceTtlSeconds()
@@ -94,6 +95,11 @@ namespace
     static uint32 RTG_GetQueueRetryWindowSeconds()
     {
         return std::max<uint32>(5u, std::min<uint32>(10u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds));
+    }
+
+    static uint32 RTG_GetDispatchStallThresholdSeconds()
+    {
+        return std::max<uint32>(20u, RTG_GetQueueGraceTtlSeconds() + 10u);
     }
 
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
@@ -734,6 +740,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+        SetEventValue(botId, "rtg_add_requested", 0, 0);
     }
 
     currentBots.remove(botId);
@@ -2560,7 +2567,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             if (!addData.empty())
+            {
+                SetEventValue(charInfo.guid, "rtg_add_requested", NowSeconds(), 120, addData);
                 RTG::RegisterPendingHelperLogin(charInfo.guid, charInfo.accountId, addData);
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][REQUEST] helper={} account={} add='{}'", charInfo.guid, charInfo.accountId, addData));
+            }
 
             currentBots.push_back(charInfo.guid);
 
@@ -3968,6 +3979,31 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
     uint32 randomTime;
     if (!player)
     {
+        std::string addData = GetEventData(bot, "add");
+        if (RTG::IsQueueManagedAddData(addData))
+        {
+            uint32 requestTs = GetEventValue(bot, "rtg_add_requested");
+            uint32 nowTs = NowSeconds();
+            uint32 stallThreshold = RTG_GetDispatchStallThresholdSeconds();
+            if (requestTs && nowTs > requestTs && (nowTs - requestTs) >= stallThreshold)
+            {
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][STALL] helper={} waited={} add='{}'", bot, (nowTs - requestTs), addData));
+                SetEventValue(bot, "add", 0, 0);
+                SetEventValue(bot, "logout", 0, 0);
+                SetEventValue(bot, "rtg_add_requested", 0, 0);
+                SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+                SetEventValue(bot, "rtg_bg_pending", 0, 0);
+                SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
+                SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
+                currentBots.remove(bot);
+                if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                    RTG::RtgQueueLedger::Instance().Remove(bot);
+                return false;
+            }
+
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][ADD] helper={} add='{}'", bot, addData));
+        }
+
         AddPlayerBot(botGUID, 0);
         randomTime = urand(1, 2);
 
@@ -5701,6 +5737,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_retry", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {

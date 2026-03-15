@@ -130,3 +130,31 @@ Expected outcomes:
 • mixed RDF/BG pressure behaves more predictably
 • BG no longer receives automatic first claim on unused RDF reservation
 • spare capacity still gets reused after both lanes receive a fair attempt
+
+## RTG Queue Addendum 2.3.9-ae — Dispatch Visibility + Stalled Add Recovery Checkpoint
+
+Intent:
+Create a safe checkpoint pass that improves RTG queue transparency and frees helpers that become stuck between acquisition and actual bot materialization.
+
+Patch focus:
+• mirror RTG runtime breadcrumbs to `server.loading` so queue control, acquire, login, dispatch, retire, and logout messages are visible in the same log stream as BG planner output
+• emit explicit `[RTG][ACQUIRE][REQUEST]` when a queue-managed helper reservation is created
+• emit explicit `[RTG][DISPATCH][ADD]` when `ProcessBot()` actually hands a queue-managed helper to `AddPlayerBot(...)`
+• track queue-managed add requests with `rtg_add_requested`
+• if a queue-managed add request never produces a player object within a safe stall window, emit `[RTG][DISPATCH][STALL]` and clear the stuck reservation so the system can reacquire instead of clogging
+• clear `rtg_add_requested` on successful login, login failure, and safe logout
+
+Why:
+Recent logs showed BG planner demand advancing without the expected dispatch/runtime breadcrumb family being visible. There are two likely contributors:
+1. planner logs already write to `server.loading`, but runtime breadcrumbs were still confined to the `playerbots` filter
+2. queue-managed add requests may be getting stuck before actual player materialization, silently consuming helper slots and making the dispatch lane appear jammed
+
+Important invariant:
+This patch is an observability + unjam checkpoint.
+It is not a planner rewrite, lane rewrite, or ownership rewrite.
+
+Expected outcomes:
+• startup control/acquire/login/dispatch breadcrumbs appear in the same worldserver-visible log stream as `[RTG][BG][PHASE]`
+• if helper reservations stall before `AddPlayerBot` materializes them, the stall becomes visible
+• stalled add slots are released instead of lingering and starving later helper demand
+• this should help explain whether orphan residue is caused by invisible dispatch success, stalled bot materialization, or later queue-state cleanup problems
