@@ -2467,7 +2467,33 @@ bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
 // Phase 4 is reached if and only if the value of RandomBotAccountCount is lower than it should.
 uint32 RandomPlayerbotMgr::AddRandomBots()
 {
-    uint32 maxAllowedBotCount = sPlayerbotAIConfig.rtgEventDriven ? GetMaxAllowedBotCount() : GetMaxAllowedBotCount();
+    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        uint32 rtgTarget = GetEventValue(0, "rtg_target");
+        if (!rtgTarget)
+        {
+            uint32 unresolvedNeed = std::min<uint32>(GetEventValue(0, "rtg_lfg_need_total") + GetEventValue(0, "rtg_bg_need_total"), sPlayerbotAIConfig.rtgEventMaxBots);
+            uint32 trackedManagedHelpers = RTG_CountTrackedQueueManagedHelpers(currentBots);
+            uint32 baseWorld = sPlayerbotAIConfig.rtgKeepWorldBots ? maxAllowedBotCount : 0u;
+            if (unresolvedNeed || trackedManagedHelpers)
+                rtgTarget = baseWorld + std::min<uint32>(trackedManagedHelpers + unresolvedNeed, sPlayerbotAIConfig.rtgEventMaxBots);
+            else if (!sPlayerbotAIConfig.rtgKeepWorldBots)
+                rtgTarget = 0u;
+        }
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} lfgNeed={} bgNeed={} trackedManaged={}",
+                     maxAllowedBotCount,
+                     rtgTarget,
+                     GetEventValue(0, "rtg_lfg_need_total"),
+                     GetEventValue(0, "rtg_bg_need_total"),
+                     RTG_CountTrackedQueueManagedHelpers(currentBots));
+        }
+
+        maxAllowedBotCount = rtgTarget;
+    }
     static time_t missingBotsTimer = 0;
 
     uint32 botsToAddThisInterval = 0;
