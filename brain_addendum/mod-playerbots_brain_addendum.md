@@ -185,3 +185,41 @@ Expected outcomes:
 • startup control logs show the RTG helper ceiling instead of the legacy random-bot ceiling
 • helper-account sizing logic no longer undershoots RTG standalone demand just because `MaxRandomBots` is lower
 • early initialization timing aligns with RTG standalone helper capacity
+
+
+## 2.3.11 - RTG incremental target correction for standalone helper waves
+
+### Problem observed
+
+After the standalone ceiling fix, the controller correctly reported `RTGMaxBots`, but helper login still stalled after the first wave. Logs showed:
+
+- initial `[RTG][ACQUIRE][REQUEST]` and `[RTG][LOGIN]` activity for 9 helpers
+- battleground planner still reporting unresolved demand afterward
+- no second acquisition wave even though queue need remained
+
+### Root cause
+
+In RTG mode, `rtg_lfg_need_total` and `rtg_bg_need_total` already represent **unresolved incremental helper demand**. However, the temporary RTG target in `UpdateAIInternal()` was still being set to only that unresolved need.
+
+That means the first successful helper wave could numerically satisfy the temporary target and close online headroom before the queue was actually full.
+
+### Focused repair rule
+
+While RTG queue demand is active, compute the temporary RTG target as:
+
+- currently tracked queue-managed helpers
+- plus unresolved RTG helper need
+- clamped to `AiPlayerbot.RTG.EventDriven.MaxBots`
+
+When no RTG queue demand remains and `rtgKeepWorldBots` is disabled, the temporary target must still collapse back to zero so helper retirement behavior is preserved.
+
+### Implementation notes
+
+- add a helper that counts currently tracked queue-managed helpers from `currentBots`
+- use that count when composing the event-driven target in `UpdateAIInternal()`
+- add a debug breadcrumb line:
+  - `[RTG][CONTROL][TARGET] trackedManaged=... unresolvedNeed=... eventTarget=...`
+
+### Intent
+
+This is a narrow target-composition repair, not a planner rewrite. It exists to prevent the first helper wave from capping the system early when planner demand is still unresolved. RDF/BG isolation work may remain, but this repair must come first because without enough total headroom the isolation layer cannot fully express demand anyway.

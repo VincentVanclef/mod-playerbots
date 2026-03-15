@@ -100,6 +100,24 @@ namespace
         return std::max<uint32>(1u, sPlayerbotAIConfig.maxRandomBots);
     }
 
+    static uint32 RTG_CountTrackedQueueManagedHelpers(std::list<uint32> const& currentBots)
+    {
+        uint32 count = 0;
+        for (uint32 bot : currentBots)
+        {
+            if (!sRandomPlayerbotMgr.GetEventValue(bot, "add"))
+                continue;
+
+            std::string addData = sRandomPlayerbotMgr.GetEventData(bot, "add");
+            if (!RTG::IsQueueManagedAddData(addData))
+                continue;
+
+            ++count;
+        }
+
+        return count;
+    }
+
     static uint32 RTG_GetQueueRetryWindowSeconds()
     {
         return std::max<uint32>(5u, std::min<uint32>(10u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds));
@@ -1220,13 +1238,37 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
         uint32 lfgTarget = rtgLfgReady ? lfgNeed : 0u;
         uint32 bgTarget = rtgBgReady ? bgNeed : 0u;
-        uint32 eventTarget = std::min<uint32>(lfgTarget + bgTarget, sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 unresolvedEventNeed = lfgTarget + bgTarget;
+        uint32 trackedManagedHelpers = RTG_CountTrackedQueueManagedHelpers(currentBots);
+        uint32 eventTarget = 0u;
+
+        // RTG queue demand values represent unresolved incremental helper need, not the
+        // full number of helpers that should remain online. If we target only the unresolved
+        // delta, the first successful helper wave can satisfy the target numerically and close
+        // headroom before the queue is actually full. Keep already tracked queue-managed helpers
+        // inside the temporary RTG target while demand remains active, then add only the
+        // unresolved need on top.
+        if (rtgLfgDemand || rtgBgDemand)
+            eventTarget = std::min<uint32>(trackedManagedHelpers + unresolvedEventNeed, sPlayerbotAIConfig.rtgEventMaxBots);
+
         maxAllowedBotCount = baseWorld + eventTarget;
 
         if (!rtgLfgDemand && !rtgBgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
             maxAllowedBotCount = 0;
 
         SetEventValue(0, "rtg_target", maxAllowedBotCount, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} unresolvedNeed={} lfgTarget={} bgTarget={} eventTarget={} baseWorld={} maxAllowed={}",
+                     trackedManagedHelpers,
+                     unresolvedEventNeed,
+                     lfgTarget,
+                     bgTarget,
+                     eventTarget,
+                     baseWorld,
+                     maxAllowedBotCount);
+        }
 
         static bool rtgStandaloneLogged = false;
         if (!rtgStandaloneLogged && !sPlayerbotAIConfig.randomBotAutologin)
