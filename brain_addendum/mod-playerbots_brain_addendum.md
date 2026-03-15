@@ -157,3 +157,22 @@ New behavior added by this revision:
 ## Notes For RTG Brain Ingestion
 
 This revision formalizes a critical RTG queue doctrine rule: **planner need is additive unresolved helper demand, not the desired total number of online helpers**. It also formalizes that helper assignment alone is not enough to justify queue entry; active planner demand must still exist for the helper’s BG/RDF context.
+
+================================
+## Revision: 2.3.8s Focused BG Acquire Stabilization
+
+### Purpose
+This repair pass is intentionally narrow. It corrects a regression where BG helper acquisition could collapse back into one-sided faction fills and where critical RTG acquisition breadcrumbs could disappear from the worldserver-visible log stream.
+
+### Key Corrections
+- RTG runtime breadcrumbs are now mirrored into `server.loading` in addition to `playerbots`.
+- BG acquisition now prefers planner-authored `rtg_bg_team_need:<queue>:<bracket>:<team>` keys instead of relying only on local `teamSize - currentTeamCount` reconstruction.
+- BG acquisition now fills unresolved team buckets in a round-robin loop instead of draining one bucket fully before attempting the opposite faction.
+- RTG acquisition headroom, plan, result, and miss breadcrumbs are emitted through the shared runtime breadcrumb path so worldserver-visible diagnosis stays intact.
+
+### Doctrine Reminder
+For RTG BG queue assistance, the planner is authoritative for per-team unresolved need. Acquisition must honor that planner output and distribute helper logins across factions without allowing one bucket to consume the whole burst opportunistically.
+
+### Files Modified
+- `src/Bot/RandomPlayerbotMgr.cpp`
+- `brain_addendum/mod-playerbots_brain_addendum.md`
