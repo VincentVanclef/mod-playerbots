@@ -1,10 +1,10 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: 2.3.8d
+Module Version: 2.3.8w
 RTG Brain Compatibility Version: 5.4.0
-Commit Title: Honor incremental finish-fill demand in RTG acquisition
-Commit Description: Fixes RTG event-driven helper acquisition so mature live_refill and finish_fill demand is treated as incremental need instead of being incorrectly reduced by already-online managed helpers.
+Commit Title: Materialize RDF helpers on login and make BG acquisition planner-authoritative
+Commit Description: Fixes RTG queue assistance so RDF helper slots are materially realized on login with immediate LFG dispatch, while BG acquisition uses planner-authored per-team demand and round-robin bucket fill instead of queue snapshot fallback. This improves RDF responsiveness and battleground refill behavior without regressing the newer dead-queue teardown path.
 
 --------------------------------
 
@@ -149,10 +149,3 @@ Fixes a mature-phase acquisition bug where finish_fill and live_refill demand co
 ## Notes For RTG Brain Ingestion
 
 This revision closes the behavioral gap between “helper exists online” and “helper behaves like a queue worker.” The important semantic change is that RTG BG helpers are now treated as directed queue actors with immediate queue dispatch and a temporary grace shield, rather than passive randombots waiting for normal AI cadence to decide to join queue.
-
-
-## RTG Queue Assistance Addendum 2.3.8x
-
-- BG helper acquisition is again planner-authoritative for per-team need during refill/startup.
-- Overlapping BGs now round-robin unresolved team buckets instead of draining one queue/bucket in a single pass.
-- `rtg_bg_queue_grace` is scoped correctly to BG helper acquisitions only.
