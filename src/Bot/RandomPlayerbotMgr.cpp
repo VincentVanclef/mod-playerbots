@@ -1669,9 +1669,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
-            bool orphanQueuedHelper = !bgHasRealDemand &&
-                                      bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
-                                      !bot->InBattleground() && !bot->InArena() && !bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
 
             if (!noLongerNeeded && !inQueueState)
@@ -1694,16 +1691,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // Layer 2: lifecycle safety. If battleground state still owns this helper,
             // never force-retire it here. Only mark it for retirement after the helper
             // becomes fully detached from battleground / queue / invite / BG-group state.
-            if (orphanQueuedHelper)
-            {
-                if (!bot->IsInCombat() && !bot->IsBeingTeleported() && !bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-                {
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ORPHAN] helper={} queue={} team={} forcing logout", botId, desiredQueueType, desiredTeam));
-                    rtgBgLogout.push_back(botGuid);
-                    continue;
-                }
-            }
-
             if (lifecycleOwned)
             {
                 RTG_ClearQueueDebuffs(bot);
@@ -2898,22 +2885,22 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return a.level > b.level;
             });
 
-            auto bgPhasePriority = [](uint32 phase) -> uint32
+            auto rtgBgPhasePriority = [](uint32 phase) -> uint32
             {
                 switch (phase)
                 {
-                    case 4: return 0u; // finish_fill must reacquire before startup queues consume capacity
-                    case 3: return 1u; // live_refill keeps active matches healthy
-                    case 2: return 2u; // pop_or_invite
-                    case 1: return 3u; // starter_fill
-                    default: return 4u;
+                    case 3: return 0; // finish_fill
+                    case 2: return 1; // live_refill
+                    case 0: return 2; // pop_or_invite
+                    case 1: return 3; // starter_fill
+                    default: return 4;
                 }
             };
 
             std::sort(orderedBgBuckets.begin(), orderedBgBuckets.end(), [&](RtgBgBucket const& a, RtgBgBucket const& b)
             {
-                uint32 const aPriority = bgPhasePriority(a.phase);
-                uint32 const bPriority = bgPhasePriority(b.phase);
+                uint32 aPriority = rtgBgPhasePriority(a.phase);
+                uint32 bPriority = rtgBgPhasePriority(b.phase);
                 if (aPriority != bPriority)
                     return aPriority < bPriority;
                 if (a.need != b.need)
@@ -3007,36 +2994,41 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return false;
             };
 
-            for (RtgLfgBucket& bucket : orderedLfgBuckets)
+            auto tryFillLfgBucketOnce = [&](RtgLfgBucket& bucket, uint32& capacity) -> bool
             {
-                while (lfgCapacity && remainingCapacity)
+                if (!capacity || !remainingCapacity)
+                    return false;
+                if (bucket.startTs && static_cast<uint32>(time(nullptr)) < bucket.startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
+                    return false;
+
+                uint32 needTank = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
+                needTank = needTank > (bucket.realTank + bucket.queuedTank + bucket.assignedTank) ? (needTank - (bucket.realTank + bucket.queuedTank + bucket.assignedTank)) : 0u;
+                uint32 needHeal = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
+                needHeal = needHeal > (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal) ? (needHeal - (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal)) : 0u;
+                uint32 needDps = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
+                needDps = needDps > (bucket.realDps + bucket.queuedDps + bucket.assignedDps) ? (needDps - (bucket.realDps + bucket.queuedDps + bucket.assignedDps)) : 0u;
+                if (!needTank && !needHeal && !needDps)
+                    return false;
+
+                bool added = false;
+                if (needTank)
+                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_TANK, capacity);
+                if (!added && needHeal)
+                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_HEALER, capacity);
+                if (!added && needDps)
+                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_DAMAGE, capacity);
+                return added;
+            };
+
+            auto fillReservedLfgLane = [&](uint32& capacity)
+            {
+                for (RtgLfgBucket& bucket : orderedLfgBuckets)
                 {
-                    if (bucket.startTs && static_cast<uint32>(time(nullptr)) < bucket.startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
-                        break;
-
-                    uint32 needTank = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
-                    needTank = needTank > (bucket.realTank + bucket.queuedTank + bucket.assignedTank) ? (needTank - (bucket.realTank + bucket.queuedTank + bucket.assignedTank)) : 0u;
-                    uint32 needHeal = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
-                    needHeal = needHeal > (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal) ? (needHeal - (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal)) : 0u;
-                    uint32 needDps = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
-                    needDps = needDps > (bucket.realDps + bucket.queuedDps + bucket.assignedDps) ? (needDps - (bucket.realDps + bucket.queuedDps + bucket.assignedDps)) : 0u;
-                    if (!needTank && !needHeal && !needDps)
-                        break;
-
-                    bool added = false;
-                    if (needTank)
-                        added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_TANK, lfgCapacity);
-                    if (!added && needHeal)
-                        added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_HEALER, lfgCapacity);
-                    if (!added && needDps)
-                        added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_DAMAGE, lfgCapacity);
-                    if (!added)
-                        break;
+                    while (capacity && remainingCapacity && tryFillLfgBucketOnce(bucket, capacity))
+                    {
+                    }
                 }
-            }
-
-            bgCapacity += lfgCapacity;
-            lfgCapacity = 0;
+            };
 
             auto tryFillBgBucket = [&](RtgBgBucket& bucket, uint32& capacity) -> bool
             {
@@ -3066,24 +3058,102 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return false;
             };
 
-            while (bgCapacity && remainingCapacity)
+            auto tryFillBgBucketOnce = [&](RtgBgBucket& bucket, uint32& capacity) -> bool
             {
-                bool addedAnyBgHelper = false;
+                if (!capacity || !remainingCapacity)
+                    return false;
+                if (bucket.assignedExtra >= bucket.need)
+                    return false;
+                return tryFillBgBucket(bucket, capacity);
+            };
 
-                for (RtgBgBucket& bucket : orderedBgBuckets)
+            auto fillReservedBgLane = [&](uint32& capacity)
+            {
+                bool added = true;
+                while (capacity && remainingCapacity && added)
                 {
-                    if (!bgCapacity || !remainingCapacity)
-                        break;
-                    if (bucket.assignedExtra >= bucket.need)
-                        continue;
-                    if (!tryFillBgBucket(bucket, bgCapacity))
-                        continue;
+                    added = false;
+                    for (RtgBgBucket& bucket : orderedBgBuckets)
+                    {
+                        if (!capacity || !remainingCapacity)
+                            break;
+                        if (tryFillBgBucketOnce(bucket, capacity))
+                            added = true;
+                    }
+                }
+            };
 
-                    addedAnyBgHelper = true;
+            uint32 reservedLfgCapacity = lfgCapacity;
+            uint32 reservedBgCapacity = bgCapacity;
+            uint32 laneDebugInitialLfg = reservedLfgCapacity;
+            uint32 laneDebugInitialBg = reservedBgCapacity;
+
+            fillReservedLfgLane(reservedLfgCapacity);
+            fillReservedBgLane(reservedBgCapacity);
+
+            uint32 sharedSurplus = reservedLfgCapacity + reservedBgCapacity;
+            lfgCapacity = 0;
+            bgCapacity = 0;
+
+            if (sharedSurplus && remainingCapacity)
+            {
+                bool bgTurn = GetEventValue(0, "rtg_queue_turn_bg") != 0;
+                bool added = true;
+
+                while (sharedSurplus && remainingCapacity && added)
+                {
+                    added = false;
+
+                    auto tryLane = [&](bool preferBg) -> bool
+                    {
+                        if (preferBg)
+                        {
+                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            {
+                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                            for (RtgLfgBucket& bucket : orderedLfgBuckets)
+                            {
+                                if (tryFillLfgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                        }
+                        else
+                        {
+                            for (RtgLfgBucket& bucket : orderedLfgBuckets)
+                            {
+                                if (tryFillLfgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            {
+                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                        }
+                        return false;
+                    };
+
+                    if (tryLane(bgTurn))
+                    {
+                        added = true;
+                        bgTurn = !bgTurn;
+                    }
                 }
 
-                if (!addedAnyBgHelper)
-                    break;
+                SetEventValue(0, "rtg_queue_turn_bg", bgTurn ? 1u : 0u, 30);
+            }
+
+            if (RTG_QueueDebugEnabled())
+            {
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][LANES] lfgReserved={} bgReserved={} lfgUnused={} bgUnused={} sharedSurplus={} remainingCapacity={}",
+                         laneDebugInitialLfg,
+                         laneDebugInitialBg,
+                         reservedLfgCapacity,
+                         reservedBgCapacity,
+                         sharedSurplus,
+                         remainingCapacity);
             }
 
             if (RTG_QueueDebugEnabled())

@@ -96,19 +96,37 @@ BG
 Regression
 • collapse behavior remains clean
 • logs remain visible
-
 --------------------------------
 
-## Queue Repair Addendum — 2.3.8ad-next
+## RTG Queue Addendum 2.3.9-ad — Lane Isolation Refinement
 
-Targeted pass completed against observed logs:
+Intent:
+Preserve the shared RTG helper framework while isolating RDF and BG acquisition pressure more cleanly during mixed demand windows.
 
-• finish_fill now sorts ahead of startup/pop queues so active-match reacquire is not starved by new queue seeds
-• BG helper acquisition now allocates in round-robin passes across BG buckets instead of exhausting one bucket before servicing others
-• orphan queued BG helpers with no remaining real demand are now force-retired through safe logout path instead of lingering and repeatedly producing orphan_queue_residue planner spam
+Patch focus:
+• keep reserved RDF capacity inside the RDF lane for its first pass
+• keep reserved BG capacity inside the BG lane for its first pass
+• do not auto-donate unused RDF budget straight into BG before RDF has had a protected service window
+• only expose leftover capacity as shared surplus after both lanes have attempted their reserved pass
+• consume shared surplus with alternating lane preference so one service does not permanently win spillover
 
-Expected log changes:
+Why:
+Previous logic proportioned capacity between RDF and BG, but then immediately donated leftover RDF capacity into BG by default because RDF was processed first. That behavior was safe for pure-BG demand bursts, but it weakened lane isolation during mixed demand windows and made BG the natural sink for any unspent budget.
 
-• active finish_fill buckets should continue producing helper login waves even when another BG queue enters pop_or_invite at the same time
-• queue=4 style mature refill should no longer be repeatedly pre-empted by queue=2 startup demand
-• repeated orphan_queue_residue spam should collapse after stranded helpers are logged out
+Resulting model:
+1. Compute reserved RDF budget and reserved BG budget.
+2. Run RDF reserved pass.
+3. Run BG reserved pass.
+4. Merge unused reserved budget into shared surplus.
+5. Use alternating lane preference to consume surplus without permanently biasing RDF or BG.
+
+Important invariant:
+This is not a planner rewrite.
+It is an acquisition-lane refinement only.
+Demand discovery, lifecycle cleanup, finish_fill priority, and orphan retirement rules remain intact.
+
+Expected outcomes:
+• RDF and BG stop stealing each other's first-pass reserved budget
+• mixed RDF/BG pressure behaves more predictably
+• BG no longer receives automatic first claim on unused RDF reservation
+• spare capacity still gets reused after both lanes receive a fair attempt
