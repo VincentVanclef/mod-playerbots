@@ -32,27 +32,42 @@ namespace
         return value.rfind(prefix, 0) == 0;
     }
 
-    static bool RTG_ParseLfgDesiredRole(std::string const& data, uint32& role)
+    static bool RTG_ParseLfgAssignment(std::string const& data, uint32& team, uint32& level, uint32& role, uint32& owner)
     {
+        team = 0;
+        level = 0;
         role = 0;
+        owner = 0;
         if (!RTG_HasPrefix(data, "rtg_lfg:"))
             return false;
 
-        size_t first = data.find(':');
-        size_t second = data.find(':', first + 1);
-        size_t third = data.find(':', second == std::string::npos ? std::string::npos : second + 1);
-        if (third == std::string::npos)
+        std::string payload = data.substr(8);
+        size_t sep1 = payload.find(':');
+        size_t sep2 = payload.find(':', sep1 == std::string::npos ? sep1 : sep1 + 1);
+        size_t sep3 = payload.find(':', sep2 == std::string::npos ? sep2 : sep2 + 1);
+        if (sep1 == std::string::npos || sep2 == std::string::npos || sep3 == std::string::npos)
             return false;
 
         try
         {
-            role = static_cast<uint32>(std::stoul(data.substr(third + 1)));
+            team = static_cast<uint32>(std::stoul(payload.substr(0, sep1)));
+            level = static_cast<uint32>(std::stoul(payload.substr(sep1 + 1, sep2 - sep1 - 1)));
+            role = static_cast<uint32>(std::stoul(payload.substr(sep2 + 1, sep3 - sep2 - 1)));
+            owner = static_cast<uint32>(std::stoul(payload.substr(sep3 + 1)));
             return true;
         }
         catch (...)
         {
             return false;
         }
+    }
+
+    static bool RTG_ParseLfgDesiredRole(std::string const& data, uint32& role)
+    {
+        uint32 team = 0;
+        uint32 level = 0;
+        uint32 owner = 0;
+        return RTG_ParseLfgAssignment(data, team, level, role, owner);
     }
 
     static bool RTG_ClassCanRole(uint8 cls, uint32 role)
@@ -146,6 +161,29 @@ namespace
         if (desiredRole)
             *desiredRole = role;
         return assigned;
+    }
+
+    static bool RTG_AssignedLfgHelperHasDemand(Player* bot)
+    {
+        if (!bot || !sPlayerbotAIConfig.rtgEventDriven)
+            return false;
+
+        uint32 team = 0;
+        uint32 level = 0;
+        uint32 role = 0;
+        uint32 owner = 0;
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+        if (!RTG_ParseLfgAssignment(addData, team, level, role, owner))
+            return false;
+
+        if (owner && sRandomPlayerbotMgr.RTG_GetBotEventValue(owner, "rtg_lfg_real_demand") != 0)
+            return true;
+        if (sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_lfg_need_total") != 0)
+            return true;
+        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_dungeon_active") != 0)
+            return true;
+
+        return false;
     }
 
     static void RTG_ClearDungeonQueuePenalties(Player* bot)
@@ -250,6 +288,13 @@ bool LfgJoinAction::JoinLFG()
         }
         else
         {
+            if (!RTG_AssignedLfgHelperHasDemand(bot))
+            {
+                if (RTG_LfgDebugEnabled())
+                    LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} blocked no-active-demand", botId);
+                return false;
+            }
+
             RTG_ClearDungeonQueuePenalties(bot);
             rtgNextJoinAttempt[botId] = now + 5;
         }

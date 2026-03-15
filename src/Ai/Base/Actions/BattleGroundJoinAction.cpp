@@ -53,6 +53,47 @@ namespace
         return true;
     }
 
+    static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
+    {
+        return std::string("rtg_bg_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
+    {
+        return std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
+    }
+
+    static bool RTG_AssignedBgHelperHasDemand(Player* bot, uint32 queueType)
+    {
+        if (!bot || !sPlayerbotAIConfig.rtgEventDriven || !queueType)
+            return false;
+
+        uint32 team = 0, level = 0, parsedQueueType = 0;
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+        if (!RTG_ParseBgBotAssignment(addData, team, level, parsedQueueType) || parsedQueueType != queueType)
+            return false;
+
+        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueType));
+        if (bgTypeId == BATTLEGROUND_TYPE_NONE)
+            return false;
+
+        Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        if (!bg)
+            return false;
+
+        PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bg->GetMapId(), level ? level : bot->GetLevel());
+        if (!pvpDiff)
+            return false;
+
+        uint32 bracketId = uint32(pvpDiff->GetBracketId());
+        if (sRandomPlayerbotMgr.RTG_GetGlobalEvent(RTG_MakeBgTeamNeedKey(queueType, bracketId, team)) != 0)
+            return true;
+        if (sRandomPlayerbotMgr.RTG_GetGlobalEvent(RTG_MakeBgDemandKey(queueType, bracketId)) != 0)
+            return true;
+
+        return false;
+    }
+
     static BattlegroundQueueTypeId RTG_FindBotQueueTypeForLeave(Player* bot)
     {
         if (!bot)
@@ -428,10 +469,10 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
 
-    // RTG: explicitly assigned battleground helpers should still be allowed
-    // to queue even when the legacy counters have not caught up yet.
+    // RTG: explicitly assigned battleground helpers should only queue when the
+    // planner still says this exact queue/team/bracket needs more helpers.
     if (assignedHelper)
-        return true;
+        return RTG_AssignedBgHelperHasDemand(bot, uint32(queueTypeId));
 
     if (teamId == TEAM_ALLIANCE)
     {

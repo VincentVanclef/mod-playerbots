@@ -84,12 +84,6 @@ namespace
     {
         LOG_WARN("playerbots", "{}", message);
         LOG_INFO("playerbots", "{}", message);
-        LOG_INFO("server.loading", "{}", message);
-    }
-
-    static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
-    {
-        return std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
     }
 
     static uint32 RTG_GetQueueGraceTtlSeconds()
@@ -1113,17 +1107,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     if (!sPlayerbotAIConfig.enabled)
         return;
 
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        static bool rtgRuntimeLogged = false;
-        if (!rtgRuntimeLogged)
-        {
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][CONTROL] queue runtime initialized (EventMaxBots={}, AccountCount={}, AutoLogin={})",
-                sPlayerbotAIConfig.rtgEventMaxBots, sPlayerbotAIConfig.randomBotAccountCount,
-                sPlayerbotAIConfig.randomBotAutologin ? 1u : 0u));
-            rtgRuntimeLogged = true;
-        }
-    }
+    if (!sPlayerbotAIConfig.randomBotAutologin && !sPlayerbotAIConfig.rtgEventDriven)
+        return;
 
     // Enforce community level cap as a hard XP ceiling for randombots.
     // This prevents bots from leveling past the current community cap even if they gain XP in the world.
@@ -1156,31 +1141,35 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         ScaleBotActivity();
     }*/
 
-    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+    uint32 maxAllowedBotCount = sPlayerbotAIConfig.rtgEventDriven
+        ? std::max<uint32>(1u, sPlayerbotAIConfig.rtgEventMaxBots)
+        : GetMaxAllowedBotCount();
 
-	// If ratio scaling is enabled, override target bot count dynamically
-	if (sPlayerbotAIConfig.usePlayerCountRatio)
-	{
-		uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+    // Stock ratio/random target logic must not override RTG standalone queue control.
+    // When RTG event-driven mode is enabled, AiPlayerbot.RTG.EventDriven.MaxBots is the
+    // authority cap and normal bot_count / MaxRandomBots churn must stay out of the path.
+    if (!sPlayerbotAIConfig.rtgEventDriven)
+    {
+        if (sPlayerbotAIConfig.usePlayerCountRatio)
+        {
+            uint32 ratioTarget = GetMaxAllowedBotCount();
+            SetEventValue(0, "bot_count_ratio_target", ratioTarget, 30);
+            maxAllowedBotCount = ratioTarget;
+        }
+        else
+        {
+            maxAllowedBotCount = GetEventValue(0, "bot_count");
 
-		// Optional: store into event cache so .playerbots rndbot stats can show it
-		// Keep TTL short so it tracks changes
-		SetEventValue(0, "bot_count_ratio_target", maxAllowedBotCount, 30);
-	}
-	else
-	{
-		// Stock behavior: randomize target bot_count over time if invalid/out of range
-		maxAllowedBotCount = GetEventValue(0, "bot_count");
-		
-		if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig.minRandomBots ||
-									maxAllowedBotCount > sPlayerbotAIConfig.maxRandomBots))
-		{
-			maxAllowedBotCount = urand(sPlayerbotAIConfig.minRandomBots, sPlayerbotAIConfig.maxRandomBots);
-			SetEventValue(0, "bot_count", maxAllowedBotCount,
-						urand(sPlayerbotAIConfig.randomBotCountChangeMinInterval,
-								sPlayerbotAIConfig.randomBotCountChangeMaxInterval));
-		}
-	}
+            if (!maxAllowedBotCount || (maxAllowedBotCount < sPlayerbotAIConfig.minRandomBots ||
+                                        maxAllowedBotCount > sPlayerbotAIConfig.maxRandomBots))
+            {
+                maxAllowedBotCount = urand(sPlayerbotAIConfig.minRandomBots, sPlayerbotAIConfig.maxRandomBots);
+                SetEventValue(0, "bot_count", maxAllowedBotCount,
+                            urand(sPlayerbotAIConfig.randomBotCountChangeMinInterval,
+                                    sPlayerbotAIConfig.randomBotCountChangeMaxInterval));
+            }
+        }
+    }
 
     // ------------------------------------------------------------------
     // RTG: queue-driven population target
@@ -1959,6 +1948,16 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
                  (sPlayerbotAIConfig.usePlayerCountRatio && onlineBotCount < maxAllowedBotCount));
         }
 
+        if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
+        {
+            AddRandomBots();
+        }
+    }
+    else if (availableBotCount < maxAllowedBotCount)
+    {
+        AddRandomBots();
+    }
+
     if (sPlayerbotAIConfig.syncLevelWithPlayers && !players.empty())
     {
         if (time(nullptr) > (PlayersCheckTimer + 60))
@@ -1981,16 +1980,6 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
             sRandomPlayerbotMgr.CheckLfgQueue();
             LfgCheckTimer = time(nullptr);
         }
-    }
-
-        if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
-        {
-            AddRandomBots();
-        }
-    }
-    else if (availableBotCount < maxAllowedBotCount)
-    {
-        AddRandomBots();
     }
 
     if (sPlayerbotAIConfig.randomBotAutologin && time(nullptr) > (printStatsTimer + 300))
@@ -2417,17 +2406,21 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
     uint32 botsToAddThisInterval = 0;
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        // In RTG event-driven mode, rtg_*_need_total already represents the unresolved
-        // incremental helper demand still needed on top of the currently counted queue/BG state.
-        // Do NOT subtract all managed online bots from that value again, or mature refill /
-        // finish-fill requests will be starved simply because earlier helpers are still online.
-        uint32 rtgManagedNeed = std::min<uint32>(GetEventValue(0, "rtg_lfg_need_total") + GetEventValue(0, "rtg_bg_need_total"), sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 bgNeed = GetEventValue(0, "rtg_bg_need_total");
+        uint32 lfgNeed = GetEventValue(0, "rtg_lfg_need_total");
+        uint32 unresolvedNeed = bgNeed + lfgNeed;
+        uint32 eventCap = std::max<uint32>(1u, sPlayerbotAIConfig.rtgEventMaxBots);
         uint32 currentOnline = static_cast<uint32>(currentBots.size());
-        uint32 onlineHeadroom = maxAllowedBotCount > currentOnline ? (maxAllowedBotCount - currentOnline) : 0u;
-        botsToAddThisInterval = std::min(rtgManagedNeed, onlineHeadroom);
+        uint32 freeCap = eventCap > currentOnline ? (eventCap - currentOnline) : 0u;
+        uint32 headroom = std::min<uint32>(unresolvedNeed, freeCap);
+        botsToAddThisInterval = headroom;
+        maxAllowedBotCount = headroom;
 
-        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][HEADROOM] need={} online={} maxAllowed={} headroom={} addInterval={}",
-                     rtgManagedNeed, currentOnline, maxAllowedBotCount, onlineHeadroom, botsToAddThisInterval));
+        if (RTG_QueueDebugEnabled() || unresolvedNeed)
+        {
+            LOG_INFO("playerbots", "[RTG][ACQUIRE][HEADROOM] unresolved={} online={} eventCap={} freeCap={} headroom={} bgNeed={} lfgNeed={}",
+                     unresolvedNeed, currentOnline, eventCap, freeCap, headroom, bgNeed, lfgNeed);
+        }
     }
 
     if ((sPlayerbotAIConfig.rtgEventDriven && botsToAddThisInterval > 0) || (!sPlayerbotAIConfig.rtgEventDriven && currentBots.size() < maxAllowedBotCount))
@@ -2766,12 +2759,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             uint32 rtgNow = static_cast<uint32>(time(nullptr));
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} currentBots={} targetBots={}",
+            if (RTG_QueueDebugEnabled())
+            {
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} currentBots={} targetBots={}",
                          static_cast<uint32>(allCharacters.size()),
                          static_cast<uint32>(lfgBuckets.size()),
                          static_cast<uint32>(bgBuckets.size()),
                          static_cast<uint32>(currentBots.size()),
-                         maxAllowedBotCount));
+                         maxAllowedBotCount);
+            }
             for (auto& kv : lfgBuckets)
             {
                 RtgLfgBucket& bucket = kv.second;
@@ -2818,17 +2814,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         it = bgBuckets.emplace(key, bucket).first;
                     }
 
-                    uint32 plannerNeed = GetEventValue(0, RTG_MakeBgTeamNeedKey(queueTypeId, uint32(bracketId), team));
-                    if (plannerNeed)
-                    {
-                        uint32 unresolved = plannerNeed > it->second.assignedExtra ? (plannerNeed - it->second.assignedExtra) : 0u;
-                        it->second.need = unresolved;
-                    }
-                    else
-                    {
-                        uint32 alreadyReserved = it->second.currentTeamCount + it->second.assignedExtra;
-                        it->second.need = alreadyReserved < it->second.teamSize ? (it->second.teamSize - alreadyReserved) : 0u;
-                    }
+                    uint32 alreadyReserved = it->second.currentTeamCount + it->second.assignedExtra;
+                    it->second.need = alreadyReserved < it->second.teamSize ? (it->second.teamSize - alreadyReserved) : 0u;
                 }
             }
 
@@ -3020,36 +3007,31 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return false;
             };
 
-            if (bgCapacity && remainingCapacity && !orderedBgBuckets.empty())
+            for (RtgBgBucket& bucket : orderedBgBuckets)
             {
-                bool progressed = true;
-                while (bgCapacity && remainingCapacity && progressed)
+                while (bgCapacity && remainingCapacity)
                 {
-                    progressed = false;
-                    for (RtgBgBucket& bucket : orderedBgBuckets)
-                    {
-                        if (!bgCapacity || !remainingCapacity)
-                            break;
-                        if (!bucket.need)
-                            continue;
-                        if (tryFillBgBucket(bucket, bgCapacity))
-                        {
-                            --bucket.need;
-                            progressed = true;
-                        }
-                    }
+                    uint32 alreadyReserved = bucket.currentTeamCount + bucket.assignedExtra;
+                    if (alreadyReserved >= bucket.teamSize)
+                        break;
+                    if (!tryFillBgBucket(bucket, bgCapacity))
+                        break;
                 }
             }
 
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} remainingCapacity={} totalLfgNeed={} totalBgNeed={}", rtgLfgLogged, rtgBgLogged, remainingCapacity, totalLfgNeed, totalBgNeed));
+            if (RTG_QueueDebugEnabled())
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} remainingCapacity={} totalLfgNeed={} totalBgNeed={}", rtgLfgLogged, rtgBgLogged, remainingCapacity, totalLfgNeed, totalBgNeed);
 
             if (remainingCapacity)
             {
                 if (missingBotsTimer == 0)
                     missingBotsTimer = time(nullptr);
 
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
-                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size())));
+                if (RTG_QueueDebugEnabled())
+                {
+                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
+                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()));
+                }
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
                 {
@@ -3233,7 +3215,8 @@ void RandomPlayerbotMgr::CheckBgQueue()
         SetEventValue(0, "rtg_bg_need_total", 0, 0);
         SetEventValue(0, "rtg_bg_start", 0, 0);
 
-        RTG_RuntimeBreadcrumb("[RTG][BG][IDLE] skip_check=no_real_players");
+        if (RTG_QueueDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][BG] skip check: no real players online");
         return;
     }
 
@@ -3620,7 +3603,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         SetEventValue(0, "rtg_lfg_need_total", 0, 0);
         SetEventValue(0, "rtg_lfg_start", 0, 0);
 
-        RTG_RuntimeBreadcrumb("[RTG][LFG][IDLE] skip_check=no_real_players");
+        if (RTG_QueueDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFG] skip check: no real players online");
         return;
     }
 
@@ -3754,8 +3738,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         {
             uint32 globalStart = anyReady ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (oldestPendingStart ? oldestPendingStart : now);
             uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgEventMaxBots);
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][DEMAND] owners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
-                     static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart));
+            LOG_INFO("playerbots", "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
+                     static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
             SetEventValue(0, "rtg_lfg_start", globalStart, globalTtl);
 			SetEventValue(0, "rtg_lfg_need_total", cappedNeed, globalTtl);
         }
