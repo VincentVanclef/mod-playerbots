@@ -218,9 +218,18 @@ uint32 LfgJoinAction::GetRoles()
         {
             if (desiredRole != actualRole)
             {
+                if (RTG_ClassCanRole(bot->getClass(), desiredRole))
+                {
+                    LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, honoring desired role", bot->GetGUID().ToString().c_str(),
+                             bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), desiredRole, actualRole);
+                    return desiredRole;
+                }
+
                 LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, using actual role", bot->GetGUID().ToString().c_str(),
                          bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), desiredRole, actualRole);
             }
+            else
+                return desiredRole;
         }
     }
 
