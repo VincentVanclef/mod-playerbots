@@ -1,166 +1,114 @@
-# Module Brain Addendum
+# RTG Brain Addendum — mod-playerbots
 
-Module Name: mod-playerbots
-Module Version: 2.3.8aa
-RTG Brain Compatibility Version: 5.4.0
-Commit Title: Repair RTG battleground planner handoff and preserve RDF materialization
-Commit Description: Rewires RTG battleground acquisition to consume planner-owned per-team demand directly, preventing finish_fill/live_refill starvation and keeping RDF helper materialization isolated from battleground helper assignment.
+Module Version Target: 2.3.8ac-next
+Brain Compatibility: 5.4.0
 
---------------------------------
-
-## Module Purpose
-
-This revision focuses on the two unstable surfaces still blocking playable queue assistance:
-
-- battleground refill / finish-fill helper acquisition
-- RDF helper materialization while battleground demand is also active
-
-The revision preserves the event-driven RTG model and keeps the already-improved queue collapse / retirement behavior intact.
+Commit Goal:
+Repair RDF materialization reliability and BG finish_fill reacquisition while preserving recent collapse improvements.
 
 --------------------------------
 
-## Architecture Overview
+## Scope
 
-- `RandomPlayerbotMgr` remains the live orchestration layer for helper acquisition, login, immediate queue dispatch, retry, and retirement.
-- `RtgBgQueuePlanner` remains the authoritative battleground planner that computes real per-team helper shortage using live queue + active battleground state.
-- RTG add metadata (`rtg_bg:*`, `rtg_lfg:*`) still defines helper purpose at login time.
-- RDF helpers and BG helpers continue to share the same temporary event-driven bot pool, but acquisition now respects service-specific demand more cleanly.
+IN SCOPE
+• RDF helper acquisition / login / dispatch / stale protection
+• BG startup fill, live_refill, finish_fill reacquisition
+• Queue‑specific helper reservation accounting
+• RDF vs BG helper separation
 
---------------------------------
-
-## Runtime Control Path
-
-real player queue demand appears
-→ planner writes authoritative RTG shortage events
-→ acquisition reads per-service demand
-→ RDF helpers log in with role-specific metadata
-→ BG helpers log in with queue/team-specific metadata
-→ helper dispatch attempts occur immediately after login
-→ live demand re-checks continue to materialize additional helpers for refill / mature ramp
-→ orphan queue collapse and safe retirement still remove stale helpers when demand truly dies
+OUT OF SCOPE
+• Playerbot AI changes
+• Database schema changes
+• Large queue planner rewrites
 
 --------------------------------
 
-## Data Structures
+## Core Design Rule
 
-- `RtgLfgBucket`
-- `RtgBgBucket`
-- `RtgHelperLedgerEntry`
-- RTG battleground planner keys now explicitly consumed by acquisition:
-  - `rtg_bg_team_need:<queue>:<bracket>:<team>`
-  - `rtg_bg_phase:<queue>:<bracket>`
-  - `rtg_bg_real_demand:<queue>:<bracket>`
+Helpers must have **service ownership**.
 
---------------------------------
+Two service lanes:
 
-## Config Interface
+RDF lane:
+mode = RDF
+owner = RDF player
+role = tank/healer/dps
 
-This revision uses existing config only:
+BG lane:
+mode = BG
+queueId
+team
+bracket
 
-- `AiPlayerbot.RTG.EventDriven.Enable`
-- `AiPlayerbot.RTG.EventDriven.MaxBots`
-- `AiPlayerbot.RTG.QueueGraceSeconds`
-- `AiPlayerbot.RTG.QueueOwnership.Enable`
-- `AiPlayerbot.RTG.QueueOwnership.Debug`
-- `AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds`
-- `AiPlayerbot.MaxRandomBots`
-- `AiPlayerbot.RandomBotAccountCount`
-- `AiPlayerbot.RandomBotAutologin`
-
-No new config keys are introduced in this pass.
+Helpers in one lane cannot be reused by the other until their reservation ends.
 
 --------------------------------
 
-## Database Structures
+## RDF Behavior
 
-No new DB schema changes.
+Real player enters RDF
+→ system acquires exact role bots
+→ bots login with RDF reservation
+→ bots dispatch only into RDF flow
+→ bots protected from BG lifecycle logic
 
-Battleground sizing continues to come from `world.battleground_template` through planner cache logic.
-
---------------------------------
-
-## Integration Points
-
-- `src/Bot/RandomPlayerbotMgr.cpp`
-- `src/Bot/RtgBgQueuePlanner.cpp`
-- `RtgQueueLifecycle`
-- `RtgQueueLedger`
-- battleground queue APIs
-- LFG queue APIs
+Expected group:
+1 tank
+1 healer
+3 dps
 
 --------------------------------
 
-## Lifecycle Model
+## Battleground Behavior
 
-### RDF
-- acquire exact role helper
-- log in helper with `rtg_lfg:*`
-- dispatch to RDF/LFG queue without being reclassified as BG demand
-- stale RDF helpers are still retired if they never truly materialize into group/dungeon state
+Real player enters BG queue
+→ planner computes shortage
+→ acquisition fills shortage
+→ live_refill replenishes losses
+→ finish_fill continues reacquisition until shortage is resolved
 
-### Battlegrounds
-- planner computes team-specific deficit from real queue + active match state
-- acquisition now reads planner per-team shortage directly
-- additional helpers can be logged during `live_refill` and `finish_fill`
-- retirement only happens after queue collapse / lifecycle safety says helper is no longer needed
+finish_fill must not be suppressed by global helper counts.
 
 --------------------------------
 
-## Known Constraints
+## Known Failures To Fix
 
-- Real-player disconnects can still look like demand disappearance to the planner if the player fully vanishes from queue state. This revision does not yet add a long reconnect cushion window.
-- RDF still depends on normal LFG acceptance/materialization rules in core + playerbot behavior after helper login.
-
---------------------------------
-
-## Future Evolution Hooks
-
-- real disconnect cushion / reclaim window before BG collapse
-- per-owner RDF rematerialization retry windows
-- stricter BG-vs-RDF pool partitioning if mixed demand becomes extremely bursty
-- planner-aware priority weights for startup vs refill vs mature finish-fill
+• finish_fill demand loops without helper login waves
+• global online helpers suppress queue-specific reacquire
+• RDF helpers treated as generic helpers
+• BG helpers retired while queue still needs them
+• reconnect turbulence stalls refill recovery
 
 --------------------------------
 
-## Files Modified In This Revision
+## Acceptance Criteria
 
-- `src/Bot/RandomPlayerbotMgr.cpp`
-- `brain_addendum/mod-playerbots_brain_addendum.md`
+RDF
+• role correct helpers appear
+• helpers not stolen by BG
+• no premature stale cleanup
 
---------------------------------
+BG
+• startup fill works
+• live_refill works
+• finish_fill produces new helpers until shortage solved
 
-## Behavioral Changes In This Revision
-
-- Battleground helper acquisition no longer derives refill need from queue totals alone.
-- Acquisition now consumes planner-authored per-team battleground shortage events, which keeps `live_refill` and `finish_fill` spawning alive after startup.
-- Battleground acquisition ordering now prefers earlier planner phases before later mature fill pressure when multiple BG buckets compete.
-- RDF helper materialization remains separate from BG helper metadata, so mixed RDF+BG demand is less likely to be swallowed by BG-only add paths.
-- Two brace/flow correctness issues in RTG helper event setup/logging were cleaned up to reduce accidental state bleed.
-
---------------------------------
-
-## Test Plan
-
-1. Set `AiPlayerbot.RandomBotAutologin = 0`.
-2. Enable RTG event-driven queue assistance and queue ownership.
-3. Queue one real level-19 player for WSG.
-4. Confirm startup logs show `pop_or_invite` demand and helper login for both teams.
-5. Let the battleground advance into `live_refill` and `finish_fill`.
-6. Confirm new helper logins continue after the initial 7v7 start when planner demand rises to 9v9 / 11v11 / 13v13 / 15v15.
-7. Start a simultaneous RDF queue from another real player.
-8. Confirm RDF helpers log with `[RTG][LFG][ACQUIRE]` / `[RTG][LFG][LOGIN]` and do not get reassigned into battleground helper login metadata.
-9. Leave queue demand and verify safe collapse / retirement still removes orphan helpers cleanly.
-10. Watch specifically for these breadcrumbs:
-   - `[RTG][BG][PHASE]`
-   - `[RTG][BG][DEMAND]`
-   - `[RTG][ACQUIRE][HEADROOM]`
-   - `[RTG][ACQUIRE]`
-   - `[RTG][LFG][ACQUIRE]`
-   - `[RTG][QUEUE][DISPATCH]`
-   - `[RTG][BG][CLEAR]`
+Regression
+• collapse behavior remains clean
+• logs remain visible
 
 --------------------------------
 
-## Notes For RTG Brain Ingestion
+## Queue Repair Addendum — 2.3.8ad-next
 
-The important semantic correction is that RTG battleground acquisition must consume planner truth, not infer demand from raw queue counts after the fact. Startup can be approximated from queue totals, but mature RTG battleground behavior requires planner-owned per-team shortage to drive additional helper login. This revision makes that handoff explicit.
+Targeted pass completed against observed logs:
+
+• finish_fill now sorts ahead of startup/pop queues so active-match reacquire is not starved by new queue seeds
+• BG helper acquisition now allocates in round-robin passes across BG buckets instead of exhausting one bucket before servicing others
+• orphan queued BG helpers with no remaining real demand are now force-retired through safe logout path instead of lingering and repeatedly producing orphan_queue_residue planner spam
+
+Expected log changes:
+
+• active finish_fill buckets should continue producing helper login waves even when another BG queue enters pop_or_invite at the same time
+• queue=4 style mature refill should no longer be repeatedly pre-empted by queue=2 startup demand
+• repeated orphan_queue_residue spam should collapse after stranded helpers are logged out

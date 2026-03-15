@@ -1669,6 +1669,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
+            bool orphanQueuedHelper = !bgHasRealDemand &&
+                                      bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
+                                      !bot->InBattleground() && !bot->InArena() && !bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
 
             if (!noLongerNeeded && !inQueueState)
@@ -1691,6 +1694,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // Layer 2: lifecycle safety. If battleground state still owns this helper,
             // never force-retire it here. Only mark it for retirement after the helper
             // becomes fully detached from battleground / queue / invite / BG-group state.
+            if (orphanQueuedHelper)
+            {
+                if (!bot->IsInCombat() && !bot->IsBeingTeleported() && !bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ORPHAN] helper={} queue={} team={} forcing logout", botId, desiredQueueType, desiredTeam));
+                    rtgBgLogout.push_back(botGuid);
+                    continue;
+                }
+            }
+
             if (lifecycleOwned)
             {
                 RTG_ClearQueueDebuffs(bot);
@@ -2885,10 +2898,24 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return a.level > b.level;
             });
 
-            std::sort(orderedBgBuckets.begin(), orderedBgBuckets.end(), [](RtgBgBucket const& a, RtgBgBucket const& b)
+            auto bgPhasePriority = [](uint32 phase) -> uint32
             {
-                if (a.phase != b.phase)
-                    return a.phase < b.phase;
+                switch (phase)
+                {
+                    case 4: return 0u; // finish_fill must reacquire before startup queues consume capacity
+                    case 3: return 1u; // live_refill keeps active matches healthy
+                    case 2: return 2u; // pop_or_invite
+                    case 1: return 3u; // starter_fill
+                    default: return 4u;
+                }
+            };
+
+            std::sort(orderedBgBuckets.begin(), orderedBgBuckets.end(), [&](RtgBgBucket const& a, RtgBgBucket const& b)
+            {
+                uint32 const aPriority = bgPhasePriority(a.phase);
+                uint32 const bPriority = bgPhasePriority(b.phase);
+                if (aPriority != bPriority)
+                    return aPriority < bPriority;
                 if (a.need != b.need)
                     return a.need > b.need;
                 if (a.realQueued != b.realQueued)
@@ -3039,15 +3066,24 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return false;
             };
 
-            for (RtgBgBucket& bucket : orderedBgBuckets)
+            while (bgCapacity && remainingCapacity)
             {
-                while (bgCapacity && remainingCapacity)
+                bool addedAnyBgHelper = false;
+
+                for (RtgBgBucket& bucket : orderedBgBuckets)
                 {
+                    if (!bgCapacity || !remainingCapacity)
+                        break;
                     if (bucket.assignedExtra >= bucket.need)
-                        break;
+                        continue;
                     if (!tryFillBgBucket(bucket, bgCapacity))
-                        break;
+                        continue;
+
+                    addedAnyBgHelper = true;
                 }
+
+                if (!addedAnyBgHelper)
+                    break;
             }
 
             if (RTG_QueueDebugEnabled())
