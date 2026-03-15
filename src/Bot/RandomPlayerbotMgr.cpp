@@ -96,40 +96,6 @@ namespace
         return std::max<uint32>(5u, std::min<uint32>(10u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds));
     }
 
-    static std::string RTG_MakeBgRealDemandKey_Local(uint32 queueType, uint32 bracketId)
-    {
-        return std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
-    }
-
-    static std::string RTG_MakeBgTeamNeedKey_Local(uint32 queueType, uint32 bracketId, uint32 teamId)
-    {
-        return std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
-    }
-
-    static std::string RTG_MakeBgPhaseKey_Local(uint32 queueType, uint32 bracketId)
-    {
-        return std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
-    }
-
-    static bool RTG_DispatchImmediateLfgJoin(Player* bot, char const* reason)
-    {
-        if (!bot)
-            return false;
-
-        lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
-        if (state != lfg::LFG_STATE_NONE)
-            return true;
-
-        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
-        if (!botAI)
-            return false;
-
-        bool queued = botAI->DoSpecificAction("lfg join", Event(), true);
-        RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][DISPATCH] helper={} reason={} result={}",
-            bot->GetGUID().GetCounter(), reason ? reason : "rtg", queued ? 1 : 0));
-        return queued;
-    }
-
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
     {
         if (!bot || !desiredQueueType || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
@@ -2570,8 +2536,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             if (RTG::HasPrefix(addData, "rtg_lfg:"))
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             else if (RTG::HasPrefix(addData, "rtg_bg:"))
+            {
                 SetEventValue(charInfo.guid, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(charInfo.guid, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
+            }
 
             if (!addData.empty())
                 RTG::RegisterPendingHelperLogin(charInfo.guid, charInfo.accountId, addData);
@@ -2819,17 +2787,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 teamSize = bgTeamSizes[qkv.first];
                 BattlegroundInfo& bgInfo = BattlegroundData[queueTypeId][bracketId];
 
-                uint32 plannerPhase = GetEventValue(0, RTG_MakeBgPhaseKey_Local(queueTypeId, uint32(bracketId)));
-                uint32 plannerRealDemand = GetEventValue(0, RTG_MakeBgRealDemandKey_Local(queueTypeId, uint32(bracketId)));
+                uint32 plannerPhase = GetEventValue(0, std::string("rtg_bg_phase:") + std::to_string(queueTypeId) + ":" + std::to_string(uint32(bracketId)));
+                uint32 plannerRealDemand = GetEventValue(0, std::string("rtg_bg_real_demand:") + std::to_string(queueTypeId) + ":" + std::to_string(uint32(bracketId)));
                 if (!plannerPhase && !plannerRealDemand)
                     continue;
 
                 for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
                 {
-                    uint32 plannerNeed = GetEventValue(0, RTG_MakeBgTeamNeedKey_Local(queueTypeId, uint32(bracketId), team));
-                    if (!plannerNeed)
-                        continue;
-
                     auto key = std::make_tuple(queueTypeId, team, level);
                     auto it = bgBuckets.find(key);
                     if (it == bgBuckets.end())
@@ -2847,6 +2811,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         it = bgBuckets.emplace(key, bucket).first;
                     }
 
+                    uint32 plannerNeed = GetEventValue(0, std::string("rtg_bg_team_need:") + std::to_string(queueTypeId) + ":" + std::to_string(uint32(bracketId)) + ":" + std::to_string(team));
                     it->second.need = plannerNeed > it->second.assignedExtra ? (plannerNeed - it->second.assignedExtra) : 0u;
                 }
             }
@@ -3039,24 +3004,23 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return false;
             };
 
-            bool bgProgress = true;
-            while (bgCapacity && remainingCapacity && bgProgress)
+            if (!orderedBgBuckets.empty())
             {
-                bgProgress = false;
-                for (RtgBgBucket& bucket : orderedBgBuckets)
+                bool progress = true;
+                while (bgCapacity && remainingCapacity && progress)
                 {
-                    if (!bgCapacity || !remainingCapacity)
-                        break;
-
-                    if (!bucket.need)
-                        continue;
-
-                    if (!tryFillBgBucket(bucket, bgCapacity))
-                        continue;
-
-                    if (bucket.need)
+                    progress = false;
+                    for (RtgBgBucket& bucket : orderedBgBuckets)
+                    {
+                        if (!bgCapacity || !remainingCapacity)
+                            break;
+                        if (!bucket.need)
+                            continue;
+                        if (!tryFillBgBucket(bucket, bgCapacity))
+                            continue;
                         --bucket.need;
-                    bgProgress = true;
+                        progress = true;
+                    }
                 }
             }
 
@@ -5591,9 +5555,6 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} level={}",
-                bot->GetGUID().GetCounter(), bot->GetLevel()));
-            RTG_DispatchImmediateLfgJoin(bot, "login_success");
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
