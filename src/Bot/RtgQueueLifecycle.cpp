@@ -62,28 +62,28 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
         return false;
 
     ObjectGuid::LowType botId = bot->GetGUID().GetCounter();
-    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
-        sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_queue_grace") ||
-        sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
         sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active"))
-        return true;
-
-    if (entry.pendingQueueJoin || entry.pendingBgJoin)
         return true;
 
     std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
     if (!IsQueueManagedAddData(addData))
+    {
+        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
+            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_queue_grace") ||
+            entry.pendingQueueJoin || entry.pendingBgJoin)
+            return true;
+
         return entry.ownerType == RtgHelperOwnerType::QueueDemand && RTG_IsActivelyOwnedHelperState(entry.state);
+    }
 
     uint32 team = 0;
     uint32 level = 0;
     uint32 queueType = 0;
     uint32 owner = 0;
-    if (ParseBgAddData(addData, team, level, queueType, &owner))
+    bool parsedBgAddData = ParseBgAddData(addData, team, level, queueType, &owner);
+    if (parsedBgAddData)
     {
-        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, "rtg_bg_need_total") != 0)
-            return true;
-
         BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueType));
         if (bgTypeId != BATTLEGROUND_TYPE_NONE)
         {
@@ -91,13 +91,38 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
             {
                 if (PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), level ? level : bot->GetLevel()))
                 {
-                    std::string demandKey = std::string("rtg_bg_need_") + std::to_string(queueType) + ":" + std::to_string(uint32(pvpDiff->GetBracketId()));
-                    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0)
+                    uint32 bracketId = uint32(pvpDiff->GetBracketId());
+                    std::string demandKey = std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+                    std::string phaseKey = std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+                    std::string teamNeedKey = std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(team);
+                    bool queueDemandActive =
+                        sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0 ||
+                        sRandomPlayerbotMgr.RTG_GetBotEventValue(0, phaseKey) != 0 ||
+                        sRandomPlayerbotMgr.RTG_GetBotEventValue(0, teamNeedKey) != 0;
+
+                    if (queueDemandActive)
+                    {
+                        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
+                            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_queue_grace") ||
+                            entry.pendingQueueJoin || entry.pendingBgJoin)
+                            return true;
+
                         return true;
+                    }
+
+                    return entry.ownerType == RtgHelperOwnerType::QueueDemand &&
+                           entry.target.queueTypeId == BattlegroundQueueTypeId(queueType) &&
+                           entry.target.bracketId == pvpDiff->GetBracketId() &&
+                           entry.state == RtgHelperState::InBattleground;
                 }
             }
         }
+
+        return entry.ownerType == RtgHelperOwnerType::QueueDemand && entry.state == RtgHelperState::InBattleground;
     }
+
+    if (!parsedBgAddData && (entry.pendingQueueJoin || entry.pendingBgJoin))
+        return true;
 
     return entry.ownerType == RtgHelperOwnerType::QueueDemand && RTG_IsActivelyOwnedHelperState(entry.state);
 }

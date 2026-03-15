@@ -176,3 +176,31 @@ For RTG BG queue assistance, the planner is authoritative for per-team unresolve
 ### Files Modified
 - `src/Bot/RandomPlayerbotMgr.cpp`
 - `brain_addendum/mod-playerbots_brain_addendum.md`
+
+================================
+## Revision: 2.3.8t BG Dead-Queue Cohort Collapse
+
+### Purpose
+This revision hardens RTG battleground teardown after matches/queues die. It targets the repeated `orphan_queue_residue` loop where only a small subset of helpers retired while many stale queue-owned helpers remained online and kept the queue state dirty.
+
+### Key Corrections
+- BG helper cleanup now recognizes a **dead queue assignment** when queue-specific real demand and queue phase are both absent.
+- Dead queue helpers immediately lose transient BG queue reservation markers:
+  - `rtg_bg_pending`
+  - `rtg_bg_queue_grace`
+  - `rtg_bg_queue_retry`
+- Queued-but-not-in-match helpers attached to a dead queue are forced to leave that stale queue before retirement evaluation.
+- Queue ownership ledger entries for dead queue helpers are explicitly marked for retire and released once they are no longer lifecycle-owned.
+- RTG lifecycle demand checks no longer treat **global** BG need as proof that every BG helper still has outstanding demand.
+- Queue-specific demand checks now use:
+  - `rtg_bg_real_demand:<queue>:<bracket>`
+  - `rtg_bg_phase:<queue>:<bracket>`
+  - `rtg_bg_team_need:<queue>:<bracket>:<team>`
+
+### Doctrine Reminder
+RTG helper teardown must be **queue-scoped**. A helper acquired for one battleground must not remain protected just because some other battleground still has demand. Dead queue cohorts should collapse cleanly so later queues are not polluted by stale ownership residue.
+
+### Files Modified
+- `src/Bot/RandomPlayerbotMgr.cpp`
+- `src/Bot/RtgQueueLifecycle.cpp`
+- `brain_addendum/mod-playerbots_brain_addendum.md`

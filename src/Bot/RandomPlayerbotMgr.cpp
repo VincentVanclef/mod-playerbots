@@ -319,6 +319,11 @@ namespace
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+    static std::string RTG_MakeBgPhaseKey(uint32 queueType, uint32 bracketId)
+    {
+        return "rtg_bg_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
     static void RTG_ClearQueueDebuffs(Player* bot)
     {
         if (!bot)
@@ -468,6 +473,31 @@ namespace
             return BattlegroundQueueTypeId(desiredQueueType);
 
         return BATTLEGROUND_QUEUE_NONE;
+    }
+
+    static bool RTG_ForceLeaveBgQueue(Player* bot, BattlegroundQueueTypeId queueTypeId, char const* reason)
+    {
+        if (!bot || !bot->GetSession())
+            return false;
+
+        if (bot->InBattleground() || bot->InArena() || (bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena()))
+            return false;
+
+        if (!(bot->InBattlegroundQueue() || bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance()))
+            return false;
+
+        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
+        uint8 arenaType = uint8(BattlegroundMgr::BGArenaType(queueTypeId));
+        uint16 unk = 0x1F90;
+        uint8 unk2 = 0x0;
+
+        WorldPacket packet(CMSG_BATTLEFIELD_PORT, 20);
+        packet << arenaType << unk2 << uint32(bgTypeId) << unk << uint8(0);
+        bot->GetSession()->QueuePacket(new WorldPacket(packet));
+
+        RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][LEAVE] helper={} queue={} reason={}",
+            bot->GetGUID().GetCounter(), uint32(queueTypeId), reason ? reason : "rtg_bg_force_leave"));
+        return true;
     }
 }
 
@@ -1644,18 +1674,23 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
 
             bool bgHasRealDemand = false;
+            bool bgPhaseActive = false;
             BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
             if (desiredBgType != BATTLEGROUND_TYPE_NONE)
             {
                 if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
                 {
                     if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
+                    {
                         bgHasRealDemand = GetEventValue(0, RTG_MakeBgDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
+                        bgPhaseActive = GetEventValue(0, RTG_MakeBgPhaseKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
+                    }
                 }
             }
 
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
             bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || !rtgBgReady || wrongTeam;
+            bool deadQueueAssignment = !bgHasRealDemand && !bgPhaseActive;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
@@ -1667,6 +1702,28 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
+
+            if (deadQueueAssignment)
+            {
+                SetEventValue(botId, "rtg_bg_pending", 0, 0);
+                SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
+                SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+
+                if (!bot->InBattleground() && !bot->InArena())
+                    RTG_ForceLeaveBgQueue(bot, BattlegroundQueueTypeId(desiredQueueType), "dead_queue_collapse");
+
+                if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                {
+                    RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
+                    ledger.RequestRetire(botId, "dead bg queue collapse");
+                    if (!RTG_IsBgLifecycleOwned(bot, desiredQueueType))
+                        ledger.Release(botId, "dead bg queue collapse");
+                }
+
+                inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
+                               bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
+                queueGrace = false;
+            }
 
             if (!noLongerNeeded && !inQueueState)
             {
