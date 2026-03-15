@@ -118,6 +118,30 @@ namespace
         return count;
     }
 
+    static bool RTG_IsPlayerOwnerInBattlegroundFlow(uint32 ownerGuidLow)
+    {
+        if (!ownerGuidLow)
+            return false;
+
+        if (Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ownerGuidLow)))
+            return owner->InBattleground() || owner->InArena() || owner->InBattlegroundQueue();
+
+        return false;
+    }
+
+    static void RTG_SeedBusyRandomBotAccounts(std::unordered_set<uint32>& busyAccounts, std::list<uint32> const& currentBots)
+    {
+        for (uint32 botId : currentBots)
+        {
+            if (!botId)
+                continue;
+
+            uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(ObjectGuid::Create<HighGuid::Player>(botId));
+            if (accountId)
+                busyAccounts.insert(accountId);
+        }
+    }
+
     static uint32 RTG_GetQueueRetryWindowSeconds()
     {
         return std::max<uint32>(5u, std::min<uint32>(10u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds));
@@ -1600,6 +1624,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 
 			bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
+            bool ownerInBgFlow = desiredOwner && RTG_IsPlayerOwnerInBattlegroundFlow(desiredOwner);
 
 			Map* map = bot->GetMap();
 			if (map && (map->IsDungeon() || map->IsRaid()))
@@ -1631,6 +1656,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			}
 
 			lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
+
+            if (ownerInBgFlow && botState == lfg::LFG_STATE_NONE)
+            {
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_flow", botId, desiredOwner));
+                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                rtgStaleQueueBots.push_back(botGuid);
+                continue;
+            }
 
 			// If the bot is actively queued, do not recycle it
 			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
@@ -2614,9 +2647,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 hordeChars.push_back(charInfo);
         }
 
+        std::unordered_set<uint32> busyAccountIds;
+        RTG_SeedBusyRandomBotAccounts(busyAccountIds, currentBots);
+
         // Lambda to handle bot login logic
         auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& addData = "") -> bool
         {
+            if (busyAccountIds.find(charInfo.accountId) != busyAccountIds.end())
+                return false;
+
             if (GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
@@ -2651,6 +2690,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             currentBots.push_back(charInfo.guid);
+            busyAccountIds.insert(charInfo.accountId);
 
             return true;
         };
