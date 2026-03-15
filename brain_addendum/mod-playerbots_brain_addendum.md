@@ -213,3 +213,10 @@ When battleground demand exists, RDF helper **acquisition** for an owner current
 
 ### Intent
 This keeps battleground startup from losing helper capacity to RDF groups that are likely to be superseded by a near-immediate BG pop, while still avoiding premature RDF abandonment.
+
+
+## Queue Fix Addendum - Mixed BG/RDF Startup Guard
+
+- When battleground demand is active, queued RDF acquisition must not consume helper capacity needed to launch battlegrounds.
+- Active dungeon/LFG-group support may still proceed, but plain queued RDF buckets should be deferred until BG startup pressure clears.
+- This is an acquisition deferral rule, not an abandonment rule. Existing RDF helpers should still only be abandoned on true owner BG-map entry.

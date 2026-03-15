@@ -2650,6 +2650,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 queuedDps = 0;
                 uint32 need = 0;
                 uint32 startTs = 0;
+                bool activeDungeon = false;
             };
 
             struct RtgBgBucket
@@ -2701,6 +2702,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     bucket.team = player->GetTeamId();
                     bucket.level = player->GetLevel();
                     bucket.startTs = activeDungeon ? (static_cast<uint32>(time(nullptr)) - sPlayerbotAIConfig.rtgQueueGraceSeconds) : GetEventValue(owner, "rtg_lfg_start");
+                    if (activeDungeon)
+                        bucket.activeDungeon = true;
                     if (queuedLfg)
                         ++bucket.realQueued;
 
@@ -3084,10 +3087,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return added;
             };
 
-            auto fillReservedLfgLane = [&](uint32& capacity)
+            auto fillReservedLfgLane = [&](uint32& capacity, bool bgDemandActive)
             {
                 for (RtgLfgBucket& bucket : orderedLfgBuckets)
                 {
+                    if (bgDemandActive && !bucket.activeDungeon)
+                        continue;
+
                     while (capacity && remainingCapacity && tryFillLfgBucketOnce(bucket, capacity))
                     {
                     }
@@ -3151,8 +3157,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             uint32 reservedBgCapacity = bgCapacity;
             uint32 laneDebugInitialLfg = reservedLfgCapacity;
             uint32 laneDebugInitialBg = reservedBgCapacity;
+            bool bgDemandActive = totalBgNeed > 0;
 
-            fillReservedLfgLane(reservedLfgCapacity);
+            fillReservedLfgLane(reservedLfgCapacity, bgDemandActive);
             fillReservedBgLane(reservedBgCapacity);
 
             uint32 sharedSurplus = reservedLfgCapacity + reservedBgCapacity;
@@ -3179,6 +3186,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             }
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
+                                if (bgDemandActive && !bucket.activeDungeon)
+                                    continue;
                                 if (tryFillLfgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
@@ -3187,6 +3196,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         {
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
+                                if (bgDemandActive && !bucket.activeDungeon)
+                                    continue;
                                 if (tryFillLfgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
@@ -3211,13 +3222,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             if (RTG_QueueDebugEnabled())
             {
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][LANES] lfgReserved={} bgReserved={} lfgUnused={} bgUnused={} sharedSurplus={} remainingCapacity={}",
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][LANES] lfgReserved={} bgReserved={} lfgUnused={} bgUnused={} sharedSurplus={} remainingCapacity={} bgDemandActive={}",
                          laneDebugInitialLfg,
                          laneDebugInitialBg,
                          reservedLfgCapacity,
                          reservedBgCapacity,
                          sharedSurplus,
-                         remainingCapacity);
+                         remainingCapacity,
+                         bgDemandActive ? 1u : 0u);
             }
 
             if (RTG_QueueDebugEnabled())
