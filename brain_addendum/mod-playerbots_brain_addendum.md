@@ -1,206 +1,139 @@
 # Module Brain Addendum
 
 Module Name: mod-playerbots
-Module Version: 2.3.8r
+Module Version: 2.3.8u
 RTG Brain Compatibility Version: 5.4.0
-Commit Title: Treat RTG planner demand as incremental helper headroom and block stale helper requeue
-Commit Description: Fixes RTG event-driven helper acquisition so battleground and RDF planner demand is interpreted as additional unresolved helper demand bounded by AiPlayerbot.RTG.EventDriven.MaxBots rather than as an absolute online-helper ceiling. Also blocks stale assigned BG/RDF helpers from re-queueing after demand has ended so they can retire cleanly.
+Commit Title: Make BG acquisition planner-authoritative and stop phantom cross-queue need inflation
+Commit Description: Repairs RTG battleground acquisition so only queues with active planner state contribute BG helper demand, preventing phantom cross-queue bucket inflation, wrong-queue helper assignment during overlapping battleground starts, and RDF starvation caused by BG-local fallback need.
 
 --------------------------------
 
 ## Module Purpose
 
-This revision completes a focused RTG queue-assistance repair pass aimed at the remaining gameplay blockers after runtime restoration. It fixes the acquisition handoff so finish-fill and RDF coexistence can spawn additional helpers beyond already-online startup helpers, and it prevents stale assigned helpers from autonomously rejoining battleground or RDF queues after the event/run has ended.
+This revision tightens the RTG queue-assistance contract around battleground acquisition. The planner is now treated as the sole authority for which battleground queues are active and how much per-team helper demand exists. Acquisition no longer invents helper need for queues that merely appear in local player queue snapshots but do not yet have planner-authored demand.
 
 --------------------------------
 
 ## Architecture Overview
 
-- `RandomPlayerbotMgr` remains the live RTG runtime manager for planner refresh, acquisition, dispatch, and retirement.
-- RTG acquisition headroom now separates **event cap ceiling** from **unresolved planner demand**.
-- `BattleGroundJoinAction` and `LfgJoinAction` now validate that assigned RTG helpers still have active planner demand before queueing.
-- Existing BG round-robin team fill, planner phases, and lifecycle safety remain intact.
+- `RtgBgQueuePlanner` remains the authoritative battleground demand producer.
+- `RandomPlayerbotMgr::AddRandomBots()` now gates BG acquisition buckets behind active planner state for the specific queue/bracket pair.
+- BG helper need is now planner-authored only in RTG mode; local team-size fallback no longer creates phantom demand for unrelated battleground queues.
+- Existing dead-queue collapse behavior from 2.3.8t remains intact.
 
 --------------------------------
 
 ## Runtime Control Path
 
-real-player BG/RDF demand
-→ planner computes unresolved helper need
-→ acquisition computes `freeCap = EventMaxBots - managedOnlineHelpers`
-→ acquisition computes `headroom = min(unresolvedNeed, freeCap)`
-→ helper buckets fill BG/RDF demand
-→ when demand ends, assigned helpers are blocked from re-queueing and can retire safely
+real player battleground queue activity
+→ `RtgBgQueuePlanner` computes phase, real-demand, and team-need keys for each active queue/bracket
+→ `RandomPlayerbotMgr::AddRandomBots()` only materializes BG buckets for queue/bracket pairs with planner state present
+→ helper login begins with queue-specific BG add-data metadata
+→ helper dispatch remains bound to the intended battleground queue
+→ dead queue collapse/retirement still tears helpers down cleanly when planner state disappears
 
 --------------------------------
 
 ## Data Structures
 
-Active RTG global demand keys used by this revision:
-
-- `rtg_bg_need_total`
-- `rtg_lfg_need_total`
-- `rtg_bg_demand:<queue>:<bracket>`
+Planner-authored BG event keys used by acquisition:
+- `rtg_bg_real_demand:<queue>:<bracket>`
+- `rtg_bg_phase:<queue>:<bracket>`
 - `rtg_bg_team_need:<queue>:<bracket>:<team>`
-- `rtg_target`
+- `rtg_bg_need_total`
 
-Active helper metadata relied on by this revision:
-
+Helper metadata remains unchanged:
 - `add`
 - `rtg_bg_pending`
 - `rtg_bg_queue_grace`
 - `rtg_bg_retire_when_safe`
-- `rtg_lfg_pending`
-- `rtg_dungeon_active`
 
 --------------------------------
 
 ## Config Interface
 
-Primary RTG authority settings for this revision:
+No new config keys in this revision.
 
+Relevant existing settings:
 - `AiPlayerbot.RTG.EventDriven.Enable`
 - `AiPlayerbot.RTG.EventDriven.MaxBots`
-- `AiPlayerbot.RTG.EventDriven.KeepWorldBots`
 - `AiPlayerbot.RTG.QueueGraceSeconds`
+- `AiPlayerbot.RTG.QueueOwnership.Enable`
 - `AiPlayerbot.RandomBotAutologin`
 - `AiPlayerbot.RandomBotAccountCount`
-
-Formalized rules in this revision:
-
-- In RTG mode, planner need is **incremental unresolved demand**.
-- In RTG mode, `AiPlayerbot.RTG.EventDriven.MaxBots` is the helper ceiling.
-- Assigned BG/RDF helpers must not queue unless their planner demand is still active.
 
 --------------------------------
 
 ## Database Structures
 
-No new DB structures. Battleground min/max sizing continues to come from cached `world.battleground_template` reads through the existing planner flow.
+Still uses cached battleground sizing from `world.battleground_template` through the planner path. No new schema or SQL changes.
 
 --------------------------------
 
 ## Integration Points
 
 - `src/Bot/RandomPlayerbotMgr.cpp`
-- `src/Ai/Base/Actions/BattleGroundJoinAction.cpp`
-- `src/Ai/Base/Actions/LfgActions.cpp`
-- RTG planner event cache
-- existing helper queue lifecycle / retirement path
+- `src/Bot/RtgBgQueuePlanner.cpp`
+- `src/Bot/RtgQueueLifecycle.cpp`
+- RTG battleground global event cache
 
 --------------------------------
 
 ## Lifecycle Model
 
-This revision preserves the RTG lifecycle doctrine:
-
-- helpers do not voluntarily leave live battlegrounds
-- helpers do not keep deserter penalties
-- helpers only retire when out of queue/BG/LFG danger
-
-New behavior added by this revision:
-
-- stale assigned BG helpers are blocked from re-queueing when their specific queue/team demand no longer exists
-- stale assigned RDF helpers are blocked from re-queueing when owner/global RDF demand has ended
+- BG acquisition now requires queue-specific planner state before a queue contributes helper demand.
+- BG helper need in RTG mode is planner-authored only.
+- Dead queue collapse and helper retirement remain queue-scoped and planner-driven.
+- Active battleground demand from queue A no longer manufactures helper need for queue B.
 
 --------------------------------
 
 ## Known Constraints
 
-- Retirement still depends on the existing safe logout path and lifecycle gates.
-- `currentBots` still defines the current RTG-managed helper population used for acquisition headroom.
-- RDF refill/orphan handling beyond queue re-entry blocking remains part of the next hardening pass if edge cases remain.
+- This revision targets BG acquisition correctness during overlapping battleground demand and RDF coexistence.
+- It intentionally does not change the already-working dead-queue collapse logic introduced in 2.3.8t.
+- Runtime validation is still required to verify RDF demand can now surface cleanly when BG phantom demand is removed.
 
 --------------------------------
 
 ## Future Evolution Hooks
 
-- Dedicated RTG helper planner class to isolate demand aggregation from `RandomPlayerbotMgr`.
-- Explicit telemetry for `managedOnlineHelpers` distinct from `currentBots` if further precision is needed.
-- Stronger RDF orphan replacement accounting once role-check/requeue behavior is fully hardened.
+- queue-specific helper assignment breadcrumbs such as `[RTG][BG][ASSIGN]`
+- explicit RDF reservation floor while BG finish-fill is active
+- queue-ownership dashboards showing assigned vs queued vs joined helpers per battleground queue
 
 --------------------------------
 
 ## Files Modified In This Revision
 
 - `src/Bot/RandomPlayerbotMgr.cpp`
-- `src/Ai/Base/Actions/BattleGroundJoinAction.cpp`
-- `src/Ai/Base/Actions/LfgActions.cpp`
 - `brain_addendum/mod-playerbots_brain_addendum.md`
 
 --------------------------------
 
 ## Behavioral Changes In This Revision
 
-- RTG acquisition headroom now uses event-cap math instead of treating planner need as an absolute online target.
-- Finish-fill and RDF coexistence can now request additional helpers even when startup helpers are already online.
-- BG assigned helpers only queue if their exact planner queue/team/bracket still has demand.
-- RDF assigned helpers only queue if owner/global RDF demand still exists.
-- Stale helpers stop re-queueing themselves after BG or RDF demand ends, allowing clean retirement.
-- Standalone RTG runtime remains enabled even when `AiPlayerbot.RandomBotAutologin = 0`.
+- Prevents acquisition from creating BG helper demand for queue/bracket pairs that do not currently have planner state.
+- Removes local BG team-size fallback as an RTG acquisition authority in event-driven mode.
+- Prevents overlapping battleground starts from inflating `totalBgNeed` with phantom queues.
+- Helps preserve RDF responsiveness by removing BG-invented demand that could otherwise consume RTG helper headroom.
+- Keeps the current clean dead-queue teardown behavior intact.
+
+--------------------------------
 
 ## Test Plan
 
-1. Set `AiPlayerbot.RTG.EventDriven.Enable = 1`.
-2. Set `AiPlayerbot.RTG.EventDriven.MaxBots = 60`.
-3. Set `AiPlayerbot.RandomBotAutologin = 0`.
-4. Keep `AiPlayerbot.RandomBotAccountCount` high enough for helper supply.
-5. Restart `worldserver`.
-6. Queue one real level-19 player into Eye of the Storm and let startup seed complete.
-7. Wait for `finish_fill` and confirm headroom logs now show event-cap math, for example `eventCap=60 freeCap=47 headroom=16` instead of shrinking to `3` when `13` helpers are already online.
-8. Queue RDF while BG helpers are online and confirm RDF demand can still acquire helpers from remaining free cap.
-9. Let an EotS match end and confirm former BG helpers do not immediately requeue if no fresh planner demand exists.
-10. Let an RDF run end and confirm former dungeon helpers do not immediately requeue if no owner/global RDF demand exists.
+1. Set `AiPlayerbot.RandomBotAutologin = 0`.
+2. Enable RTG event-driven queue assistance and queue ownership.
+3. Restart `worldserver`.
+4. Queue only Eye of the Storm and confirm initial BG acquisition shows queue 4 helpers only.
+5. Queue Warsong Gulch and Eye of the Storm at the same time and confirm helper acquisition reflects only the planner-authored need for those exact queues.
+6. Confirm `totalBgNeed` no longer inflates beyond the sum of visible planner demand for the active queues.
+7. Queue RDF solo and confirm RDF demand can surface without phantom BG buckets stealing headroom.
+8. Leave all queues and confirm helpers still collapse and log out cleanly.
 
 --------------------------------
 
 ## Notes For RTG Brain Ingestion
 
-This revision formalizes a critical RTG queue doctrine rule: **planner need is additive unresolved helper demand, not the desired total number of online helpers**. It also formalizes that helper assignment alone is not enough to justify queue entry; active planner demand must still exist for the helper’s BG/RDF context.
-
-================================
-## Revision: 2.3.8s Focused BG Acquire Stabilization
-
-### Purpose
-This repair pass is intentionally narrow. It corrects a regression where BG helper acquisition could collapse back into one-sided faction fills and where critical RTG acquisition breadcrumbs could disappear from the worldserver-visible log stream.
-
-### Key Corrections
-- RTG runtime breadcrumbs are now mirrored into `server.loading` in addition to `playerbots`.
-- BG acquisition now prefers planner-authored `rtg_bg_team_need:<queue>:<bracket>:<team>` keys instead of relying only on local `teamSize - currentTeamCount` reconstruction.
-- BG acquisition now fills unresolved team buckets in a round-robin loop instead of draining one bucket fully before attempting the opposite faction.
-- RTG acquisition headroom, plan, result, and miss breadcrumbs are emitted through the shared runtime breadcrumb path so worldserver-visible diagnosis stays intact.
-
-### Doctrine Reminder
-For RTG BG queue assistance, the planner is authoritative for per-team unresolved need. Acquisition must honor that planner output and distribute helper logins across factions without allowing one bucket to consume the whole burst opportunistically.
-
-### Files Modified
-- `src/Bot/RandomPlayerbotMgr.cpp`
-- `brain_addendum/mod-playerbots_brain_addendum.md`
-
-================================
-## Revision: 2.3.8t BG Dead-Queue Cohort Collapse
-
-### Purpose
-This revision hardens RTG battleground teardown after matches/queues die. It targets the repeated `orphan_queue_residue` loop where only a small subset of helpers retired while many stale queue-owned helpers remained online and kept the queue state dirty.
-
-### Key Corrections
-- BG helper cleanup now recognizes a **dead queue assignment** when queue-specific real demand and queue phase are both absent.
-- Dead queue helpers immediately lose transient BG queue reservation markers:
-  - `rtg_bg_pending`
-  - `rtg_bg_queue_grace`
-  - `rtg_bg_queue_retry`
-- Queued-but-not-in-match helpers attached to a dead queue are forced to leave that stale queue before retirement evaluation.
-- Queue ownership ledger entries for dead queue helpers are explicitly marked for retire and released once they are no longer lifecycle-owned.
-- RTG lifecycle demand checks no longer treat **global** BG need as proof that every BG helper still has outstanding demand.
-- Queue-specific demand checks now use:
-  - `rtg_bg_real_demand:<queue>:<bracket>`
-  - `rtg_bg_phase:<queue>:<bracket>`
-  - `rtg_bg_team_need:<queue>:<bracket>:<team>`
-
-### Doctrine Reminder
-RTG helper teardown must be **queue-scoped**. A helper acquired for one battleground must not remain protected just because some other battleground still has demand. Dead queue cohorts should collapse cleanly so later queues are not polluted by stale ownership residue.
-
-### Files Modified
-- `src/Bot/RandomPlayerbotMgr.cpp`
-- `src/Bot/RtgQueueLifecycle.cpp`
-- `brain_addendum/mod-playerbots_brain_addendum.md`
+This revision formalizes a second critical RTG queue-assistance rule: in event-driven mode, battleground acquisition must not infer helper need from local snapshots unless the battleground planner has explicitly activated that queue/bracket pair. Planner state is the permission layer; planner team-need is the quantity layer.
