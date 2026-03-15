@@ -100,48 +100,6 @@ namespace
         return std::max<uint32>(1u, sPlayerbotAIConfig.maxRandomBots);
     }
 
-    static uint32 RTG_CountTrackedQueueManagedHelpers(std::list<uint32> const& currentBots)
-    {
-        uint32 count = 0;
-        for (uint32 bot : currentBots)
-        {
-            std::string addData = sRandomPlayerbotMgr.GetEventData(bot, "add");
-            if (addData.empty())
-                continue;
-
-            if (!RTG::IsQueueManagedAddData(addData))
-                continue;
-
-            ++count;
-        }
-
-        return count;
-    }
-
-    static bool RTG_IsPlayerOwnerInBattlegroundFlow(uint32 ownerGuidLow)
-    {
-        if (!ownerGuidLow)
-            return false;
-
-        if (Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ownerGuidLow)))
-            return owner->InBattleground() || owner->InArena() || owner->InBattlegroundQueue();
-
-        return false;
-    }
-
-    static void RTG_SeedBusyRandomBotAccounts(std::unordered_set<uint32>& busyAccounts, std::list<uint32> const& currentBots)
-    {
-        for (uint32 botId : currentBots)
-        {
-            if (!botId)
-                continue;
-
-            uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(ObjectGuid::Create<HighGuid::Player>(botId));
-            if (accountId)
-                busyAccounts.insert(accountId);
-        }
-    }
-
     static uint32 RTG_GetQueueRetryWindowSeconds()
     {
         return std::max<uint32>(5u, std::min<uint32>(10u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds));
@@ -150,6 +108,18 @@ namespace
     static uint32 RTG_GetDispatchStallThresholdSeconds()
     {
         return std::max<uint32>(20u, RTG_GetQueueGraceTtlSeconds() + 10u);
+    }
+
+    static bool RTG_IsOwnerInBattlegroundMap(uint32 ownerGuid)
+    {
+        if (!ownerGuid)
+            return false;
+
+        Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ownerGuid));
+        if (!owner)
+            return false;
+
+        return owner->InBattleground() || owner->InArena();
     }
 
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
@@ -1262,37 +1232,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
         uint32 lfgTarget = rtgLfgReady ? lfgNeed : 0u;
         uint32 bgTarget = rtgBgReady ? bgNeed : 0u;
-        uint32 unresolvedEventNeed = lfgTarget + bgTarget;
-        uint32 trackedManagedHelpers = RTG_CountTrackedQueueManagedHelpers(currentBots);
-        uint32 eventTarget = 0u;
-
-        // RTG queue demand values represent unresolved incremental helper need, not the
-        // full number of helpers that should remain online. If we target only the unresolved
-        // delta, the first successful helper wave can satisfy the target numerically and close
-        // headroom before the queue is actually full. Keep already tracked queue-managed helpers
-        // inside the temporary RTG target while demand remains active, then add only the
-        // unresolved need on top.
-        if (rtgLfgDemand || rtgBgDemand)
-            eventTarget = std::min<uint32>(trackedManagedHelpers + unresolvedEventNeed, sPlayerbotAIConfig.rtgEventMaxBots);
-
+        uint32 eventTarget = std::min<uint32>(lfgTarget + bgTarget, sPlayerbotAIConfig.rtgEventMaxBots);
         maxAllowedBotCount = baseWorld + eventTarget;
 
         if (!rtgLfgDemand && !rtgBgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
             maxAllowedBotCount = 0;
 
         SetEventValue(0, "rtg_target", maxAllowedBotCount, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
-
-        if (RTG_QueueDebugEnabled())
-        {
-            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} unresolvedNeed={} lfgTarget={} bgTarget={} eventTarget={} baseWorld={} maxAllowed={}",
-                     trackedManagedHelpers,
-                     unresolvedEventNeed,
-                     lfgTarget,
-                     bgTarget,
-                     eventTarget,
-                     baseWorld,
-                     maxAllowedBotCount);
-        }
 
         static bool rtgStandaloneLogged = false;
         if (!rtgStandaloneLogged && !sPlayerbotAIConfig.randomBotAutologin)
@@ -1624,7 +1570,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 
 			bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
-            bool ownerInBgFlow = desiredOwner && RTG_IsPlayerOwnerInBattlegroundFlow(desiredOwner);
+            bool ownerInBgMap = RTG_IsOwnerInBattlegroundMap(desiredOwner);
 
 			Map* map = bot->GetMap();
 			if (map && (map->IsDungeon() || map->IsRaid()))
@@ -1633,6 +1579,17 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
 				continue;
 			}
+
+            if (ownerInBgMap)
+            {
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_map", botId, desiredOwner));
+                SetEventValue(botId, "add", 0, 0);
+                SetEventValue(botId, "rtg_add_requested", 0, 0);
+                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                currentBots.remove(botId);
+                rtgStaleQueueBots.push_back(botGuid);
+                continue;
+            }
 
 			if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
 				continue;
@@ -1656,14 +1613,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			}
 
 			lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
-
-            if (ownerInBgFlow && botState == lfg::LFG_STATE_NONE)
-            {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_flow", botId, desiredOwner));
-                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                rtgStaleQueueBots.push_back(botGuid);
-                continue;
-            }
 
 			// If the bot is actively queued, do not recycle it
 			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
@@ -2500,33 +2449,7 @@ bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
 // Phase 4 is reached if and only if the value of RandomBotAccountCount is lower than it should.
 uint32 RandomPlayerbotMgr::AddRandomBots()
 {
-    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        uint32 rtgTarget = GetEventValue(0, "rtg_target");
-        if (!rtgTarget)
-        {
-            uint32 unresolvedNeed = std::min<uint32>(GetEventValue(0, "rtg_lfg_need_total") + GetEventValue(0, "rtg_bg_need_total"), sPlayerbotAIConfig.rtgEventMaxBots);
-            uint32 trackedManagedHelpers = RTG_CountTrackedQueueManagedHelpers(currentBots);
-            uint32 baseWorld = sPlayerbotAIConfig.rtgKeepWorldBots ? maxAllowedBotCount : 0u;
-            if (unresolvedNeed || trackedManagedHelpers)
-                rtgTarget = baseWorld + std::min<uint32>(trackedManagedHelpers + unresolvedNeed, sPlayerbotAIConfig.rtgEventMaxBots);
-            else if (!sPlayerbotAIConfig.rtgKeepWorldBots)
-                rtgTarget = 0u;
-        }
-
-        if (RTG_QueueDebugEnabled())
-        {
-            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} lfgNeed={} bgNeed={} trackedManaged={}",
-                     maxAllowedBotCount,
-                     rtgTarget,
-                     GetEventValue(0, "rtg_lfg_need_total"),
-                     GetEventValue(0, "rtg_bg_need_total"),
-                     RTG_CountTrackedQueueManagedHelpers(currentBots));
-        }
-
-        maxAllowedBotCount = rtgTarget;
-    }
+    uint32 maxAllowedBotCount = sPlayerbotAIConfig.rtgEventDriven ? GetMaxAllowedBotCount() : GetMaxAllowedBotCount();
     static time_t missingBotsTimer = 0;
 
     uint32 botsToAddThisInterval = 0;
@@ -2648,15 +2571,28 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         }
 
         std::unordered_set<uint32> busyAccountIds;
-        RTG_SeedBusyRandomBotAccounts(busyAccountIds, currentBots);
+        for (uint32 botId : currentBots)
+        {
+            uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(ObjectGuid::Create<HighGuid::Player>(botId));
+            if (accountId)
+                busyAccountIds.insert(accountId);
+        }
+
+        for (auto const& [guid, bot] : playerBots)
+        {
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(guid.GetCounter());
+            if (accountId)
+                busyAccountIds.insert(accountId);
+        }
 
         // Lambda to handle bot login logic
         auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& addData = "") -> bool
         {
-            if (busyAccountIds.find(charInfo.accountId) != busyAccountIds.end())
-                return false;
-
-            if (GetEventValue(charInfo.guid, "add") ||
+            if (busyAccountIds.find(charInfo.accountId) != busyAccountIds.end() ||
+                GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
@@ -4097,6 +4033,23 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
     if (!player)
     {
         std::string addData = GetEventData(bot, "add");
+        uint32 desiredTeam = 0;
+        uint32 desiredLevel = 0;
+        uint32 desiredRole = 0;
+        uint32 desiredOwner = 0;
+        if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner) && RTG_IsOwnerInBattlegroundMap(desiredOwner))
+        {
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_map", bot, desiredOwner));
+            SetEventValue(bot, "add", 0, 0);
+            SetEventValue(bot, "logout", 0, 0);
+            SetEventValue(bot, "rtg_add_requested", 0, 0);
+            SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+            currentBots.remove(bot);
+            if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                RTG::RtgQueueLedger::Instance().Remove(bot);
+            return false;
+        }
+
         if (RTG::IsQueueManagedAddData(addData))
         {
             uint32 requestTs = GetEventValue(bot, "rtg_add_requested");

@@ -1,129 +1,199 @@
-# Module Brain Addendum
+# RTG Brain Addendum — mod-playerbots
 
-Module Name: mod-playerbots
-Module Version: 2.3.8g
-RTG Brain Compatibility Version: 5.4.0
-Commit Title: Prevent same-account helper collisions and retire abandoned RDF fillers during BG diversion
-Commit Description: Repairs the refill stall now that dispatch is working by preventing multiple simultaneous helper reservations from reusing the same random-bot account, and by retiring RDF fillers whose real owner has diverted into battleground flow.
+Module Version Target: 2.3.8ac-next
+Brain Compatibility: 5.4.0
 
---------------------------------
-
-## Module Purpose
-
-This revision addresses the next live bottleneck discovered after RTG standalone helper targeting was corrected. Startup launch and initial BG fill now work, but mature refill could stall because helper acquisition was still allowed to reserve multiple characters from the same account at once. In parallel, RDF fillers could remain idling in the world after their real owner abandoned RDF by entering battleground flow.
+Commit Goal:
+Repair RDF materialization reliability and BG finish_fill reacquisition while preserving recent collapse improvements.
 
 --------------------------------
 
-## Architecture Overview
+## Scope
 
-- `RandomPlayerbotMgr` remains the runtime coordinator for helper acquisition.
-- RTG queue-managed helper reservations must now obey a one-active-character-per-account rule during a login wave.
-- RDF fillers remain isolated from BG fillers, but abandoned RDF ownership is now recognized faster when the owner diverts into battleground flow.
-- Existing RTG lifecycle and safe-retire doctrine stay in force.
+IN SCOPE
+• RDF helper acquisition / login / dispatch / stale protection
+• BG startup fill, live_refill, finish_fill reacquisition
+• Queue‑specific helper reservation accounting
+• RDF vs BG helper separation
 
---------------------------------
-
-## Runtime Control Path
-
-real demand detected
-→ helper acquisition builds RDF/BG buckets
-→ acquisition now seeds a busy-account set from already-online/pending helpers
-→ each new reservation must use an unused random-bot account
-→ helper logs in and dispatches normally
-→ RDF stale sweep now abandons idle RDF fillers when their real owner is actively in battleground flow
+OUT OF SCOPE
+• Playerbot AI changes
+• Database schema changes
+• Large queue planner rewrites
 
 --------------------------------
 
-## Data Structures
+## Core Design Rule
 
-No new persisted schema.
+Helpers must have **service ownership**.
 
-Runtime-only rules added:
-- busy random-bot account set seeded from `currentBots`
-- RDF owner battleground-flow detection for player owners
+Two service lanes:
 
---------------------------------
+RDF lane:
+mode = RDF
+owner = RDF player
+role = tank/healer/dps
 
-## Config Interface
+BG lane:
+mode = BG
+queueId
+team
+bracket
 
-No new config keys in this revision.
-
-Relevant existing settings:
-- `AiPlayerbot.RTG.EventDriven.Enable`
-- `AiPlayerbot.RTG.EventDriven.MaxBots`
-- `AiPlayerbot.RTG.QueueGraceSeconds`
-- `AiPlayerbot.RTG.QueueOwnership.Enable`
-- `AiPlayerbot.RandomBotAccountCount`
+Helpers in one lane cannot be reused by the other until their reservation ends.
 
 --------------------------------
 
-## Database Structures
+## RDF Behavior
 
-No SQL changes.
+Real player enters RDF
+→ system acquires exact role bots
+→ bots login with RDF reservation
+→ bots dispatch only into RDF flow
+→ bots protected from BG lifecycle logic
 
---------------------------------
-
-## Integration Points
-
-- `src/Bot/RandomPlayerbotMgr.cpp`
-- existing RTG queue helper event markers (`add`, `rtg_lfg_pending`, `rtg_bg_pending`, `rtg_add_requested`)
-
---------------------------------
-
-## Lifecycle Model
-
-- Queue-managed helper reservations may not compete against themselves through same-account collisions.
-- A helper reservation that would reuse an account already online/pending is now skipped so refill can continue using other accounts.
-- RDF fillers that never entered RDF and whose real owner is now in battleground flow are marked abandoned and retired through the safe logout path.
+Expected group:
+1 tank
+1 healer
+3 dps
 
 --------------------------------
 
-## Known Constraints
+## Battleground Behavior
 
-- Owner diversion detection in this pass is strongest for solo-player owners because it checks connected player battleground state directly.
-- Group-owner RDF diversion can still be improved later if needed, but this pass fixes the observed live test case with two solo players.
-- This revision intentionally avoids rewriting BG refill math or the stall watchdog.
+Real player enters BG queue
+→ planner computes shortage
+→ acquisition fills shortage
+→ live_refill replenishes losses
+→ finish_fill continues reacquisition until shortage is resolved
 
---------------------------------
-
-## Future Evolution Hooks
-
-- explicit helper-account reservation telemetry (`[RTG][ACQUIRE][ACCOUNT]`)
-- group-owner RDF diversion detection
-- smarter reuse backoff for recently stalled helper accounts
+finish_fill must not be suppressed by global helper counts.
 
 --------------------------------
 
-## Files Modified In This Revision
+## Known Failures To Fix
 
-- `src/Bot/RandomPlayerbotMgr.cpp`
-- `brain_addendum/mod-playerbots_brain_addendum.md`
-
---------------------------------
-
-## Behavioral Changes In This Revision
-
-- Helper acquisition no longer reserves multiple queue-managed bots from the same account in one wave.
-- Refill waves should no longer self-stall because several pending helpers were all tied to the same account.
-- Idle RDF fillers now retire sooner when their real owner has switched into battleground flow instead of remaining queued for a dungeon that no longer has an owner.
+• finish_fill demand loops without helper login waves
+• global online helpers suppress queue-specific reacquire
+• RDF helpers treated as generic helpers
+• BG helpers retired while queue still needs them
+• reconnect turbulence stalls refill recovery
 
 --------------------------------
 
-## Test Plan
+## Acceptance Criteria
 
-1. Keep `AiPlayerbot.RandomBotAutologin = 0`.
-2. Enable RTG standalone queue-helper mode.
-3. Queue one real player for WSG + RDF and another for Eye of the Storm + RDF.
-4. Confirm startup launch still fills both battlegrounds.
-5. Inspect `[RTG][ACQUIRE][REQUEST]` and verify the same account ID is no longer repeated multiple times inside a single refill wave.
-6. Confirm `live_refill` and `finish_fill` continue acquiring after the first match launch instead of degrading into repeated `[RTG][DISPATCH][STALL]` bursts.
-7. Watch for `[RTG][LFG][ABANDON]` when an RDF filler owner diverts into battleground flow.
-8. Confirm abandoned RDF fillers retire and no longer linger in the world unnecessarily.
+RDF
+• role correct helpers appear
+• helpers not stolen by BG
+• no premature stale cleanup
 
+BG
+• startup fill works
+• live_refill works
+• finish_fill produces new helpers until shortage solved
+
+Regression
+• collapse behavior remains clean
+• logs remain visible
 --------------------------------
 
-## Notes For RTG Brain Ingestion
+## RTG Queue Addendum 2.3.9-ad — Lane Isolation Refinement
 
-This revision formalizes two more RTG queue-assistance rules:
-1. queue-managed helper acquisition must respect one-online-character-per-account reality during reservation, not just at eventual login time;
-2. RDF ownership should collapse quickly when the real owner abandons RDF by entering battleground flow, otherwise stale fillers can consume helper capacity and obscure refill health.
+Intent:
+Preserve the shared RTG helper framework while isolating RDF and BG acquisition pressure more cleanly during mixed demand windows.
+
+Patch focus:
+• keep reserved RDF capacity inside the RDF lane for its first pass
+• keep reserved BG capacity inside the BG lane for its first pass
+• do not auto-donate unused RDF budget straight into BG before RDF has had a protected service window
+• only expose leftover capacity as shared surplus after both lanes have attempted their reserved pass
+• consume shared surplus with alternating lane preference so one service does not permanently win spillover
+
+Why:
+Previous logic proportioned capacity between RDF and BG, but then immediately donated leftover RDF capacity into BG by default because RDF was processed first. That behavior was safe for pure-BG demand bursts, but it weakened lane isolation during mixed demand windows and made BG the natural sink for any unspent budget.
+
+Resulting model:
+1. Compute reserved RDF budget and reserved BG budget.
+2. Run RDF reserved pass.
+3. Run BG reserved pass.
+4. Merge unused reserved budget into shared surplus.
+5. Use alternating lane preference to consume surplus without permanently biasing RDF or BG.
+
+Important invariant:
+This is not a planner rewrite.
+It is an acquisition-lane refinement only.
+Demand discovery, lifecycle cleanup, finish_fill priority, and orphan retirement rules remain intact.
+
+Expected outcomes:
+• RDF and BG stop stealing each other's first-pass reserved budget
+• mixed RDF/BG pressure behaves more predictably
+• BG no longer receives automatic first claim on unused RDF reservation
+• spare capacity still gets reused after both lanes receive a fair attempt
+
+## RTG Queue Addendum 2.3.9-ae — Dispatch Visibility + Stalled Add Recovery Checkpoint
+
+Intent:
+Create a safe checkpoint pass that improves RTG queue transparency and frees helpers that become stuck between acquisition and actual bot materialization.
+
+Patch focus:
+• mirror RTG runtime breadcrumbs to `server.loading` so queue control, acquire, login, dispatch, retire, and logout messages are visible in the same log stream as BG planner output
+• emit explicit `[RTG][ACQUIRE][REQUEST]` when a queue-managed helper reservation is created
+• emit explicit `[RTG][DISPATCH][ADD]` when `ProcessBot()` actually hands a queue-managed helper to `AddPlayerBot(...)`
+• track queue-managed add requests with `rtg_add_requested`
+• if a queue-managed add request never produces a player object within a safe stall window, emit `[RTG][DISPATCH][STALL]` and clear the stuck reservation so the system can reacquire instead of clogging
+• clear `rtg_add_requested` on successful login, login failure, and safe logout
+
+Why:
+Recent logs showed BG planner demand advancing without the expected dispatch/runtime breadcrumb family being visible. There are two likely contributors:
+1. planner logs already write to `server.loading`, but runtime breadcrumbs were still confined to the `playerbots` filter
+2. queue-managed add requests may be getting stuck before actual player materialization, silently consuming helper slots and making the dispatch lane appear jammed
+
+Important invariant:
+This patch is an observability + unjam checkpoint.
+It is not a planner rewrite, lane rewrite, or ownership rewrite.
+
+Expected outcomes:
+• startup control/acquire/login/dispatch breadcrumbs appear in the same worldserver-visible log stream as `[RTG][BG][PHASE]`
+• if helper reservations stall before `AddPlayerBot` materializes them, the stall becomes visible
+• stalled add slots are released instead of lingering and starving later helper demand
+• this should help explain whether orphan residue is caused by invisible dispatch success, stalled bot materialization, or later queue-state cleanup problems
+
+
+## RTG Queue Addendum 2.3.9-af — Standalone Control Ceiling Correction
+
+Intent:
+Ensure the RTG standalone queue-helper controller uses the RTG event-driven ceiling instead of the legacy random-bot ceiling.
+
+Patch focus:
+• change standalone control visibility from `MaxRandomBots` to `AiPlayerbot.RTG.EventDriven.MaxBots`
+• use the RTG standalone helper ceiling when sizing fallback randombot account demand for queue-helper mode
+• use the RTG standalone helper ceiling for RNDbot account-type assignment sizing in queue-helper mode
+• use the RTG standalone helper ceiling for the early bot-initialization window when queue-helper mode is active
+
+Why:
+Recent startup logs still reported:
+`[RTG][CONTROL] standalone queue-helper control active (MaxRandomBots=...)`
+
+That is architecturally wrong for RTG queue-helper mode and can hide real capacity mismatches. In standalone queue-helper control, the event-driven helper system must be governed by `AiPlayerbot.RTG.EventDriven.MaxBots`, not by the legacy `AiPlayerbot.MaxRandomBots` random-bot ceiling.
+
+Important invariant:
+This is a focused ceiling-correction patch only.
+It does not rewrite planner math, queue ownership, or dispatch logic.
+
+Expected outcomes:
+• startup control logs show the RTG helper ceiling instead of the legacy random-bot ceiling
+• helper-account sizing logic no longer undershoots RTG standalone demand just because `MaxRandomBots` is lower
+• early initialization timing aligns with RTG standalone helper capacity
+
+## Checkpoint Addendum — RTG queue ownership correction
+
+### Focus of this pass
+- prevent same random-bot account from being reserved multiple times inside the same acquisition wave
+- stop RDF abandonment from triggering merely because an owner is queued for battlegrounds
+- only abandon RDF helpers when the owning real player has actually entered a battleground or arena map
+
+### Behavioral intent
+- pending and online helper reservations must respect account-level session exclusivity
+- RDF helpers remain valid while the owner is only in battleground queue flow
+- RDF helpers are cancelled only once the owner has crossed into battleground map state, because that is the point where the dungeon path is truly abandoned
