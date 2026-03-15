@@ -92,6 +92,14 @@ namespace
         return std::max<uint32>(20u, sPlayerbotAIConfig.rtgQueueGraceSeconds);
     }
 
+    static uint32 RTG_GetStandaloneHelperCeiling()
+    {
+        if (sPlayerbotAIConfig.rtgEventDriven && !sPlayerbotAIConfig.randomBotAutologin)
+            return std::max<uint32>(1u, sPlayerbotAIConfig.rtgEventMaxBots);
+
+        return std::max<uint32>(1u, sPlayerbotAIConfig.maxRandomBots);
+    }
+
     static uint32 RTG_GetQueueRetryWindowSeconds()
     {
         return std::max<uint32>(5u, std::min<uint32>(10u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds));
@@ -1223,8 +1231,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         static bool rtgStandaloneLogged = false;
         if (!rtgStandaloneLogged && !sPlayerbotAIConfig.randomBotAutologin)
         {
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][CONTROL] standalone queue-helper control active (MaxRandomBots={}, AccountCount={})",
-                sPlayerbotAIConfig.maxRandomBots, sPlayerbotAIConfig.randomBotAccountCount));
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][CONTROL] standalone queue-helper control active (RTGMaxBots={}, AccountCount={})",
+                RTG_GetStandaloneHelperCeiling(), sPlayerbotAIConfig.randomBotAccountCount));
             rtgStandaloneLogged = true;
         }
     }
@@ -1885,7 +1893,7 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
     // which prevents unneeded expensive GameTime calls.
     if (_isBotInitializing)
     {
-        _isBotInitializing = GameTime::GetUptime().count() < sPlayerbotAIConfig.maxRandomBots * (0.11 + 0.4);
+        _isBotInitializing = GameTime::GetUptime().count() < RTG_GetStandaloneHelperCeiling() * (0.11 + 0.4);
     }
 
     uint32 updateIntervalTurboBoost = _isBotInitializing ? 1 : sPlayerbotAIConfig.randomBotUpdateInterval;
@@ -2247,8 +2255,8 @@ if (desiredTotalAccounts == 0)
 {
     // Derive a sensible minimum if not configured
     int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-    int maxBots = static_cast<int>(sPlayerbotAIConfig.maxRandomBots);
-    if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+    int maxBots = static_cast<int>(RTG_GetStandaloneHelperCeiling());
+    if (!sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.enablePeriodicOnlineOffline)
         maxBots = static_cast<int>(maxBots * sPlayerbotAIConfig.periodicOnlineOfflineRatio);
 
     uint32 neededRnd = (maxBots > 0) ? static_cast<uint32>((maxBots + divisor - 1) / divisor) : 0;
@@ -2318,13 +2326,14 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
 
     // Calculate needed RNDbot accounts
     uint32 neededRndBotAccounts = 0;
-    if (sPlayerbotAIConfig.maxRandomBots > 0)
+    uint32 standaloneCeiling = RTG_GetStandaloneHelperCeiling();
+    if (standaloneCeiling > 0)
     {
         int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-        int maxBots = sPlayerbotAIConfig.maxRandomBots;
+        int maxBots = static_cast<int>(standaloneCeiling);
 
-        // Take periodic online-offline into account
-        if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+        // Take periodic online-offline into account only for legacy random-bot sizing.
+        if (!sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.enablePeriodicOnlineOffline)
         {
             maxBots *= sPlayerbotAIConfig.periodicOnlineOfflineRatio;
         }

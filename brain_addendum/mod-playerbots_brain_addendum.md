@@ -158,3 +158,30 @@ Expected outcomes:
 • if helper reservations stall before `AddPlayerBot` materializes them, the stall becomes visible
 • stalled add slots are released instead of lingering and starving later helper demand
 • this should help explain whether orphan residue is caused by invisible dispatch success, stalled bot materialization, or later queue-state cleanup problems
+
+
+## RTG Queue Addendum 2.3.9-af — Standalone Control Ceiling Correction
+
+Intent:
+Ensure the RTG standalone queue-helper controller uses the RTG event-driven ceiling instead of the legacy random-bot ceiling.
+
+Patch focus:
+• change standalone control visibility from `MaxRandomBots` to `AiPlayerbot.RTG.EventDriven.MaxBots`
+• use the RTG standalone helper ceiling when sizing fallback randombot account demand for queue-helper mode
+• use the RTG standalone helper ceiling for RNDbot account-type assignment sizing in queue-helper mode
+• use the RTG standalone helper ceiling for the early bot-initialization window when queue-helper mode is active
+
+Why:
+Recent startup logs still reported:
+`[RTG][CONTROL] standalone queue-helper control active (MaxRandomBots=...)`
+
+That is architecturally wrong for RTG queue-helper mode and can hide real capacity mismatches. In standalone queue-helper control, the event-driven helper system must be governed by `AiPlayerbot.RTG.EventDriven.MaxBots`, not by the legacy `AiPlayerbot.MaxRandomBots` random-bot ceiling.
+
+Important invariant:
+This is a focused ceiling-correction patch only.
+It does not rewrite planner math, queue ownership, or dispatch logic.
+
+Expected outcomes:
+• startup control logs show the RTG helper ceiling instead of the legacy random-bot ceiling
+• helper-account sizing logic no longer undershoots RTG standalone demand just because `MaxRandomBots` is lower
+• early initialization timing aligns with RTG standalone helper capacity
