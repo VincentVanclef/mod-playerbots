@@ -137,3 +137,8 @@ Still uses cached battleground sizing from `world.battleground_template` through
 ## Notes For RTG Brain Ingestion
 
 This revision formalizes a second critical RTG queue-assistance rule: in event-driven mode, battleground acquisition must not infer helper need from local snapshots unless the battleground planner has explicitly activated that queue/bracket pair. Planner state is the permission layer; planner team-need is the quantity layer.
+
+## 2.3.8v — RDF materialization and no-real-player BG freeze
+- Added immediate RTG LFG login/dispatch breadcrumbs and immediate `lfg join` attempt on helper login so RDF helpers are materially realized instead of only counted in acquisition totals.
+- Made BG planner stop live_refill/finish_fill demand when no real queued or active players remain, while preserving orphan residue cleanup for teardown.
+- Kept dead-queue collapse behavior from 2.3.8t intact.

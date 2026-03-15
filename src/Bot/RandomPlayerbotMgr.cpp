@@ -3026,6 +3026,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         continue;
 
                     LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ACQUIRE] helper={} owner={} role={} team={} level={}",
+                        charInfo.guid, bucket.owner, desiredRole, bucket.team, bucket.level));
 
                     ++rtgLfgLogged;
                     --capacity;
@@ -5651,6 +5653,21 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
+
+            uint32 desiredRole = 0;
+            uint32 desiredOwner = 0;
+            RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner);
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} owner={} role={} team={} level={}",
+                bot->GetGUID().GetCounter(), desiredOwner, desiredRole, bot->GetTeamId(), bot->GetLevel()));
+
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            {
+                bool queuedLfg = botAI->DoSpecificAction("lfg join", Event(), true);
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][DISPATCH] helper={} owner={} role={} result={}",
+                    bot->GetGUID().GetCounter(), desiredOwner, desiredRole, queuedLfg ? 1 : 0));
+                if (!queuedLfg)
+                    SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 15, addData);
+            }
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {

@@ -181,9 +181,10 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 ((bgInfo.bgAlliancePlayerCount + bgInfo.bgHordePlayerCount) > 0);
             bool hasRealQueuedSeed = (queueRealAlliance || queueRealHorde);
             bool hasActiveMatch = (activeCurrentAlliance || activeCurrentHorde);
-            bool orphanQueueResidue = !hasRealQueuedSeed && !hasActiveMatch && (queueCurrentAlliance || queueCurrentHorde || bgInfo.activeBgQueue);
+            bool hasRealActiveMatch = (activeRealAlliance || activeRealHorde);
+            bool orphanQueueResidue = !hasRealDemand && (queueCurrentAlliance || queueCurrentHorde || activeCurrentAlliance || activeCurrentHorde || bgInfo.activeBgQueue);
             bool queueOrMatchActive = sPlayerbotAIConfig.rtgSmartQueue ?
-                (hasActiveMatch || hasRealQueuedSeed) :
+                (hasRealActiveMatch || hasRealQueuedSeed) :
                 (bgInfo.activeBgQueue || hasRealDemand);
 
             mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
@@ -197,7 +198,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             uint32 nowSecs = static_cast<uint32>(time(nullptr));
             uint32 activeStart = mgr.RTG_GetGlobalEvent(RTG_MakeBgActiveStartKey(uint32(queueTypeId), uint32(bracketId)));
 
-            if (hasActiveMatch)
+            if (hasActiveMatch && hasRealDemand)
             {
                 if (!activeStart)
                     activeStart = nowSecs;
@@ -239,7 +240,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             else
             {
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgActiveStartKey(uint32(queueTypeId), uint32(bracketId)), 0, 0);
-                if (orphanQueueResidue && sPlayerbotAIConfig.rtgEventDebug)
+                if (orphanQueueResidue)
                     RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason=orphan_queue_residue queueA={} queueH={} activeA={} activeH={}",
                         uint32(queueTypeId), uint32(bracketId), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde);
             }
