@@ -316,3 +316,65 @@ The following are still worth validating in the next live pass:
 - whether any remaining RDF refill failures are now due to account-pool eligibility rather than grouped-helper suppression
 - whether BG finish-fill ceilings still plateau early because of true account exhaustion versus reusable-helper timing
 - whether retirement pacing should be tightened further once grouped RDF recovery is stable
+
+
+## Addendum — fast no-player retirement, orphan queue collapse hardening, and live-config reconciliation
+
+### Problem observed
+The RTG queue engine is now capable of filling three battlegrounds plus RDF, but the remaining failures shifted from startup/fill into **post-demand cleanup** and **config drift**:
+
+- battleground fill hit practical helper ceilings rather than failing to start
+- orphan battleground residue could keep planner state alive long after the real demand was gone
+- queue-managed helpers could remain online too long after all real players logged out
+- `playerbots.conf.dist` and the live RTG config block drifted apart, while several documented RTG keys were not actually being loaded by `PlayerbotAIConfig.cpp`
+
+### Root cause
+This phase exposed three separate issues:
+
+1. **Real config drift**
+   The mod shipped RTG config documentation for keys such as smart queue and queue ownership controls, but the loader only consumed a subset of them. That made the config surface look richer than the effective runtime surface.
+
+2. **No-player shutdown depended too heavily on the global disabled-without-real-player timer**
+   Queue-managed helpers were eventually removed, but not quickly enough for RTG's event-driven operating model.
+
+3. **Orphan battleground residue was still treated as planner-relevant noise**
+   The planner logged residue repeatedly and could continue re-evaluating stale battleground helper state instead of collapsing it decisively.
+
+### Resolution in this revision
+This revision applies four linked corrections:
+
+1. **Config loader reconciliation**
+   `PlayerbotAIConfig.cpp` now loads the RTG keys that are actually used by runtime logic:
+   - `AiPlayerbot.RTG.SmartQueue.Enable`
+   - `AiPlayerbot.RTG.DemandCheckSeconds`
+   - `AiPlayerbot.RTG.QueueOwnership.*`
+   - `AiPlayerbot.RTG.EventDriven.NoPlayersRetireDelay`
+   - `AiPlayerbot.RTG.EventDriven.DungeonFinishedLogoutDelay`
+
+2. **Demand-check cadence becomes configurable**
+   The hardcoded RTG queue scan interval is replaced by `AiPlayerbot.RTG.DemandCheckSeconds`.
+
+3. **Fast queue-helper retirement when no real players remain**
+   Once the no-player delay expires, queue-managed RTG helpers are pushed toward safe logout immediately instead of waiting for the much slower generic population shutdown path.
+
+4. **Harder orphan-residue collapse**
+   Orphan battleground residue is still logged, but it is throttled more heavily and is no longer allowed to keep the planner treating stale state as active demand.
+
+### Why this matters
+This is the correct late-phase correction for the RTG queue system. Earlier passes were about making helpers appear. This pass is about making them **disappear correctly** and making the config surface truthful.
+
+### Expected next test behavior
+The next live run should show:
+
+- battleground and RDF fill still functioning as before
+- less stale `orphan_queue_residue` log churn
+- faster queue-helper retirement after all real players log out
+- a `playerbots.conf.dist` RTG section that matches the settings the code really consumes
+
+### Remaining watchpoints
+Still validate the following next:
+
+- whether `RandomBotAccountCount = 1200` is enough once battleground caps are raised further
+- whether RDF replacement helpers after a mid-run tank loss now recover cleanly with the current grouped-LFG behavior
+- whether any remaining long-tail helper persistence is battleground match-duration limited rather than planner-lifecycle limited
+- whether RTG wants even shorter post-dungeon helper retirement once replacement stability is confirmed

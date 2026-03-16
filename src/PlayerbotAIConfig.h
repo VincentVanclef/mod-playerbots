@@ -103,12 +103,15 @@ public:
     // RTG: Event-driven bots (keep bots offline unless needed for BG/LFG)
     bool rtgEventDriven = false;
     bool rtgSmartQueue = true;
+    uint32 rtgDemandCheckSeconds = 5;
     uint32 rtgQueueGraceSeconds = 30;
     uint32 rtgEventMaxBots = 120; // overall RTG event-driven helper ceiling
     uint32 rtgBgMaxBots = 77; // battleground helper sublimit
     uint32 rtgLfgMaxBots = 60; // rdf/lfg helper sublimit
     bool rtgKeepWorldBots = false; // if true, preserves normal world population target
     bool rtgEventDebug = false; // verbose queue supervisor logging
+    uint32 rtgNoPlayersRetireDelay = 60; // fast queue-helper retirement once all real players are gone
+    uint32 rtgDungeonFinishedLogoutDelay = 90; // how long finished dungeon helpers linger before logout
     bool rtgQueueOwnershipEnable = true;
     bool rtgQueueOwnershipProtectInBattleground = true;
     uint32 rtgQueueOwnershipRetireRetrySeconds = 15;

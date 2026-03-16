@@ -844,6 +844,9 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
     RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
     uint32 maxTransitionMs = std::max<uint32>(5u, sPlayerbotAIConfig.rtgQueueOwnershipMaxTransitionSeconds) * IN_MILLISECONDS;
     uint32 retireRetryTtl = sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30;
+    bool noRealPlayers = GetOnlineRealPlayerCount() == 0;
+    bool hardRetireForNoPlayers = noRealPlayers && RealPlayerLastTimeSeen != 0 &&
+        time(nullptr) > RealPlayerLastTimeSeen + sPlayerbotAIConfig.rtgNoPlayersRetireDelay;
 
     for (ObjectGuid::LowType botId : ledger.GetTrackedBotIds())
     {
@@ -888,6 +891,15 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
                     LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} transition watchdog reset state={} queue={} instance={}",
                              botId, uint32(entry->state), uint32(entry->target.queueTypeId), entry->ownerInstanceId);
             }
+        }
+
+        if (hardRetireForNoPlayers)
+        {
+            ledger.RequestRetire(botId, "no real players online");
+            entry = ledger.Get(botId);
+            if (entry)
+                entry->pendingRetire = true;
+            SetEventValue(botId, "rtg_bg_retire_when_safe", 1, retireRetryTtl, GetEventData(botId, "add"));
         }
 
         if (!entry->pendingRetire)
@@ -2059,6 +2071,36 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
                 SetEventValue(0, "rtg_bg_start", 0, 0);
                 SetEventValue(0, "rtg_lfg_need_total", 0, 0);
                 SetEventValue(0, "rtg_lfg_start", 0, 0);
+
+                if (RealPlayerLastTimeSeen != 0 && time(nullptr) > RealPlayerLastTimeSeen + sPlayerbotAIConfig.rtgNoPlayersRetireDelay)
+                {
+                    for (auto const& botKv : playerBots)
+                    {
+                        ObjectGuid botGuid = botKv.first;
+                        Player* bot = botKv.second;
+                        if (!bot || !bot->IsInWorld())
+                            continue;
+
+                        uint32 botId = botGuid.GetCounter();
+                        std::string addData = GetEventData(botId, "add");
+                        bool queueManaged = RTG::IsQueueManagedAddData(addData) || GetEventValue(botId, "rtg_dungeon_active") != 0;
+                        if (!queueManaged)
+                            continue;
+
+                        if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                            continue;
+
+                        if (bot->GetMap() && (bot->GetMap()->IsDungeon() || bot->GetMap()->IsRaid()))
+                            continue;
+
+                        SetEventValue(botId, "rtg_bg_pending", 0, 0);
+                        SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
+                        SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+                        SetEventValue(botId, "rtg_bg_retire_when_safe", 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, addData);
+                        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                        RTG_RequestSafeBotLogout(botGuid, "rtg_no_players_retire");
+                    }
+                }
             }
 
             if (RealPlayerLastTimeSeen != 0 && onlineBotCount > 0 &&
@@ -2131,7 +2173,7 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
 
 	if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
     {
-        if (time(nullptr) > (BgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? 5 : 35)))
+        if (time(nullptr) > (BgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? std::max<uint32>(1u, sPlayerbotAIConfig.rtgDemandCheckSeconds) : 35)))
         {
             sRandomPlayerbotMgr.CheckBgQueue();
             BgCheckTimer = time(nullptr);
@@ -2140,7 +2182,7 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
 
     if (sPlayerbotAIConfig.randomBotJoinLfg /* && !players.empty()*/)
     {
-        if (time(nullptr) > (LfgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? 5 : 30)))
+        if (time(nullptr) > (LfgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? std::max<uint32>(1u, sPlayerbotAIConfig.rtgDemandCheckSeconds) : 30)))
         {
             sRandomPlayerbotMgr.CheckLfgQueue();
             LfgCheckTimer = time(nullptr);

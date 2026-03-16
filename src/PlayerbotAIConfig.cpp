@@ -187,23 +187,21 @@ bool PlayerbotAIConfig::Initialize()
 
     // RTG: queue-driven bot population
     rtgEventDriven = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Enable", false);
-    rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
+    rtgEventDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Debug", false);
     rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 120);
     rtgBgMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots", 77);
     rtgLfgMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.LfgMaxBots", 60);
     rtgKeepWorldBots = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.KeepWorldBots", false);
-    rtgEventDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Debug", false);
-    LOG_INFO("server.loading",
-        "RTG CFG loaded: Enable={} Debug={} MaxBots={} BgMax={} LfgMax={} Grace={} LowBracketCaps={} Ratio={} CommunityCap={}",
-        rtgEventDriven ? 1 : 0,
-        rtgEventDebug ? 1 : 0,
-        rtgEventMaxBots,
-        rtgBgMaxBots,
-        rtgLfgMaxBots,
-        rtgQueueGraceSeconds,
-        rtgLowBracketCapsEnable ? 1 : 0,
-        usePlayerCountRatio ? 1 : 0,
-        communityLevelCapEnabled ? 1 : 0);
+    rtgNoPlayersRetireDelay = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.NoPlayersRetireDelay", 60);
+    rtgDungeonFinishedLogoutDelay = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.DungeonFinishedLogoutDelay", 90);
+    rtgSmartQueue = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.SmartQueue.Enable", true);
+    rtgDemandCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.DemandCheckSeconds", 5);
+    rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
+    rtgQueueOwnershipEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Enable", true);
+    rtgQueueOwnershipProtectInBattleground = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground", true);
+    rtgQueueOwnershipRetireRetrySeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds", 15);
+    rtgQueueOwnershipMaxTransitionSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds", 60);
+    rtgQueueOwnershipDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Debug", false);
 
     rtgLowBracketCapsEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.LowBracketCaps.Enable", false);
     rtgLowBracketBotCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.Cap", 40);
@@ -224,6 +222,26 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
 
     debugRatioScaling = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.RatioScaling", false);
     debugCommunityLevelCap = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.CommunityLevelCap", false);
+
+    LOG_INFO("server.loading",
+        "RTG CFG loaded: Enable={} Debug={} SmartQueue={} MaxBots={} BgMax={} LfgMax={} DemandCheck={} Grace={} NoPlayersRetire={} DungeonFinishedLogout={} QueueOwnership={} RetireRetry={} TransitionMax={} OwnershipDebug={} LowBracketCaps={} Ratio={} CommunityCap={}",
+        rtgEventDriven ? 1 : 0,
+        rtgEventDebug ? 1 : 0,
+        rtgSmartQueue ? 1 : 0,
+        rtgEventMaxBots,
+        rtgBgMaxBots,
+        rtgLfgMaxBots,
+        rtgDemandCheckSeconds,
+        rtgQueueGraceSeconds,
+        rtgNoPlayersRetireDelay,
+        rtgDungeonFinishedLogoutDelay,
+        rtgQueueOwnershipEnable ? 1 : 0,
+        rtgQueueOwnershipRetireRetrySeconds,
+        rtgQueueOwnershipMaxTransitionSeconds,
+        rtgQueueOwnershipDebug ? 1 : 0,
+        rtgLowBracketCapsEnable ? 1 : 0,
+        usePlayerCountRatio ? 1 : 0,
+        communityLevelCapEnabled ? 1 : 0);
     randomBotUpdateInterval = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotUpdateInterval", 20);
     randomBotCountChangeMinInterval =
         sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotCountChangeMinInterval", 30 * MINUTE);
