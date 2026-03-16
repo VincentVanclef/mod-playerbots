@@ -416,6 +416,7 @@ namespace
 
         bot->RemoveAura(26013); // Deserter
         bot->RemoveAura(71041); // Dungeon Deserter
+        bot->RemoveAura(71328); // Dungeon Deserter (alt / follow-up aura)
     }
 
     static void RTG_PrepareBotForLogout(Player* bot)
@@ -821,6 +822,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
         SetEventValue(botId, "rtg_add_requested", 0, 0);
+        SetEventValue(botId, "rtg_dungeon_active", 0, 0);
     }
 
     currentBots.remove(botId);
@@ -1548,9 +1550,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 	}
 
 
-	// If RTG queue demand has vanished, clear temporary queue-fill bots
-	// that are not actually inside a dungeon run or actively queued.
-	if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand && !rtgBgDemand)
+	// If RTG LFG demand has vanished, clear temporary dungeon queue-fill bots
+	// even if battleground demand is still active elsewhere. The LFG lane must
+	// tear itself down independently so abandoned / dissolved RDF helpers do not
+	// linger online just because battleground assistance is still running.
+	if (sPlayerbotAIConfig.rtgEventDriven && !rtgLfgDemand)
 	{
 		std::vector<ObjectGuid> rtgIdleLogout;
 		std::vector<ObjectGuid> rtgStaleQueueBots;
@@ -2618,6 +2622,13 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
         // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
         neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
     }
+
+    // Honor explicit RandomBotAccountCount as an assignment target, not only an
+    // account-creation hint. Without this, RTG queue-helper mode can have hundreds
+    // of existing randombot accounts but only the small formula-derived subset marked
+    // as type-1 RNDbot accounts, which looks like artificial account starvation.
+    if (sPlayerbotAIConfig.randomBotAccountCount > 0)
+        neededRndBotAccounts = std::max<uint32>(neededRndBotAccounts, sPlayerbotAIConfig.randomBotAccountCount);
 
     // Count existing assigned accounts
     uint32 existingRndBotAccounts = 0;
@@ -6121,6 +6132,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
+        RTG_ClearQueueDebuffs(bot);
+
         std::string addData = GetEventData(bot->GetGUID().GetCounter(), "add");
         uint32 desiredTeam = 0;
         uint32 desiredLevel = 0;

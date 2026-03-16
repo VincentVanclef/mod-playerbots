@@ -378,3 +378,88 @@ Still validate the following next:
 - whether RDF replacement helpers after a mid-run tank loss now recover cleanly with the current grouped-LFG behavior
 - whether any remaining long-tail helper persistence is battleground match-duration limited rather than planner-lifecycle limited
 - whether RTG wants even shorter post-dungeon helper retirement once replacement stability is confirmed
+
+---
+
+## Addendum: explicit RNDbot account assignment, RDF deserter scrubbing, and independent LFG teardown
+
+### Triggering regression set
+
+A later live test showed a strong regression pattern even after the earlier queue-capacity uplift:
+
+- only one battleground reliably formed while the other startup lanes remained a few bots short
+- RDF could assemble once, but replacement behavior after a bot dropout was unreliable
+- at least one bot picked up **Dungeon Deserter**, making that helper account effectively useless until the aura expired
+- RDF helpers could remain online in the world after the real player left the dungeon flow early
+- observed helper population repeatedly plateaued around the mid-30s despite a much larger configured pool
+
+### Root cause A: explicit `RandomBotAccountCount` was not being honored as an assignment target
+
+The account-type assignment code still derived RNDbot account allocation mainly from the formula:
+
+- `ceil(RTGMaxBots / available_chars_per_account)`
+
+That meant the realm could have a very large **existing** randombot account pool, but only the small formula-derived subset would be marked as type-1 RNDbot accounts and therefore available for event-driven helper acquisition.
+
+In practice, this creates a false account-starvation ceiling that looks like:
+
+- helper acquisition works initially
+- around ~30-40 helpers the system starts claiming it needs more accounts
+- battleground startup lanes stay slightly short even though many unassigned randombot accounts already exist
+
+### Resolution A
+
+When `AiPlayerbot.RandomBotAccountCount` is explicitly configured, it is now treated as an **authoritative RNDbot assignment target**, not only as an account-creation hint.
+
+This means RTG standalone queue-helper mode can actually use the configured account pool instead of only the small formula-derived assignment subset.
+
+### Root cause B: LFG cleanup was incorrectly coupled to total RTG demand disappearance
+
+The earlier cleanup block only tore down idle RDF helpers when **both** conditions were false:
+
+- no LFG demand
+- no BG demand
+
+That is too strict for RTG multi-lane operation. If battleground demand is still active, abandoned RDF helpers could stay online even though the dungeon lane itself is dead.
+
+### Resolution B
+
+LFG idle teardown now triggers whenever **LFG demand itself has vanished**, regardless of whether battleground demand is still active elsewhere.
+
+That restores correct lane independence:
+
+- battleground activity no longer keeps dead RDF helpers alive
+- leaving an RDF flow early should release those helpers much sooner
+- freed accounts can be reused by the next queue wave
+
+### Root cause C: queue penalties were not being scrubbed aggressively enough for recycled RTG helpers
+
+Although deserter cleanup already existed in some queue paths, live behavior still showed a bot receiving **Dungeon Deserter** and becoming unusable for the next replacement pass.
+
+### Resolution C
+
+Queue debuff cleanup is now reinforced by:
+
+1. expanding the common RTG queue-debuff scrubber to also remove the alternate dungeon-deserter aura
+2. clearing queue penalties immediately on RTG bot login before helper assignment resumes
+3. clearing `rtg_dungeon_active` as part of safe helper logout queue-state teardown
+
+### Intended behavioral change after this revision
+
+Expected next-pass behavior:
+
+- explicit large randombot pools can actually be used by event-driven helper acquisition
+- second and third battleground startup lanes should no longer stall early from artificial account scarcity
+- RDF helpers abandoned after group collapse / real-player exit should log out independently of BG activity
+- recycled RDF helpers should not come back poisoned by Dungeon Deserter
+
+### Scope note
+
+This addendum is intentionally **account-pool / LFG lifecycle / debuff hygiene** focused.
+
+It does **not** claim the entire queue system is finished. If startup still misses by a few bots after this revision, the next likely layer is no longer type-1 account starvation — it will more likely be one of:
+
+- remaining queue residue timing
+- queue-retry revalidation gaps
+- battleground ownership cleanup lag
+- RDF replacement timing after abrupt member loss
