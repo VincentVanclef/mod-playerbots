@@ -2090,6 +2090,39 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
         AddRandomBots();
     }
 
+    // RTG queue-helper acquisition can append newly reserved helpers into currentBots earlier in
+    // this same tick via AddRandomBots(). Refresh the dispatch view now so newly acquired BG/LFG
+    // helpers are eligible for immediate ProcessBot login instead of being invisible until the next
+    // world update, where they often hit the stall watchdog first under multi-queue pressure.
+    availableBots = currentBots;
+    availableBotCount = availableBots.size();
+    onlineBotCount = playerBots.size();
+
+    if (sPlayerbotAIConfig.rtgEventDriven && RTG_QueueDebugEnabled())
+    {
+        uint32 pendingDispatchable = 0;
+        for (uint32 botId : currentBots)
+        {
+            if (!GetEventValue(botId, "add"))
+                continue;
+
+            if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
+                continue;
+
+            std::string addData = GetEventData(botId, "add");
+            if (!RTG::IsQueueManagedAddData(addData))
+                continue;
+
+            ++pendingDispatchable;
+        }
+
+        if (pendingDispatchable)
+        {
+            LOG_INFO("playerbots", "[RTG][DISPATCH][REFRESH] availableBotCount={} onlineBotCount={} pendingDispatchable={}",
+                     availableBotCount, onlineBotCount, pendingDispatchable);
+        }
+    }
+
     if (sPlayerbotAIConfig.syncLevelWithPlayers && !players.empty())
     {
         if (time(nullptr) > (PlayersCheckTimer + 60))
@@ -3522,50 +3555,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 missingBotsTimer = 0;
             }
 
-            // RTG queue helpers acquired above must be eligible for dispatch in the SAME tick.
-            // Returning here starves freshly reserved BG/LFG helpers until a later pass, and under
-            // continuous multi-queue pressure that later pass may never get enough room before the
-            // stall watchdog reaps them. Refresh dispatch state and fall through to the normal
-            // ProcessBot login loop instead of exiting early.
-            availableBots = currentBots;
-            availableBotCount = availableBots.size();
-            onlineBotCount = playerBots.size();
-
-            pendingQueuedLogins = 0;
-            for (uint32 botId : currentBots)
-            {
-                if (!GetEventValue(botId, "add"))
-                    continue;
-
-                if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
-                    continue;
-
-                std::string addData = GetEventData(botId, "add");
-                if (!RTG::IsQueueManagedAddData(addData))
-                    continue;
-
-                ++pendingQueuedLogins;
-            }
-
-            if (pendingQueuedLogins)
-            {
-                intervalCap = std::max(intervalCap, pendingQueuedLogins);
-
-                uint32 dispatchHeadroom = 0;
-                if (sPlayerbotAIConfig.rtgEventMaxBots > onlineBotCount)
-                    dispatchHeadroom = (sPlayerbotAIConfig.rtgEventMaxBots - onlineBotCount);
-
-                maxNewBots = std::min<uint32>(pendingQueuedLogins, dispatchHeadroom);
-                loginBots = maxNewBots;
-                if (updateBots + loginBots > intervalCap)
-                    updateBots = (intervalCap > loginBots) ? (intervalCap - loginBots) : 0u;
-
-                if (RTG_QueueDebugEnabled())
-                {
-                    LOG_INFO("playerbots", "[RTG][DISPATCH][POST-ACQUIRE] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} eventMax={}",
-                             pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, sPlayerbotAIConfig.rtgEventMaxBots);
-                }
-            }
         }
         else
         {
