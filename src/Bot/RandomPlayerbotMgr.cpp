@@ -2171,12 +2171,47 @@ for (auto const& c : candidates)
     if (sPlayerbotAIConfig.usePlayerCountRatio && onlineBotCount < maxAllowedBotCount)
         intervalCap *= (onlineBotCount == 0 ? 5 : 2);
 
+    uint32 pendingQueuedLogins = 0;
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        for (uint32 botId : currentBots)
+        {
+            if (!GetEventValue(botId, "add"))
+                continue;
+
+            if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
+                continue;
+
+            std::string addData = GetEventData(botId, "add");
+            if (!RTG::IsQueueManagedAddData(addData))
+                continue;
+
+            ++pendingQueuedLogins;
+        }
+
+        if (pendingQueuedLogins)
+            intervalCap = std::max(intervalCap, pendingQueuedLogins);
+    }
+
     uint32 updateBots = intervalCap * onlineBotFocus / 100;
     uint32 maxNewBots =
         (onlineBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
             ? std::min<uint32>(maxAllowedBotCount - onlineBotCount, intervalCap)
             : 0;
     uint32 loginBots = std::min(intervalCap > updateBots ? intervalCap - updateBots : 0u, maxNewBots);
+
+    if (sPlayerbotAIConfig.rtgEventDriven && pendingQueuedLogins)
+    {
+        loginBots = std::max(loginBots, std::min<uint32>(pendingQueuedLogins, maxNewBots));
+        if (updateBots + loginBots > intervalCap)
+            updateBots = (intervalCap > loginBots) ? (intervalCap - loginBots) : 0u;
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][DISPATCH][BUDGET] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} maxAllowed={}",
+                     pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, maxAllowedBotCount);
+        }
+    }
 
     // Rate-limit target growth checks (shrink is already rate-limited above).
     if (sPlayerbotAIConfig.usePlayerCountRatio && maxNewBots > 0)
@@ -2199,7 +2234,7 @@ for (auto const& c : candidates)
                 break;
         }
 
-        if (loginBots && botLoading.empty())
+        if (loginBots)
         {
             loginBots += updateBots;
             loginBots = std::min(loginBots, maxNewBots);
