@@ -463,3 +463,60 @@ It does **not** claim the entire queue system is finished. If startup still miss
 - queue-retry revalidation gaps
 - battleground ownership cleanup lag
 - RDF replacement timing after abrupt member loss
+
+
+---
+
+## Chronicle Entry — 2026-03-16 — Post-match retirement timing and RDF ghost-helper cleanup
+
+### Observed regression signal
+A fresh RTG live test showed a mixed result:
+
+- all 3 battlegrounds formed
+- RDF formed
+- some battleground helpers logged out too quickly at match end, cutting off the scoreboard / post-game experience
+- a leftover pocket of roughly 20 helpers, including RDF helpers, stayed online too long after content had effectively ended
+
+### Root-cause interpretation
+Two different teardown faults were active at the same time:
+
+1. **Post-BG logout was allowed too early**
+   A helper could become eligible for logout once battleground lifecycle ownership dropped, even if the bot was still physically on a battleground map during the post-match scoreboard / exit phase. That let retirement happen before the natural battleground exit flow had visually completed for the player.
+
+2. **RDF bot-only LFG groups were being treated as still-valid run state**
+   Multiple LFG cleanup paths considered `group->isLFGGroup()` by itself as sufficient evidence that the dungeon session was still active. After a real player left early, bots could remain grouped together in a bot-only LFG group in the world, which kept `rtg_dungeon_active` refreshed indefinitely and blocked retirement.
+
+### Corrective direction applied
+The recovery patch hardened both behaviors:
+
+- **Safe logout now refuses to fire while the helper is still on a battleground/arena map.**
+  Instead, retirement remains pending until the bot has actually exited the match space. This preserves the scoreboard/end-of-game experience and only allows logout after map exit.
+
+- **LFG preservation logic now requires real evidence of an active run.**
+  A bot-only LFG group no longer counts as valid dungeon activity by itself. Preservation now requires either:
+  - a real player still being in the group, or
+  - the bot still having an active LFG state.
+
+- **Stale `rtg_dungeon_active` markers now clear much sooner once the run is actually over.**
+  The post-dungeon linger window was shortened so unused RDF helpers free their accounts faster for the next queue wave.
+
+- **Bot-only leftover LFG groups in the world can now unwind instead of self-preserving forever.**
+
+### Expected outcome after this patch
+The intended live behavior after this recovery is:
+
+- BG helpers remain through scoreboard / post-match exit
+- after they leave the battleground map, they can retire cleanly
+- abandoned RDF helpers no longer persist forever simply because they are still in a bot-only LFG group
+- helper accounts should recycle faster for the next queue event without cutting off match-end UX
+
+### Engineering note
+This was an important distinction for RTG queue doctrine:
+
+> **ownership detached** does not automatically mean **safe to logout now**
+
+and
+
+> **LFG group exists** does not automatically mean **dungeon session is still live**
+
+Those two assumptions caused opposite symptoms at the same time: some helpers retired too early, while others retired too late.

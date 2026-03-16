@@ -394,6 +394,18 @@ namespace
         return false;
     }
 
+    static bool RTG_ShouldPreserveLfgGroup(Player* bot, Group* group)
+    {
+        if (!bot || !group || !group->isLFGGroup())
+            return false;
+
+        if (RTG_GroupHasRealPlayer(group))
+            return true;
+
+        lfg::LfgState const state = sLFGMgr->GetState(bot->GetGUID());
+        return state != lfg::LFG_STATE_NONE;
+    }
+
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
@@ -813,6 +825,13 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
             }
             ledger.Release(botId, reason ? reason : "rtg");
         }
+    }
+
+    Map* map = bot->GetMap();
+    if (map && map->IsBattlegroundOrArena())
+    {
+        SetEventValue(botId, "rtg_bg_retire_when_safe", 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, GetEventData(botId, "add"));
+        return false;
     }
 
     if (clearQueueState)
@@ -1436,8 +1455,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (rtgDungeonActive)
             {
-                SetEventValue(botId, "rtg_group_noreal", 0, 0);
-                continue;
+                lfg::LfgState const lfgState = sLFGMgr->GetState(bot->GetGUID());
+                bool preserveDungeonState = inInstance || (isLfgGroup && RTG_ShouldPreserveLfgGroup(bot, group)) || lfgState != lfg::LFG_STATE_NONE;
+                if (preserveDungeonState)
+                {
+                    SetEventValue(botId, "rtg_group_noreal", 0, 0);
+                    continue;
+                }
+
+                if (!hasRealOnline && now > rtgDungeonActive + 20)
+                    SetEventValue(botId, "rtg_dungeon_active", 0, 0);
             }
 
             // BG groups are owned by battleground lifecycle. Do not force-disband
@@ -1618,7 +1645,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			Group* grp = bot->GetGroup();
 			if (grp)
 			{
-				if (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand)
+				if (RTG_ShouldPreserveLfgGroup(bot, grp) || ownerHasRealDemand)
 				{
 					SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 					continue;
@@ -1695,7 +1722,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 
 			Group* grp = bot->GetGroup();
-			if (grp && (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand))
+			if (grp && (RTG_ShouldPreserveLfgGroup(bot, grp) || ownerHasRealDemand))
 			{
 				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
@@ -1741,7 +1768,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			if (grp && (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand))
+			if (grp && (RTG_ShouldPreserveLfgGroup(bot, grp) || ownerHasRealDemand))
 			{
 				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
@@ -1930,7 +1957,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
 			bool stillInRun =
 				(map && (map->IsDungeon() || map->IsRaid())) ||
-				(group && group->isLFGGroup()) ||
+				RTG_ShouldPreserveLfgGroup(bot, group) ||
 				bot->isDead() ||
 				bot->GetCorpse() ||
 				bot->IsInCombat() ||
@@ -1943,7 +1970,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			if (now <= activeSince + 300)
+			if (now <= activeSince + 60)
 				continue;
 
 			SetEventValue(botId, "rtg_dungeon_active", 0, 0);
