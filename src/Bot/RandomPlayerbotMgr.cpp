@@ -1449,6 +1449,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
             }
 
+            // Never dissolve battleground / arena / queued battleground helpers here.
+            // A bot that is already inside a battleground must remain there until the match
+            // naturally ends or dedicated battleground lifecycle logic retires it.
+            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+            {
+                SetEventValue(botId, "rtg_group_noreal", 0, 0);
+                continue;
+            }
+
             // After 10s with no real players online, dissolve allowed non-BG groups only.
             if (now > started + 10)
             {
@@ -2264,7 +2273,11 @@ for (auto const& c : candidates)
 
     if (sPlayerbotAIConfig.rtgEventDriven && pendingQueuedLogins)
     {
-        loginBots = std::max(loginBots, std::min<uint32>(pendingQueuedLogins, maxNewBots));
+        // In standalone RTG queue-helper mode, queued helper logins are not optional background
+        // work. They are the mechanism that converts already-approved queue demand into live bots.
+        // Use the full online headroom whenever pending helpers exist so finish-fill / new-BG / RDF
+        // waves do not sit in a reserved-yet-undispatched state until they hit the stall timeout.
+        loginBots = maxNewBots;
         if (updateBots + loginBots > intervalCap)
             updateBots = (intervalCap > loginBots) ? (intervalCap - loginBots) : 0u;
 
@@ -2775,6 +2788,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             busyAccountIds.insert(charInfo.accountId);
+
+            // RTG event-driven helpers must enter the in-memory dispatch set immediately.
+            // Relying on the later database-backed GetBots() sweep can delay or even starve
+            // freshly acquired helpers when rtg_target/currentBots drift during multi-queue
+            // finish-fill waves. That was producing repeated ACQUIRE->STALL patterns where
+            // helpers were successfully reserved but not actually handed to ProcessBot in time.
+            if (std::find(currentBots.begin(), currentBots.end(), charInfo.guid) == currentBots.end())
+                currentBots.push_front(charInfo.guid);
 
             return true;
         };
