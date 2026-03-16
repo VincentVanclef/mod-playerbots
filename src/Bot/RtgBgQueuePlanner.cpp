@@ -248,8 +248,18 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             {
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgActiveStartKey(uint32(queueTypeId), uint32(bracketId)), 0, 0);
                 if (orphanQueueResidue)
-                    RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason=orphan_queue_residue queueA={} queueH={} activeA={} activeH={}",
-                        uint32(queueTypeId), uint32(bracketId), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde);
+                {
+                    static std::unordered_map<uint64, uint32> sNextOrphanResidueLogAt;
+                    uint64 residueKey = (uint64(uint32(queueTypeId)) << 32) | uint64(uint32(bracketId));
+                    uint32 nowTs = static_cast<uint32>(time(nullptr));
+                    uint32& nextLogAt = sNextOrphanResidueLogAt[residueKey];
+                    if (!nextLogAt || nowTs >= nextLogAt)
+                    {
+                        RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason=orphan_queue_residue queueA={} queueH={} activeA={} activeH={}",
+                            uint32(queueTypeId), uint32(bracketId), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde);
+                        nextLogAt = nowTs + 20;
+                    }
+                }
             }
 
             mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_ALLIANCE)), allianceNeed, allianceNeed ? ttl : 0);

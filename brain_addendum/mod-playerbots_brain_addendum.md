@@ -260,3 +260,59 @@ If starvation still appears after this revision, the next diagnostic layer is no
 - offline character availability versus current account pool composition
 - queue retry / invitation acceptance losses inside a specific battleground lane
 - per-lane helper reuse or residual ownership timing
+
+## Addendum — grouped RDF recovery after tank loss and quieter orphan residue logging
+
+### Problem observed
+A real-player RDF run could successfully form and enter the dungeon, but if a bot tank disappeared early, the remaining bot party members would no longer participate correctly in the next queue cycle with the player.
+
+The practical symptom was:
+
+- the player re-queued from an active dungeon/group state
+- replacement RDF helpers could be acquired and dispatched
+- but grouped helper bots stopped contributing to the role-check / regroup flow
+- meanwhile battleground orphan-residue logging kept repeating every planner pass after matches had already drained
+
+### Root cause
+This was not the old lane-starvation issue.
+
+It split into two narrower problems:
+
+1. **Grouped RDF support regression**
+   A safety guard added to suppress unwanted LFG behavior in real-player groups was too broad. It also blocked legitimate RTG queue-managed RDF helpers from answering group role-checks after regroup / replacement scenarios.
+
+2. **Active dungeon demand recognition too narrow**
+   RTG LFG demand tracking treated active-dungeon ownership as trustworthy mostly when the group still looked like an LFG group. After mid-run disruption, a real-player-led dungeon party could still need replacement helpers even if the group shape was no longer a pristine LFG-group state.
+
+3. **Planner clear-log spam**
+   `orphan_queue_residue` logging was emitted every planner sweep, which inflated logs without adding new signal.
+
+### Structural correction
+This revision does three things:
+
+- allows **queue-managed RDF helpers** to continue participating in `LfgRoleCheckAction` even when grouped with a real player
+- broadens RTG active-dungeon recognition so a **real-player group inside a dungeon map** still counts as valid active RDF demand for replacement planning
+- throttles repeated `orphan_queue_residue` planner logs so the signal remains visible without flooding the log stream
+
+### Why this matters
+This keeps the intended RTG behavior intact:
+
+- random ambient bots should not inject themselves into ordinary real-player groups
+- **assigned / queue-managed RDF helpers** must still help finish the recovery path after a broken dungeon party or lost tank/healer scenario
+
+That distinction is essential.
+
+### Expected next-test behavior
+On the next run we should expect:
+
+- regrouped RDF bots to answer role-check again after a replacement cycle
+- active dungeon ownership to continue generating helper demand when the player is still inside the instance with a real-player-led group
+- cleaner battleground cleanup logs after matches end
+
+### Remaining watchpoints
+The following are still worth validating in the next live pass:
+
+- whether replacement RDF helpers are being invited and role-checking promptly enough after a tank drop
+- whether any remaining RDF refill failures are now due to account-pool eligibility rather than grouped-helper suppression
+- whether BG finish-fill ceilings still plateau early because of true account exhaustion versus reusable-helper timing
+- whether retirement pacing should be tightened further once grouped RDF recovery is stable

@@ -405,7 +405,7 @@ bool LfgJoinAction::JoinLFG()
 
 bool LfgRoleCheckAction::Execute(Event event)
 {
-    if (RTG_GroupHasRealPlayerMember(bot))
+    if (RTG_GroupHasRealPlayerMember(bot) && !RTG_IsQueuedLfgBot(bot) && !RTG_IsAssignedLfgHelper(bot))
     {
         if (RTG_LfgDebugEnabled())
             LOG_INFO("playerbots", "[RTGDBG][LFGROLE] bot={} blocked real-player-group", bot->GetGUID().GetCounter());

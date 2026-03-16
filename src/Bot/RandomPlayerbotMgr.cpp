@@ -2949,7 +2949,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
                 bool activeDungeon = (group && group->isLFGGroup()) ||
                                      gState == lfg::LFG_STATE_DUNGEON ||
-                                     (map && (map->IsDungeon() || map->IsRaid()) && group && group->isLFGGroup());
+                                     (map && (map->IsDungeon() || map->IsRaid()) && group && (group->isLFGGroup() || RTG_GroupHasRealPlayer(group)));
                 if (queuedLfg || activeDungeon)
                 {
                     uint32 owner = queueGuid.GetCounter();
@@ -4157,7 +4157,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
         bool activeDungeon = (group && group->isLFGGroup()) ||
                              gState == lfg::LFG_STATE_DUNGEON ||
-                             (map && (map->IsDungeon() || map->IsRaid()) && group && group->isLFGGroup());
+                             (map && (map->IsDungeon() || map->IsRaid()) && group && (group->isLFGGroup() || RTG_GroupHasRealPlayer(group)));
         if (!queuedLfg && !activeDungeon)
             continue;
 
