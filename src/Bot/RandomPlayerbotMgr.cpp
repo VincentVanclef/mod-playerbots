@@ -2292,6 +2292,61 @@ for (auto const& c : candidates)
     if (sPlayerbotAIConfig.usePlayerCountRatio && maxNewBots > 0)
         SetEventValue(0, "ratio_grow_cd", 1, ratioGrowSeconds);
 
+    if (sPlayerbotAIConfig.rtgEventDriven && !availableBots.empty())
+    {
+        auto rtgDispatchPriority = [&](uint32 botId)
+        {
+            std::tuple<uint32, uint32, uint32, uint32, uint32> fallback(99u, 99u, 99u, UINT32_MAX, botId);
+
+            if (!GetEventValue(botId, "add"))
+                return fallback;
+
+            std::string addData = GetEventData(botId, "add");
+            uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
+
+            uint32 desiredTeam = 0;
+            uint32 desiredLevel = 0;
+            uint32 desiredRole = 0;
+            uint32 desiredOwner = 0;
+            uint32 desiredQueueType = 0;
+
+            if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
+            {
+                uint32 ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand") ? 0u : 1u;
+                return std::make_tuple(0u, ownerHasRealDemand, 0u, requestTs ? requestTs : UINT32_MAX, botId);
+            }
+
+            if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
+            {
+                BattlegroundBracketId bracketId = BG_BRACKET_ID_FIRST;
+                uint32 minLevel = desiredLevel;
+                uint32 maxLevel = desiredLevel;
+                uint32 phasePriority = 9u;
+                if (RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType), desiredLevel, bracketId, minLevel, maxLevel))
+                {
+                    uint32 phase = GetEventValue(0, RTG_MakeBgPhaseKey(desiredQueueType, uint32(bracketId)));
+                    switch (phase)
+                    {
+                        case 0: phasePriority = 0u; break; // pop_or_invite
+                        case 1: phasePriority = 1u; break; // starter_fill
+                        case 2: phasePriority = 2u; break; // live_refill
+                        case 3: phasePriority = 3u; break; // finish_fill
+                        default: phasePriority = 9u; break;
+                    }
+                }
+
+                return std::make_tuple(1u, phasePriority, desiredQueueType, requestTs ? requestTs : UINT32_MAX, botId);
+            }
+
+            return fallback;
+        };
+
+        availableBots.sort([&](uint32 a, uint32 b)
+        {
+            return rtgDispatchPriority(a) < rtgDispatchPriority(b);
+        });
+    }
+
     if (!availableBots.empty())
     {
         // Update bots
@@ -3467,8 +3522,53 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 missingBotsTimer = 0;
             }
 
-            return currentBots.size();
+            // RTG queue helpers acquired above must be eligible for dispatch in the SAME tick.
+            // Returning here starves freshly reserved BG/LFG helpers until a later pass, and under
+            // continuous multi-queue pressure that later pass may never get enough room before the
+            // stall watchdog reaps them. Refresh dispatch state and fall through to the normal
+            // ProcessBot login loop instead of exiting early.
+            availableBots = currentBots;
+            availableBotCount = availableBots.size();
+            onlineBotCount = playerBots.size();
+
+            pendingQueuedLogins = 0;
+            for (uint32 botId : currentBots)
+            {
+                if (!GetEventValue(botId, "add"))
+                    continue;
+
+                if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
+                    continue;
+
+                std::string addData = GetEventData(botId, "add");
+                if (!RTG::IsQueueManagedAddData(addData))
+                    continue;
+
+                ++pendingQueuedLogins;
+            }
+
+            if (pendingQueuedLogins)
+            {
+                intervalCap = std::max(intervalCap, pendingQueuedLogins);
+
+                uint32 dispatchHeadroom = 0;
+                if (sPlayerbotAIConfig.rtgEventMaxBots > onlineBotCount)
+                    dispatchHeadroom = (sPlayerbotAIConfig.rtgEventMaxBots - onlineBotCount);
+
+                maxNewBots = std::min<uint32>(pendingQueuedLogins, dispatchHeadroom);
+                loginBots = maxNewBots;
+                if (updateBots + loginBots > intervalCap)
+                    updateBots = (intervalCap > loginBots) ? (intervalCap - loginBots) : 0u;
+
+                if (RTG_QueueDebugEnabled())
+                {
+                    LOG_INFO("playerbots", "[RTG][DISPATCH][POST-ACQUIRE] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} eventMax={}",
+                             pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, sPlayerbotAIConfig.rtgEventMaxBots);
+                }
+            }
         }
+        else
+        {
 
         // PHASE 1: Log-in Alliance bots up to allowedAllianceCount
         for (auto const& charInfo : allianceChars)
