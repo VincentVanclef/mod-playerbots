@@ -110,6 +110,55 @@ namespace
         return std::max<uint32>(20u, RTG_GetQueueGraceTtlSeconds() + 10u);
     }
 
+    static uint32 RTG_GetPendingHelperLoginGlobalCap()
+    {
+        uint32 ceiling = RTG_GetStandaloneHelperCeiling();
+        return std::max<uint32>(8u, std::min<uint32>(16u, std::max<uint32>(8u, ceiling / 4u)));
+    }
+
+    static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 phase)
+    {
+        if (phase >= 4u)
+            return 4u;
+        if (phase == 3u)
+            return 6u;
+        return std::max<uint32>(8u, std::min<uint32>(12u, RTG_GetPendingHelperLoginGlobalCap()));
+    }
+
+    static bool RTG_IsTrackedPendingHelperState(RTG::RtgHelperLedgerEntry const& entry)
+    {
+        if (!entry.isEventDrivenHelper || entry.pendingRetire)
+            return false;
+
+        if (entry.state == RTG::RtgHelperState::Retired || entry.state == RTG::RtgHelperState::InBattleground)
+            return false;
+
+        return entry.pendingQueueJoin || entry.state == RTG::RtgHelperState::Reserved ||
+               entry.state == RTG::RtgHelperState::LoggingIn || entry.state == RTG::RtgHelperState::WorldIdle;
+    }
+
+    static uint32 RTG_CountPendingHelpers(uint32 queueType = 0, uint32 bracketId = UINT32_MAX, uint32 team = UINT32_MAX)
+    {
+        uint32 count = 0;
+        RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
+        for (uint32 botId : ledger.GetTrackedBotIds())
+        {
+            RTG::RtgHelperLedgerEntry const* entry = ledger.Get(botId);
+            if (!entry || !RTG_IsTrackedPendingHelperState(*entry))
+                continue;
+
+            if (queueType && uint32(entry->target.queueTypeId) != queueType)
+                continue;
+            if (bracketId != UINT32_MAX && uint32(entry->target.bracketId) != bracketId)
+                continue;
+            if (team != UINT32_MAX && uint32(entry->target.preferredTeam) != team)
+                continue;
+
+            ++count;
+        }
+        return count;
+    }
+
     static bool RTG_IsOwnerInBattlegroundMap(uint32 ownerGuid)
     {
         if (!ownerGuid)
@@ -2396,23 +2445,12 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
         }
     }
 
-    // Calculate needed RNDbot accounts.
-    //
-    // Legacy random-bot sizing can treat an account as a pool of characters because
-    // bots rotate over time. RTG event-driven helper mode is different: busyAccountIds
-    // intentionally allows only one live helper per account at a time. That means the
-    // old "available chars per account" divisor under-allocates the RNDbot account
-    // pool for simultaneous BG/RDF demand and hard-caps live helper concurrency to the
-    // number of RNDbot-designated accounts.
-    //
-    // Example: a helper ceiling of 60 with a divisor of 3 would previously assign only
-    // 20 RNDbot accounts, but RTG helper mode can still only log in one character from
-    // each account concurrently, so the realm stalls around ~20 helpers even though the
-    // planner legitimately needs far more.
+    // Calculate needed RNDbot accounts
     uint32 neededRndBotAccounts = 0;
     uint32 standaloneCeiling = RTG_GetStandaloneHelperCeiling();
     if (standaloneCeiling > 0)
     {
+        int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
         int maxBots = static_cast<int>(standaloneCeiling);
 
         // Take periodic online-offline into account only for legacy random-bot sizing.
@@ -2421,18 +2459,8 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
             maxBots *= sPlayerbotAIConfig.periodicOnlineOfflineRatio;
         }
 
-        if (sPlayerbotAIConfig.rtgEventDriven)
-        {
-            // RTG standalone queue-helper mode needs one RNDbot account per potential
-            // simultaneously logged helper.
-            neededRndBotAccounts = static_cast<uint32>(std::max(0, maxBots));
-        }
-        else
-        {
-            int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-            // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
-            neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
-        }
+        // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
+        neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
     }
 
     // Count existing assigned accounts
@@ -2503,14 +2531,6 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
     LOG_INFO("playerbots", "Account type assignment complete: {} RNDbot accounts, {} AddClass accounts, {} unassigned",
              rndBotTypeAccounts.size(), addClassTypeAccounts.size(),
              currentAssignments.size() - rndBotTypeAccounts.size() - addClassTypeAccounts.size());
-
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        LOG_INFO("playerbots", "[RTG][ACCOUNTS] helperMode=1 standaloneCeiling={} rndAccounts={} totalPrefixedAccounts={} oneAccountPerLiveHelper=1",
-                 RTG_GetStandaloneHelperCeiling(),
-                 static_cast<uint32>(rndBotTypeAccounts.size()),
-                 static_cast<uint32>(allRandomBotAccounts.size()));
-    }
 }
 
 bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
@@ -2687,6 +2707,22 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 busyAccountIds.insert(accountId);
         }
 
+        if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+        {
+            RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
+            for (uint32 trackedBotId : ledger.GetTrackedBotIds())
+            {
+                RTG::RtgHelperLedgerEntry const* entry = ledger.Get(trackedBotId);
+                if (!entry || !entry->accountId || entry->pendingRetire)
+                    continue;
+
+                if (entry->state == RTG::RtgHelperState::Retired)
+                    continue;
+
+                busyAccountIds.insert(entry->accountId);
+            }
+        }
+
         // Lambda to handle bot login logic
         auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& addData = "") -> bool
         {
@@ -2724,7 +2760,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][REQUEST] helper={} account={} add='{}'", charInfo.guid, charInfo.accountId, addData));
             }
 
-            currentBots.push_back(charInfo.guid);
             busyAccountIds.insert(charInfo.accountId);
 
             return true;
@@ -3255,6 +3290,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
                 if (bucket.assignedExtra >= bucket.need)
                     return false;
+
+                uint32 pendingGlobal = RTG_CountPendingHelpers();
+                if (pendingGlobal >= RTG_GetPendingHelperLoginGlobalCap())
+                    return false;
+
+                uint32 pendingLane = RTG_CountPendingHelpers(bucket.queueTypeId, uint32(bucket.bracketId), bucket.team);
+                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.phase))
+                    return false;
+
                 return tryFillBgBucket(bucket, capacity);
             };
 

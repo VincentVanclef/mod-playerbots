@@ -149,7 +149,7 @@ void RecordHelperReservation(Player* bot, BattlegroundQueueTypeId queueTypeId, B
     entry.botGuid = bot->GetGUID().GetCounter();
     entry.accountId = bot->GetSession() ? bot->GetSession()->GetAccountId() : 0;
     entry.isEventDrivenHelper = true;
-    entry.state = RtgHelperState::WorldIdle;
+    entry.state = RtgHelperState::Reserved;
     entry.ownerType = RtgHelperOwnerType::QueueDemand;
     entry.purpose = purpose;
     entry.target.bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
@@ -286,7 +286,7 @@ void RegisterPendingHelperLogin(ObjectGuid::LowType botGuid, uint32 accountId, s
     entry.accountId = accountId;
     entry.isEventDrivenHelper = true;
     entry.pendingQueueJoin = true;
-    entry.state = RtgHelperState::WorldIdle;
+    entry.state = RtgHelperState::Reserved;
     entry.ownerType = RtgHelperOwnerType::QueueDemand;
     entry.creationReason = "pending helper acquisition";
 

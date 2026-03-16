@@ -13,6 +13,9 @@
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
 
+#include <ctime>
+#include <unordered_map>
+
 namespace
 {
     static bool RTG_ParseBgBotAssignment(std::string const& data, uint32& team, uint32& level, uint32& queueType)
@@ -130,6 +133,51 @@ namespace
 
         uint32 queueType = 0;
         return RTG_GetAssignedBgQueue(bot, queueType) && queueType != 0;
+    }
+
+    static bool RTG_BattlegroundHasRealPlayers(Battleground* bg)
+    {
+        if (!bg || !bg->GetBgMap())
+            return false;
+
+        for (auto const& ref : bg->GetBgMap()->GetPlayers())
+        {
+            Player* player = ref.GetSource();
+            if (!player)
+                continue;
+            if (!sRandomPlayerbotMgr.IsRandomBot(player))
+                return true;
+        }
+
+        return false;
+    }
+
+    static bool RTG_ProtectedBgHelperMayLeave(Player* bot, Battleground* bg)
+    {
+        if (!bot || !bg)
+            return true;
+
+        if (bg->GetStatus() == STATUS_WAIT_LEAVE)
+            return true;
+
+        if (!RTG_IsProtectedBgHelper(bot))
+            return true;
+
+        static std::unordered_map<uint32, uint32> sNoRealPlayerSince;
+        uint32 instanceId = bg->GetInstanceID();
+        uint32 nowSecs = static_cast<uint32>(time(nullptr));
+
+        if (RTG_BattlegroundHasRealPlayers(bg))
+        {
+            sNoRealPlayerSince.erase(instanceId);
+            return false;
+        }
+
+        auto itr = sNoRealPlayerSince.find(instanceId);
+        if (itr == sNoRealPlayerSince.end())
+            itr = sNoRealPlayerSince.emplace(instanceId, nowSecs).first;
+
+        return nowSecs >= itr->second && (nowSecs - itr->second) >= 300u;
     }
 
     static void RTG_ClearQueuePenalties(Player* bot)
@@ -850,7 +898,7 @@ bool BGLeaveAction::Execute(Event event)
         return false;
 
     Battleground* currentBg = bot->GetBattleground();
-    if (currentBg && currentBg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
+    if (currentBg && !RTG_ProtectedBgHelperMayLeave(bot, currentBg))
     {
         LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(currentBg->GetStatus()), currentBg->GetMapId());
@@ -911,7 +959,7 @@ bool BGStatusAction::LeaveBG(PlayerbotAI* botAI)
     if (!bg)
         return false;
 
-    if (bg->GetStatus() != STATUS_WAIT_LEAVE && RTG_IsProtectedBgHelper(bot))
+    if (!RTG_ProtectedBgHelperMayLeave(bot, bg))
     {
         LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
             bot->GetGUID().GetCounter(), uint32(bg->GetStatus()), bg->GetMapId());

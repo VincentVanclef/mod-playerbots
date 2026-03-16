@@ -209,16 +209,23 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 rampTarget = minPerTeam + (rampSteps * 2u);
                 uint32 liveTarget = std::max(activeCurrentAlliance, activeCurrentHorde);
                 liveTarget = std::max(liveTarget, minPerTeam);
+
+                uint32 symmetricActive = std::min(activeCurrentAlliance, activeCurrentHorde);
+                uint32 growthGuardTarget = symmetricActive >= minPerTeam ? (symmetricActive + 2u) : minPerTeam;
+
                 if (maxPerTeam)
                 {
                     rampTarget = std::min(rampTarget, maxPerTeam);
                     liveTarget = std::min(liveTarget, maxPerTeam);
+                    growthGuardTarget = std::min(growthGuardTarget, maxPerTeam);
                 }
-                uint32 matureTarget = std::max(liveTarget, rampTarget);
+
+                uint32 matureTarget = std::max(liveTarget, minPerTeam);
+                matureTarget = std::max(matureTarget, std::min(rampTarget, growthGuardTarget));
                 if (maxPerTeam)
                     matureTarget = std::min(matureTarget, maxPerTeam);
 
-                phase = rampSteps > 0 ? 4u : 3u;
+                phase = matureTarget > minPerTeam ? 4u : 3u;
                 allianceTarget = matureTarget;
                 hordeTarget = matureTarget;
                 allianceNeed = allianceTarget > activeCurrentAlliance ? (allianceTarget - activeCurrentAlliance) : 0u;
