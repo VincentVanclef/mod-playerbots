@@ -104,7 +104,9 @@ public:
     bool rtgEventDriven = false;
     bool rtgSmartQueue = true;
     uint32 rtgQueueGraceSeconds = 30;
-    uint32 rtgEventMaxBots = 60;
+    uint32 rtgEventMaxBots = 120; // overall RTG event-driven helper ceiling
+    uint32 rtgBgMaxBots = 77; // battleground helper sublimit
+    uint32 rtgLfgMaxBots = 60; // rdf/lfg helper sublimit
     bool rtgKeepWorldBots = false; // if true, preserves normal world population target
     bool rtgEventDebug = false; // verbose queue supervisor logging
     bool rtgQueueOwnershipEnable = true;

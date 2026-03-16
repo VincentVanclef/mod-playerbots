@@ -113,11 +113,22 @@ namespace
     static uint32 RTG_GetPendingHelperLoginGlobalCap()
     {
         uint32 ceiling = RTG_GetStandaloneHelperCeiling();
+        if (sPlayerbotAIConfig.rtgEventDriven)
+            return std::max<uint32>(24u, std::min<uint32>(64u, ceiling));
         return std::max<uint32>(8u, std::min<uint32>(16u, std::max<uint32>(8u, ceiling / 4u)));
     }
 
     static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 phase)
     {
+        if (sPlayerbotAIConfig.rtgEventDriven)
+        {
+            if (phase >= 4u)
+                return 12u;
+            if (phase == 3u)
+                return 10u;
+            return std::max<uint32>(10u, std::min<uint32>(16u, RTG_GetPendingHelperLoginGlobalCap()));
+        }
+
         if (phase >= 4u)
             return 4u;
         if (phase == 3u)
@@ -1287,7 +1298,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             ++trackedManaged;
         }
 
-        uint32 unresolvedNeed = std::min<uint32>(lfgNeed + bgNeed, sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 cappedLfgNeed = std::min<uint32>(lfgNeed, sPlayerbotAIConfig.rtgLfgMaxBots);
+        uint32 cappedBgNeed = std::min<uint32>(bgNeed, sPlayerbotAIConfig.rtgBgMaxBots);
+        uint32 unresolvedNeed = std::min<uint32>(cappedLfgNeed + cappedBgNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         uint32 eventTarget = std::min<uint32>(trackedManaged + unresolvedNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         maxAllowedBotCount = baseWorld + eventTarget;
 
@@ -1298,8 +1311,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} eventTarget={} baseWorld={} maxAllowed={}",
-                trackedManaged, unresolvedNeed, lfgNeed, bgNeed, eventTarget, baseWorld, maxAllowedBotCount);
+            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} cappedLfgNeed={} cappedBgNeed={} eventTarget={} baseWorld={} maxAllowed={}",
+                trackedManaged, unresolvedNeed, lfgNeed, bgNeed, cappedLfgNeed, cappedBgNeed, eventTarget, baseWorld, maxAllowedBotCount);
         }
 
         static bool rtgStandaloneLogged = false;
@@ -2569,10 +2582,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             ++trackedManaged;
         }
 
-        uint32 unresolvedNeed = std::min<uint32>(lfgNeed + bgNeed, sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 cappedLfgNeed = std::min<uint32>(lfgNeed, sPlayerbotAIConfig.rtgLfgMaxBots);
+        uint32 cappedBgNeed = std::min<uint32>(bgNeed, sPlayerbotAIConfig.rtgBgMaxBots);
+        uint32 unresolvedNeed = std::min<uint32>(cappedLfgNeed + cappedBgNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         uint32 reconstructedTarget = std::min<uint32>(trackedManaged + unresolvedNeed, sPlayerbotAIConfig.rtgEventMaxBots);
-        if (!rtgTarget)
-            rtgTarget = reconstructedTarget;
+        rtgTarget = reconstructedTarget;
 
         maxAllowedBotCount = rtgTarget;
         uint32 onlineHeadroom = maxAllowedBotCount > trackedManaged ? (maxAllowedBotCount - trackedManaged) : 0u;
@@ -2580,8 +2594,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={}",
-                     GetMaxAllowedBotCount(), rtgTarget, trackedManaged, unresolvedNeed, lfgNeed, bgNeed);
+            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} cappedLfgNeed={} cappedBgNeed={}",
+                     GetMaxAllowedBotCount(), rtgTarget, trackedManaged, unresolvedNeed, lfgNeed, bgNeed, cappedLfgNeed, cappedBgNeed);
             LOG_INFO("playerbots", "[RTG][ACQUIRE][HEADROOM] need={} trackedManaged={} maxAllowed={} headroom={} addInterval={}",
                      unresolvedNeed, trackedManaged, maxAllowedBotCount, onlineHeadroom, botsToAddThisInterval);
         }
@@ -4121,7 +4135,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (anyRealLfgDemand && desiredHelperTotal)
         {
             uint32 globalStart = anyReady ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (oldestPendingStart ? oldestPendingStart : now);
-            uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgEventMaxBots);
+            uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgLfgMaxBots);
             LOG_INFO("playerbots", "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
                      static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
             SetEventValue(0, "rtg_lfg_start", globalStart, globalTtl);

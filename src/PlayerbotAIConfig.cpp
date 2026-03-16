@@ -188,14 +188,18 @@ bool PlayerbotAIConfig::Initialize()
     // RTG: queue-driven bot population
     rtgEventDriven = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Enable", false);
     rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
-    rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 60);
+    rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 120);
+    rtgBgMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots", 77);
+    rtgLfgMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.LfgMaxBots", 60);
     rtgKeepWorldBots = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.KeepWorldBots", false);
     rtgEventDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Debug", false);
     LOG_INFO("server.loading",
-        "RTG CFG loaded: Enable={} Debug={} MaxBots={} Grace={} LowBracketCaps={} Ratio={} CommunityCap={}",
+        "RTG CFG loaded: Enable={} Debug={} MaxBots={} BgMax={} LfgMax={} Grace={} LowBracketCaps={} Ratio={} CommunityCap={}",
         rtgEventDriven ? 1 : 0,
         rtgEventDebug ? 1 : 0,
         rtgEventMaxBots,
+        rtgBgMaxBots,
+        rtgLfgMaxBots,
         rtgQueueGraceSeconds,
         rtgLowBracketCapsEnable ? 1 : 0,
         usePlayerCountRatio ? 1 : 0,

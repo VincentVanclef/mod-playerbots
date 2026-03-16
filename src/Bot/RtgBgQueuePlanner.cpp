@@ -270,7 +270,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                      queueRealAlliance, queueRealHorde, minPerTeam, maxPerTeam);
             RTG_WorldLog("[RTG][BG][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} maxBots={} planner={}",
                      uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u,
-                     sPlayerbotAIConfig.rtgEventMaxBots, RTG_GetBgPlannerObjective(phase));
+                     sPlayerbotAIConfig.rtgBgMaxBots, RTG_GetBgPlannerObjective(phase));
         }
     }
 
@@ -293,7 +293,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
     mgr.RTG_SetGlobalEvent("rtg_bg_any_real_queued", anyRealBgDemand ? 1u : 0u, ttl);
     mgr.RTG_SetGlobalEvent("rtg_bg_any_real_demand", anyRealBgDemand ? 1u : 0u, ttl);
-    mgr.RTG_SetGlobalEvent("rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgEventMaxBots), ttl);
+    mgr.RTG_SetGlobalEvent("rtg_bg_need_total", std::min<uint32>(rtgBgNeedTotal, sPlayerbotAIConfig.rtgBgMaxBots), ttl);
 
     if (anyRealBgDemand && rtgBgNeedTotal)
     {
