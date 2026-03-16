@@ -3023,10 +3023,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 switch (phase)
                 {
-                    case 3: return 0; // finish_fill
-                    case 2: return 1; // live_refill
-                    case 0: return 2; // pop_or_invite
-                    case 1: return 3; // starter_fill
+                    case 0: return 0; // pop_or_invite
+                    case 1: return 1; // starter_fill
+                    case 2: return 2; // live_refill
+                    case 3: return 3; // finish_fill
                     default: return 4;
                 }
             };
@@ -3047,6 +3047,28 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return a.team < b.team;
                 return a.level > b.level;
             });
+
+            bool bgHasStartupNeed = false;
+            bool bgHasStarterNeed = false;
+            for (RtgBgBucket const& bucket : orderedBgBuckets)
+            {
+                if (!bucket.need)
+                    continue;
+                if (bucket.phase == 0)
+                    bgHasStartupNeed = true;
+                else if (bucket.phase == 1)
+                    bgHasStarterNeed = true;
+            }
+
+            bool suppressBgFinishFill = bgHasStartupNeed || bgHasStarterNeed;
+
+            if (RTG_QueueDebugEnabled())
+            {
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][BG_ORDER] startupNeed={} starterNeed={} suppressFinishFill={}",
+                         bgHasStartupNeed ? 1u : 0u,
+                         bgHasStarterNeed ? 1u : 0u,
+                         suppressBgFinishFill ? 1u : 0u);
+            }
 
             uint32 remainingCapacity = maxAllowedBotCount;
             uint32 totalRequested = totalLfgNeed + totalBgNeed;
@@ -3214,6 +3236,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     {
                         if (!capacity || !remainingCapacity)
                             break;
+                        if (suppressBgFinishFill && bucket.phase == 3)
+                            continue;
                         if (tryFillBgBucketOnce(bucket, capacity))
                             added = true;
                     }
@@ -3248,6 +3272,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         {
                             for (RtgBgBucket& bucket : orderedBgBuckets)
                             {
+                                if (suppressBgFinishFill && bucket.phase == 3)
+                                    continue;
                                 if (tryFillBgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
@@ -3270,6 +3296,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             }
                             for (RtgBgBucket& bucket : orderedBgBuckets)
                             {
+                                if (suppressBgFinishFill && bucket.phase == 3)
+                                    continue;
                                 if (tryFillBgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
