@@ -1736,6 +1736,34 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                         SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
+                        SetEventValue(botId, "rtg_bg_queue_failures", 0, 0);
+                    }
+                    else
+                    {
+                        uint32 queueFailures = GetEventValue(botId, "rtg_bg_queue_failures") + 1;
+                        SetEventValue(botId, "rtg_bg_queue_failures", queueFailures, 120, addData);
+
+                        // Some helpers can log in successfully but still never enter the
+                        // requested battleground queue on this branch. Keeping those bots
+                        // reserved forever starves other queue buckets. After a couple of
+                        // failed direct join attempts, release and recycle the helper so a
+                        // fresh account/character can be acquired instead.
+                        if (queueFailures >= 2)
+                        {
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][REPLACE] helper={} queue={} failures={} action=retire_and_replace",
+                                botId, desiredQueueType, queueFailures));
+                            SetEventValue(botId, "add", 0, 0);
+                            SetEventValue(botId, "rtg_add_requested", 0, 0);
+                            SetEventValue(botId, "rtg_bg_pending", 0, 0);
+                            SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
+                            SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+                            SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+                            currentBots.remove(botId);
+                            if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                                RTG::RtgQueueLedger::Instance().Remove(botId);
+                            RTG_RequestSafeBotLogout(botGuid, "rtg_bg_queue_join_failed");
+                            continue;
+                        }
                     }
                 }
             }
@@ -2568,7 +2596,16 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         // Determine which accounts to use based on EnablePeriodicOnlineOffline
         std::vector<uint32> accountsToUse;
-        if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+        if (sPlayerbotAIConfig.rtgEventDriven)
+        {
+            // RTG queue helpers are an on-demand standalone system and must be able
+            // to draw from the full helper account pool. The legacy periodic
+            // online/offline sharding is useful for ambient random-bot population,
+            // but it artificially starves battleground/RDF helper acquisition when
+            // multiple queues light up at the same time.
+            accountsToUse = rndBotTypeAccounts;
+        }
+        else if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
         {
 
             // Calculate how many accounts can be used

@@ -55,7 +55,7 @@ namespace
 
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
-        return std::string("rtg_bg_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+        return std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
     static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
