@@ -2279,10 +2279,11 @@ AiPlayerbot.EnableICCBuffs = 1
 #                     This is the master cap across battleground and RDF/LFG
 #                     helper populations together.
 #
-#        Default:     120
+#        Default:     156
 #
-#        Example:     AiPlayerbot.RTG.EventDriven.MaxBots = 120
-#                     Up to 120 RTG event-driven helpers may be active in total.
+#        Example:     AiPlayerbot.RTG.EventDriven.MaxBots = 156
+#                     Up to 156 RTG event-driven helpers may be active in total, allowing
+#                     battleground finish-fill growth to coexist with reserved RDF support.
 #
 #    AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots
 #        Description: Battleground-specific RTG helper ceiling.
@@ -2292,11 +2293,11 @@ AiPlayerbot.EnableICCBuffs = 1
 #                     Set this high enough to support the number of simultaneous
 #                     battlegrounds you want the realm to sustain.
 #
-#        Default:     77
+#        Default:     96
 #
-#        Example:     AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots = 77
-#                     Allows enough battleground helpers to sustain up to three
-#                     simultaneous 7v7 startup fills or deeper finish-fill growth.
+#        Example:     AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots = 96
+#                     Allows three battlegrounds to reach deeper finish-fill targets
+#                     without consuming the entire RTG helper envelope.
 #
 #    AiPlayerbot.RTG.EventDriven.LfgMaxBots
 #        Description: RDF/LFG-specific RTG helper ceiling.
@@ -2395,8 +2396,8 @@ AiPlayerbot.EnableICCBuffs = 1
 AiPlayerbot.RTG.EventDriven.Enable = 0
 AiPlayerbot.RTG.SmartQueue.Enable = 1
 AiPlayerbot.RTG.QueueGraceSeconds = 30
-AiPlayerbot.RTG.EventDriven.MaxBots = 120
-AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots = 77
+AiPlayerbot.RTG.EventDriven.MaxBots = 156
+AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots = 96
 AiPlayerbot.RTG.EventDriven.LfgMaxBots = 60
 AiPlayerbot.RTG.EventDriven.KeepWorldBots = 0
 AiPlayerbot.RTG.EventDriven.Debug = 0

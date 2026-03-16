@@ -3366,13 +3366,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return added;
             };
 
-            auto fillReservedLfgLane = [&](uint32& capacity, bool bgDemandActive)
+            auto fillReservedLfgLane = [&](uint32& capacity, bool /*bgDemandActive*/)
             {
+                // RTG doctrine: RDF/LFG startup must retain its own reserved lane.
+                // Battleground demand may compete for shared surplus later, but it must
+                // not suppress fresh RDF assembly inside the LFG-reserved slice.
                 for (RtgLfgBucket& bucket : orderedLfgBuckets)
                 {
-                    if (bgDemandActive && !bucket.activeDungeon)
-                        continue;
-
                     while (capacity && remainingCapacity && tryFillLfgBucketOnce(bucket, capacity))
                     {
                     }
@@ -3478,8 +3478,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             }
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
-                                if (bgDemandActive && !bucket.activeDungeon)
-                                    continue;
                                 if (tryFillLfgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
@@ -3488,8 +3486,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         {
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
-                                if (bgDemandActive && !bucket.activeDungeon)
-                                    continue;
                                 if (tryFillLfgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }

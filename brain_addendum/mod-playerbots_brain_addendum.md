@@ -171,3 +171,92 @@ If multi-BG startup still plateaus at ~13 bots after compile recovery, the next 
 - finish-fill consuming capacity before startup lanes finish
 - pending helper ownership / queue residue preventing same-account reuse
 - lane fairness between queue 2 / queue 3 / queue 4 under shared BG ceilings
+
+
+---
+
+## Addendum: BG ceiling pressure and RDF lane suppression recovery
+
+### Test result that triggered this addendum
+
+After compile recovery and same-tick dispatch refresh were restored, RTG successfully launched and deep-filled **three simultaneous battleground lanes**:
+
+- queue 2 advanced into `finish_fill` around `10v10`
+- queue 3 advanced into `finish_fill` around `13v13`
+- queue 4 advanced into `finish_fill` around `13v13`
+
+This proved the earlier startup starvation bug was largely resolved.
+
+However, the next test exposed two remaining pressure points:
+
+1. battleground demand was now strong enough to push near the configured BG helper ceiling
+2. RDF/LFG startup helpers could still be delayed or suppressed while BG demand was present
+
+### Root cause A: battleground helper ceiling is now too conservative for RTG's desired multi-BG state
+
+The previous BG helper ceiling of `77` was sufficient for earlier startup goals, but the repaired planner now sustains deeper finish-fill targets across multiple concurrent battlegrounds.
+
+At RTG scale, three active BGs can legitimately consume most of that allowance before RDF receives practical breathing room.
+
+### Root cause B: LFG reserved capacity still honored BG presence too aggressively
+
+Although lane reservation already split total need into separate LFG and BG slices, the LFG fill path still skipped non-active dungeon buckets whenever battleground demand existed:
+
+- reserved LFG capacity could exist
+- but fresh RDF startup buckets were skipped
+- only already-active dungeon buckets were allowed through
+
+That meant RDF startup could appear starved even when the scheduler had already reserved LFG-side budget for it.
+
+### Resolution in this revision
+
+This revision applies two linked corrections:
+
+1. **LFG reserved lane recovery**
+   - fresh RDF/LFG startup buckets are now allowed to consume their own reserved LFG slice even while BG demand is active
+   - BG pressure may still compete for shared surplus later, but it no longer nullifies the LFG lane itself
+
+2. **Configuration baseline uplift**
+   - `AiPlayerbot.RTG.EventDriven.MaxBots` default raised from `120` to `156`
+   - `AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots` default raised from `77` to `96`
+   - `AiPlayerbot.RTG.EventDriven.LfgMaxBots` remains `60`
+
+### Why these numbers
+
+This new baseline is meant to fit RTG's observed operating goal:
+
+- three battlegrounds can deepen past their minimal launch thresholds
+- RDF still retains a protected helper envelope
+- total RTG helper pressure remains bounded by a single master cap
+
+The intent is not infinite growth. It is to stop healthy multi-BG activity from crowding RDF out of existence.
+
+### Engineering interpretation
+
+The system has crossed an important threshold:
+
+- before, the problem was **startup starvation**
+- now, the problem is **successful throughput creating real capacity pressure**
+
+That is progress.
+
+The correct next-phase design is therefore:
+
+- preserve independent lane reservation
+- preserve startup-first suppression of BG `finish_fill` when necessary
+- allow RDF to use its own lane even under BG load
+- raise the documented RTG helper envelope to match the realm's real concurrency target
+
+### Expected next test outcome
+
+With this revision in place, the next live run should show:
+
+- all three battlegrounds still launching and deep-filling
+- RDF helper startup no longer blocked merely because BG demand exists
+- fewer cases where BG finish-fill consumes the practical envelope before RDF gets to assemble
+
+If starvation still appears after this revision, the next diagnostic layer is no longer planner order or reserved-lane suppression. It will most likely be:
+
+- offline character availability versus current account pool composition
+- queue retry / invitation acceptance losses inside a specific battleground lane
+- per-lane helper reuse or residual ownership timing
