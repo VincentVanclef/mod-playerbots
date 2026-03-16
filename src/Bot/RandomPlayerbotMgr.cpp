@@ -2396,12 +2396,23 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
         }
     }
 
-    // Calculate needed RNDbot accounts
+    // Calculate needed RNDbot accounts.
+    //
+    // Legacy random-bot sizing can treat an account as a pool of characters because
+    // bots rotate over time. RTG event-driven helper mode is different: busyAccountIds
+    // intentionally allows only one live helper per account at a time. That means the
+    // old "available chars per account" divisor under-allocates the RNDbot account
+    // pool for simultaneous BG/RDF demand and hard-caps live helper concurrency to the
+    // number of RNDbot-designated accounts.
+    //
+    // Example: a helper ceiling of 60 with a divisor of 3 would previously assign only
+    // 20 RNDbot accounts, but RTG helper mode can still only log in one character from
+    // each account concurrently, so the realm stalls around ~20 helpers even though the
+    // planner legitimately needs far more.
     uint32 neededRndBotAccounts = 0;
     uint32 standaloneCeiling = RTG_GetStandaloneHelperCeiling();
     if (standaloneCeiling > 0)
     {
-        int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
         int maxBots = static_cast<int>(standaloneCeiling);
 
         // Take periodic online-offline into account only for legacy random-bot sizing.
@@ -2410,8 +2421,18 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
             maxBots *= sPlayerbotAIConfig.periodicOnlineOfflineRatio;
         }
 
-        // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
-        neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
+        if (sPlayerbotAIConfig.rtgEventDriven)
+        {
+            // RTG standalone queue-helper mode needs one RNDbot account per potential
+            // simultaneously logged helper.
+            neededRndBotAccounts = static_cast<uint32>(std::max(0, maxBots));
+        }
+        else
+        {
+            int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
+            // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
+            neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
+        }
     }
 
     // Count existing assigned accounts
@@ -2482,6 +2503,14 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
     LOG_INFO("playerbots", "Account type assignment complete: {} RNDbot accounts, {} AddClass accounts, {} unassigned",
              rndBotTypeAccounts.size(), addClassTypeAccounts.size(),
              currentAssignments.size() - rndBotTypeAccounts.size() - addClassTypeAccounts.size());
+
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        LOG_INFO("playerbots", "[RTG][ACCOUNTS] helperMode=1 standaloneCeiling={} rndAccounts={} totalPrefixedAccounts={} oneAccountPerLiveHelper=1",
+                 RTG_GetStandaloneHelperCeiling(),
+                 static_cast<uint32>(rndBotTypeAccounts.size()),
+                 static_cast<uint32>(allRandomBotAccounts.size()));
+    }
 }
 
 bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
