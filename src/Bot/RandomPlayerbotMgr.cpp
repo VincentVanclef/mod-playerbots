@@ -120,29 +120,20 @@ namespace
 
     static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 phase)
     {
-        uint32 globalCap = RTG_GetPendingHelperLoginGlobalCap();
-        uint32 ceiling = RTG_GetStandaloneHelperCeiling();
-
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
-            // Do not hard-freeze a busy battleground lane at ~10 pending helpers when the
-            // overall RTG event budget and account pool can safely sustain more. Scale the
-            // lane ceiling with the configured standalone helper ceiling while still keeping
-            // a bounded per-lane budget so one queue family cannot absorb the entire realm.
-            uint32 dynamicLaneCap = std::max<uint32>(12u, std::min<uint32>(24u, std::max<uint32>(12u, ceiling / 3u)));
-
             if (phase >= 4u)
-                return std::min<uint32>(globalCap, std::max<uint32>(12u, dynamicLaneCap));
+                return 12u;
             if (phase == 3u)
-                return std::min<uint32>(globalCap, std::max<uint32>(10u, dynamicLaneCap > 2u ? (dynamicLaneCap - 2u) : dynamicLaneCap));
-            return std::min<uint32>(globalCap, std::max<uint32>(10u, dynamicLaneCap));
+                return 10u;
+            return std::max<uint32>(10u, std::min<uint32>(16u, RTG_GetPendingHelperLoginGlobalCap()));
         }
 
         if (phase >= 4u)
             return 4u;
         if (phase == 3u)
             return 6u;
-        return std::max<uint32>(8u, std::min<uint32>(12u, globalCap));
+        return std::max<uint32>(8u, std::min<uint32>(12u, RTG_GetPendingHelperLoginGlobalCap()));
     }
 
     static bool RTG_IsTrackedPendingHelperState(RTG::RtgHelperLedgerEntry const& entry)
@@ -864,35 +855,7 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         if (!bot || !bot->IsInWorld())
         {
             if (entry->state == RTG::RtgHelperState::Retired)
-            {
                 ledger.Remove(botId);
-                continue;
-            }
-
-            uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
-            uint32 requestAge = (requestTs && NowSeconds() > requestTs) ? (NowSeconds() - requestTs) : 0u;
-            bool staleOfflineTransition =
-                (entry->state == RTG::RtgHelperState::Reserved ||
-                 entry->state == RTG::RtgHelperState::LoggingIn ||
-                 entry->state == RTG::RtgHelperState::WorldIdle ||
-                 entry->state == RTG::RtgHelperState::Releasing) &&
-                requestAge >= RTG_GetDispatchStallThresholdSeconds();
-
-            if (staleOfflineTransition)
-            {
-                std::string addData = GetEventData(botId, "add");
-                SetEventValue(botId, "add", 0, 0);
-                SetEventValue(botId, "logout", 0, 0);
-                SetEventValue(botId, "rtg_add_requested", 0, 0);
-                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-                SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-                SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-                currentBots.remove(botId);
-                ledger.Remove(botId);
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RECOVER][OFFLINE_RELEASE] helper={} age={}s add='{}'", botId, requestAge, addData));
-            }
             continue;
         }
 
@@ -903,9 +866,7 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         if (!entry)
             continue;
 
-        bool transitionState = entry->state == RTG::RtgHelperState::Reserved ||
-                               entry->state == RTG::RtgHelperState::LoggingIn ||
-                               entry->state == RTG::RtgHelperState::WorldIdle ||
+        bool transitionState = entry->state == RTG::RtgHelperState::LoggingIn ||
                                entry->state == RTG::RtgHelperState::Queued ||
                                entry->state == RTG::RtgHelperState::Invited ||
                                entry->state == RTG::RtgHelperState::Releasing;
@@ -913,67 +874,19 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         uint32 nowMs = RTG::RTG_GetNowMs32();
         if (transitionState && entry->updatedAtMs && nowMs > entry->updatedAtMs && (nowMs - entry->updatedAtMs) >= maxTransitionMs)
         {
-            std::string addData = GetEventData(botId, "add");
-            uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
-            uint32 requestAge = (requestTs && NowSeconds() > requestTs) ? (NowSeconds() - requestTs) : 0u;
-            bool hasQueuedAddData = RTG::IsQueueManagedAddData(addData);
-            bool activeBgState = bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
-
-            if (!activeBgState)
+            if (!bot->InBattleground() && !bot->InArena() && !bot->InBattlegroundQueue() && !bot->IsInvitedForBattlegroundInstance())
             {
-                bool recovered = false;
                 if (entry->pendingRetire)
-                {
                     ledger.MarkState(botId, RTG::RtgHelperState::Releasing, "transition watchdog preserving retire state");
-                }
                 else
-                {
-                    uint32 desiredTeam = 0;
-                    uint32 desiredLevel = 0;
-                    uint32 desiredQueueType = 0;
-                    if (hasQueuedAddData && RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
-                    {
-                        recovered = RTG_DispatchImmediateBgQueueJoin(bot, desiredQueueType, "transition_watchdog_requeue");
-                        if (recovered)
-                        {
-                            ledger.AssignQueueOwnership(botId, entry->target, entry->purpose, "transition watchdog requeue");
-                            ledger.MarkState(botId, RTG::RtgHelperState::Queued, "transition watchdog requeue");
-                            entry->pendingQueueJoin = true;
-                            SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
-                            SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
-                            SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-                            SetEventValue(botId, "rtg_add_requested", 0, 0);
-                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][RECOVER][DISPATCH] helper={} queue={} age={}s", botId, desiredQueueType, requestAge));
-                        }
-                    }
+                    ledger.MarkState(botId, RTG::RtgHelperState::WorldIdle, "transition watchdog reset");
 
-                    if (!recovered)
-                    {
-                        ledger.MarkState(botId, RTG::RtgHelperState::WorldIdle, "transition watchdog reset");
-                        ledger.ClearOwnership(botId, "transition watchdog clear ownership");
-
-                        // If this reservation never reached the world/queue after a full stall window,
-                        // release it so capacity and ownership can continue moving under load.
-                        if (requestAge >= RTG_GetDispatchStallThresholdSeconds())
-                        {
-                            SetEventValue(botId, "add", 0, 0);
-                            SetEventValue(botId, "rtg_add_requested", 0, 0);
-                            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                            SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                            SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-                            SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-                            SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-                            currentBots.remove(botId);
-                            ledger.Remove(botId);
-                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][RECOVER][RELEASE] helper={} age={}s add='{}'", botId, requestAge, addData));
-                            continue;
-                        }
-                    }
-                }
+                if (!entry->pendingRetire)
+                    ledger.ClearOwnership(botId, "transition watchdog clear ownership");
 
                 if (RTG_QueueOwnershipDebugEnabled())
-                    LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} transition watchdog reset state={} queue={} instance={} requestAge={} recovered={}",
-                             botId, uint32(entry->state), uint32(entry->target.queueTypeId), entry->ownerInstanceId, requestAge, recovered ? 1u : 0u);
+                    LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} transition watchdog reset state={} queue={} instance={}",
+                             botId, uint32(entry->state), uint32(entry->target.queueTypeId), entry->ownerInstanceId);
             }
         }
 
@@ -3418,10 +3331,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 uint32 pendingLane = RTG_CountPendingHelpers(bucket.queueTypeId, uint32(bucket.bracketId), bucket.team);
-                uint32 pendingLaneCap = RTG_GetPendingHelperLoginLaneCap(bucket.phase);
-                if (bucket.need > pendingLaneCap)
-                    pendingLaneCap = std::min<uint32>(RTG_GetPendingHelperLoginGlobalCap(), std::max<uint32>(pendingLaneCap, std::min<uint32>(bucket.need, pendingLaneCap + 8u)));
-                if (pendingLane >= pendingLaneCap)
+                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.phase))
                     return false;
 
                 return tryFillBgBucket(bucket, capacity);
@@ -3587,8 +3497,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 intervalCap = std::max(intervalCap, pendingQueuedLogins);
 
                 uint32 dispatchHeadroom = 0;
-                if (maxAllowedBotCount > onlineBotCount)
-                    dispatchHeadroom = (maxAllowedBotCount - onlineBotCount);
+                if (sPlayerbotAIConfig.rtgEventMaxBots > onlineBotCount)
+                    dispatchHeadroom = (sPlayerbotAIConfig.rtgEventMaxBots - onlineBotCount);
 
                 maxNewBots = std::min<uint32>(pendingQueuedLogins, dispatchHeadroom);
                 loginBots = maxNewBots;
