@@ -3657,9 +3657,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
                     uint32 moreAccountsNeeded = (remainingCapacity + divisor - 1) / divisor;
                     LOG_ERROR("playerbots",
-                              "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.
-"
-                              "{} more accounts needed. [RTG diag: configuredAccounts={}, assignedRndAccounts={}, busyAccounts={}]",
+                              "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file. {} more accounts needed. [RTG diag: configuredAccounts={}, assignedRndAccounts={}, busyAccounts={}]",
                               moreAccountsNeeded,
                               sPlayerbotAIConfig.randomBotAccountCount,
                               static_cast<uint32>(rndBotTypeAccounts.size()),
