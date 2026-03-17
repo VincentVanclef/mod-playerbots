@@ -233,6 +233,15 @@ namespace
                entry.state == RTG::RtgHelperState::LoggingIn || entry.state == RTG::RtgHelperState::WorldIdle;
     }
 
+    static bool RTG_IsPendingAdmissionHelperState(RTG::RtgHelperLedgerEntry const& entry)
+    {
+        if (!entry.isEventDrivenHelper || entry.pendingRetire)
+            return false;
+
+        return entry.state == RTG::RtgHelperState::Reserved ||
+               entry.state == RTG::RtgHelperState::LoggingIn;
+    }
+
     static uint32 RTG_CountPendingHelpers(uint32 queueType = 0, uint32 bracketId = UINT32_MAX, uint32 team = UINT32_MAX)
     {
         uint32 count = 0;
@@ -240,7 +249,7 @@ namespace
         for (uint32 botId : ledger.GetTrackedBotIds())
         {
             RTG::RtgHelperLedgerEntry const* entry = ledger.Get(botId);
-            if (!entry || !RTG_IsTrackedPendingHelperState(*entry))
+            if (!entry || !RTG_IsPendingAdmissionHelperState(*entry))
                 continue;
 
             if (queueType && uint32(entry->target.queueTypeId) != queueType)
@@ -587,7 +596,7 @@ namespace
         for (uint32 botId : ledger.GetTrackedBotIds())
         {
             RTG::RtgHelperLedgerEntry const* entry = ledger.Get(botId);
-            if (!entry || !RTG_IsTrackedPendingHelperState(*entry))
+            if (!entry || !RTG_IsPendingAdmissionHelperState(*entry))
                 continue;
 
             if (std::string(laneName) == "lfg")
@@ -1764,6 +1773,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
 
+    auto rtgRefreshAvailableBots = [&]()
+    {
+        if (!sPlayerbotAIConfig.rtgEventDriven)
+            return;
+
+        GetBots();
+        availableBots = currentBots;
+        availableBotCount = availableBots.size();
+    };
+
     // ------------------------------------------------------------------
     // RTG: event-driven shrink
     // If event-driven mode is on and we're above target (often 0), mark a few
@@ -2375,11 +2394,13 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
         if (availableBotCount < maxAllowedBotCount && allowLoginBotsNow && ratioGrowOk)
         {
             AddRandomBots();
+            rtgRefreshAvailableBots();
         }
     }
     else if (availableBotCount < maxAllowedBotCount)
     {
         AddRandomBots();
+        rtgRefreshAvailableBots();
     }
 
     if (sPlayerbotAIConfig.syncLevelWithPlayers && !players.empty())
@@ -2595,6 +2616,8 @@ for (auto const& c : candidates)
     // Rate-limit target growth checks (shrink is already rate-limited above).
     if (sPlayerbotAIConfig.usePlayerCountRatio && maxNewBots > 0)
         SetEventValue(0, "ratio_grow_cd", 1, ratioGrowSeconds);
+
+    rtgRefreshAvailableBots();
 
     if (!availableBots.empty())
     {
