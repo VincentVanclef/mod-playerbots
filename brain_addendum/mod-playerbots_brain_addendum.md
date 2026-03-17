@@ -569,3 +569,12 @@ It does **not** redesign:
 - finish-fill / live-refill phase logic
 
 Those systems were left intact because the queue engine was already functionally stable and this revision only targets fairness / composition quality.
+
+
+---
+
+## RTG Brain Chronicle — Decoupled BG Retirement Fix
+- Helpers now retire independently per match
+- Added post-match grace window for scoreboard safety
+- Removed queue-wide retirement coupling
+

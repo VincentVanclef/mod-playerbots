@@ -503,6 +503,40 @@ namespace
         return "rtg_bg_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+    static uint32 RTG_GetBgPostMatchGraceSeconds()
+    {
+        return 20u;
+    }
+
+    static bool RTG_BgHelperNeedsPostMatchGrace(uint32 botId)
+    {
+        return botId && sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_match_seen") != 0;
+    }
+
+    static uint32 RTG_GetBgPostMatchUntil(uint32 botId)
+    {
+        return botId ? sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_post_match_until") : 0u;
+    }
+
+    static void RTG_BeginBgPostMatchGrace(uint32 botId, std::string const& addData)
+    {
+        if (!botId)
+            return;
+
+        uint32 now = static_cast<uint32>(time(nullptr));
+        uint32 const grace = RTG_GetBgPostMatchGraceSeconds();
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_bg_post_match_until", now + grace, grace + 30, addData);
+    }
+
+    static void RTG_ClearBgPostMatchState(uint32 botId)
+    {
+        if (!botId)
+            return;
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_bg_match_seen", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_bg_post_match_until", 0, 0);
+    }
+
     static void RTG_ClearQueueDebuffs(Player* bot)
     {
         if (!bot)
@@ -922,6 +956,8 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+        SetEventValue(botId, "rtg_bg_match_seen", 0, 0);
+        SetEventValue(botId, "rtg_bg_post_match_until", 0, 0);
         SetEventValue(botId, "rtg_add_requested", 0, 0);
         SetEventValue(botId, "rtg_dungeon_active", 0, 0);
     }
@@ -1622,6 +1658,21 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
 				continue;
 
+			// Preserve the battleground scoreboard window before a just-finished
+			// helper can be reclaimed by generic shrink logic.
+			if (RTG_BgHelperNeedsPostMatchGrace(botId))
+			{
+				uint32 postMatchUntil = RTG_GetBgPostMatchUntil(botId);
+				if (!postMatchUntil)
+				{
+					std::string addData = GetEventData(botId, "add");
+					RTG_BeginBgPostMatchGrace(botId, addData);
+					continue;
+				}
+				if (static_cast<uint32>(time(nullptr)) < postMatchUntil)
+					continue;
+			}
+
 			// Never shrink bots that are actively queued for LFG or already in dungeon state
 			lfg::LfgState lfgState = sLFGMgr->GetState(bot->GetGUID());
 			if (lfgState != lfg::LFG_STATE_NONE)
@@ -1918,6 +1969,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
+            bool bgMatchSeen = RTG_BgHelperNeedsPostMatchGrace(botId);
+            uint32 postMatchUntil = RTG_GetBgPostMatchUntil(botId);
+
+            if (bot->InBattleground() || bot->InArena() || (bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena()))
+            {
+                SetEventValue(botId, "rtg_bg_match_seen", 1, 7200, addData);
+                SetEventValue(botId, "rtg_bg_post_match_until", 0, 0);
+                bgMatchSeen = true;
+                postMatchUntil = 0;
+            }
 
             if (!noLongerNeeded && !inQueueState)
             {
@@ -1977,6 +2038,25 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             bool retireWhenSafe = GetEventValue(botId, "rtg_bg_retire_when_safe") != 0;
             bool outOfBgState = !RTG_IsBgLifecycleOwned(bot, desiredQueueType);
+
+            if (outOfBgState && bgMatchSeen)
+            {
+                uint32 nowTs = static_cast<uint32>(time(nullptr));
+                if (!postMatchUntil)
+                {
+                    RTG_BeginBgPostMatchGrace(botId, addData);
+                    continue;
+                }
+
+                if (nowTs < postMatchUntil)
+                    continue;
+
+                // Once this helper has exited its battleground and the scoreboard
+                // grace window has elapsed, retire it independently of any other
+                // still-running match in the same queue/bracket.
+                noLongerNeeded = true;
+                retireWhenSafe = true;
+            }
 
             if (outOfBgState && (retireWhenSafe || noLongerNeeded))
             {
@@ -6326,6 +6406,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_retry", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
+            RTG_ClearBgPostMatchState(bot->GetGUID().GetCounter());
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {
@@ -6457,6 +6538,8 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
     SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_bg_match_seen", 0, 0);
+    SetEventValue(bot, "rtg_bg_post_match_until", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     currentBots.remove(bot);
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
