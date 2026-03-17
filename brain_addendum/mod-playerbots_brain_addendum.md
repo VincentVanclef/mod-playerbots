@@ -97,3 +97,47 @@ This patch repairs battleground phase semantics and queue-helper login preparati
 - stop `finish_fill` from stealing acquisition cycles while launch buckets still need bodies
 - make synchronized queue helpers enter the world battle-ready immediately
 - keep the current BG/LFG ownership pipeline intact while stabilizing future arena-lane expansion groundwork
+
+
+## 2026-03-17 — RTG queue assistance regression intake: hidden account-pool starvation
+
+### Symptom
+Simultaneous low-bracket WSG + AB + EOTS demand produced valid `[RTG][ACQUIRE][REQUEST]` logs, but only the first wave of helpers actually logged in. Later waves stalled and the runtime emitted:
+
+- `Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.`
+- repeated `[RTG][DISPATCH][STALL]` entries for queue-managed add data
+
+### Root cause
+This was not primarily a battleground planner failure. The queue-assistance lane was being starved by **account-type assignment math**.
+
+In RTG event-driven mode, helper acquisition already draws from `rndBotTypeAccounts`. However `AssignAccountTypes()` was still sizing the RNDbot type-1 pool from the live helper ceiling (`RTG.EventDriven.MaxBots`) divided by available characters per account. With `MaxBots=300`, that typically assigns only about 30 type-1 accounts even if `RandomBotAccountCount=1200` already exists in the database.
+
+That creates a false starvation pattern:
+- enough total accounts exist
+- planner computes demand correctly
+- acquire requests fire correctly
+- but the usable type-1 account pool is only ~30 accounts
+- multi-lane demand exhausts those accounts and starts reporting missing accounts that are not actually missing
+
+### Fix direction
+For RTG event-driven mode, treat the configured randombot account pool as available queue-helper capacity. Assign all configured non-AddClass accounts into the RNDbot type-1 pool instead of sizing type-1 strictly from the current gameplay ceiling.
+
+### Diagnostics added
+Add explicit RTG control logging for:
+- configured randombot account count
+- desired RNDbot account count
+- actually assigned RNDbot account count
+- AddClass reserve count
+- total available randombot accounts discovered in DB
+
+Also improve the event-driven shortage error to include assigned RNDbot account count and busy-account count so future sessions can distinguish:
+- true DB/account shortage
+- false starvation due to assignment math
+- temporary lane exhaustion due to busy accounts
+
+### Arena scaffolding note
+The queue system still needs a dedicated arena lane rather than treating arena demand as battleground demand. The safe next step is:
+1. keep BG/RDF stable
+2. preserve lane separation doctrine
+3. add arena demand/planner/dispatch scaffolding as a third explicit service lane
+4. only then enable real arena helper materialization

@@ -2566,7 +2566,28 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
     // Calculate needed RNDbot accounts
     uint32 neededRndBotAccounts = 0;
     uint32 standaloneCeiling = RTG_GetStandaloneHelperCeiling();
-    if (standaloneCeiling > 0)
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        // RTG standalone queue-helper mode must be able to draw from the full configured
+        // randombot account pool, not just the tiny subset required to satisfy the current
+        // MaxRandomBots ceiling. Otherwise multi-lane demand (multiple BGs, RDF, future arena
+        // lanes) looks artificially account-starved even when RandomBotAccountCount is large.
+        //
+        // Example failure pattern:
+        // - RandomBotAccountCount = 1200
+        // - RTG.EventDriven.MaxBots = 300
+        // - only ~30 accounts get type=1 assigned (300 / 10 chars-per-account)
+        // - simultaneous WSG + AB + EOTS demand exhausts those 30 accounts and starts
+        //   spamming "increase RandomBotAccountCount" even though 1170 accounts already exist.
+        //
+        // In RTG event-driven mode, treat the configured randombot account pool as available
+        // queue-helper capacity and assign all non-AddClass accounts into the RNDbot pool.
+        uint32 reservedAddClassAccounts = sPlayerbotAIConfig.addClassAccountPoolSize;
+        neededRndBotAccounts = desiredTotalAccounts > reservedAddClassAccounts
+            ? (desiredTotalAccounts - reservedAddClassAccounts)
+            : 0u;
+    }
+    else if (standaloneCeiling > 0)
     {
         int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
         int maxBots = static_cast<int>(standaloneCeiling);
@@ -2649,6 +2670,16 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
     LOG_INFO("playerbots", "Account type assignment complete: {} RNDbot accounts, {} AddClass accounts, {} unassigned",
              rndBotTypeAccounts.size(), addClassTypeAccounts.size(),
              currentAssignments.size() - rndBotTypeAccounts.size() - addClassTypeAccounts.size());
+
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        LOG_INFO("playerbots", "[RTG][CONTROL][ACCOUNTS] configuredTotal={} desiredRnd={} assignedRnd={} addClass={} availableRandombotAccounts={}",
+                 desiredTotalAccounts,
+                 neededRndBotAccounts,
+                 rndBotTypeAccounts.size(),
+                 addClassTypeAccounts.size(),
+                 allRandomBotAccounts.size());
+    }
 }
 
 bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
@@ -3626,8 +3657,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
                     uint32 moreAccountsNeeded = (remainingCapacity + divisor - 1) / divisor;
                     LOG_ERROR("playerbots",
-                              "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
-                              "{} more accounts needed.", moreAccountsNeeded);
+                              "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.
+"
+                              "{} more accounts needed. [RTG diag: configuredAccounts={}, assignedRndAccounts={}, busyAccounts={}]",
+                              moreAccountsNeeded,
+                              sPlayerbotAIConfig.randomBotAccountCount,
+                              static_cast<uint32>(rndBotTypeAccounts.size()),
+                              static_cast<uint32>(busyAccountIds.size()));
                     missingBotsTimer = 0;
                 }
             }
