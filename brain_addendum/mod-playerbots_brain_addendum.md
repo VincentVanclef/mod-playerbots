@@ -63,20 +63,3 @@ Priority validation logs to inspect after deployment:
 - `[RTG][ACQUIRE][RESULT]`
 
 If further stall signatures remain after this pass, the next likely inspection surface is not planner math first, but **lane starvation fairness vs. repeated helper reuse pressure across simultaneous BG families**.
-
-
-## 2026-03-17 — Compile-repair follow-up: post-acquire dispatch scope regression
-
-### Trigger
-Build failed after the prior dispatch-capacity surgery with undeclared identifier errors in `RandomPlayerbotMgr.cpp` for `availableBots`, `availableBotCount`, `onlineBotCount`, `pendingQueuedLogins`, `intervalCap`, `maxNewBots`, `loginBots`, and `updateBots`.
-
-### Root Cause
-A post-acquire comment block was expanded into a second dispatch-budget block inside the RTG acquire lane section. That location does not own the earlier budget locals, so the injected code crossed scope boundaries and broke compilation.
-
-### Repair
-Removed the duplicate post-acquire budget recomputation block and left the authoritative queue-helper dispatch budgeting in the earlier main update/login budget section where those locals are actually defined and used.
-
-### Result
-- Restores compilation of `RandomPlayerbotMgr.cpp`.
-- Preserves the earlier dispatch-capacity adjustments already made in the main budget path.
-- Avoids introducing a second, out-of-scope dispatch authority inside the acquire lane logic.
