@@ -70,6 +70,8 @@
 
 namespace
 {
+    static bool RTG_IsArenaQueueType(uint32 queueType);
+
     static bool RTG_QueueDebugEnabled()
     {
         return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug;
