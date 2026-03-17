@@ -118,10 +118,20 @@ namespace
         return std::max<uint32>(8u, std::min<uint32>(16u, std::max<uint32>(8u, ceiling / 4u)));
     }
 
-    static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 phase)
+    static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 queueType, uint32 phase)
     {
+        bool isArenaLane = RTG_IsArenaQueueType(queueType);
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
+            if (isArenaLane)
+            {
+                if (phase >= 4u)
+                    return 4u;
+                if (phase == 3u)
+                    return 3u;
+                return 4u;
+            }
+
             if (phase >= 4u)
                 return 12u;
             if (phase == 3u)
@@ -129,6 +139,8 @@ namespace
             return std::max<uint32>(10u, std::min<uint32>(16u, RTG_GetPendingHelperLoginGlobalCap()));
         }
 
+        if (isArenaLane)
+            return phase >= 3u ? 2u : 3u;
         if (phase >= 4u)
             return 4u;
         if (phase == 3u)
@@ -465,6 +477,11 @@ namespace
         return false;
     }
 
+    static bool RTG_GetBgQueueContext(BattlegroundQueueTypeId queueTypeId, uint32 level, BattlegroundBracketId& bracketId,
+                                      uint32& minLevel, uint32& maxLevel);
+
+    static bool RTG_IsTrackedPendingHelperState(RTG::RtgHelperLedgerEntry const& entry);
+
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
@@ -478,6 +495,183 @@ namespace
     static std::string RTG_MakeBgPhaseKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static std::string RTG_MakeArenaNeedKey(uint32 queueType, uint32 bracketId)
+    {
+        return "rtg_arena_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static std::string RTG_MakeArenaPhaseKey(uint32 queueType, uint32 bracketId)
+    {
+        return "rtg_arena_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static bool RTG_IsArenaQueueType(uint32 queueType)
+    {
+        return queueType > BATTLEGROUND_QUEUE_NONE && queueType < MAX_BATTLEGROUND_QUEUE_TYPES &&
+               BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueType)) != 0;
+    }
+
+    static char const* RTG_GetQueueLaneName(uint32 queueType)
+    {
+        return RTG_IsArenaQueueType(queueType) ? "arena" : "bg";
+    }
+
+    static bool RTG_GetQueueRequestDemandState(std::string const& addData, uint32& queueType, uint32& bracketId, uint32& teamNeed, uint32& phase, char const*& laneName)
+    {
+        uint32 desiredTeam = 0;
+        uint32 desiredLevel = 0;
+        queueType = 0;
+        bracketId = 0;
+        teamNeed = 0;
+        phase = 0;
+        laneName = "queue";
+
+        if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, queueType))
+            return false;
+
+        laneName = RTG_GetQueueLaneName(queueType);
+
+        BattlegroundBracketId queueBracket = BG_BRACKET_ID_FIRST;
+        uint32 minLevel = 0;
+        uint32 maxLevel = 0;
+        if (!RTG_GetBgQueueContext(BattlegroundQueueTypeId(queueType), desiredLevel, queueBracket, minLevel, maxLevel))
+            return false;
+
+        bracketId = uint32(queueBracket);
+
+        if (RTG_IsArenaQueueType(queueType))
+        {
+            phase = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeArenaPhaseKey(queueType, bracketId));
+            teamNeed = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeArenaNeedKey(queueType, bracketId));
+            return true;
+        }
+
+        phase = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeBgPhaseKey(queueType, bracketId));
+        teamNeed = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeBgTeamNeedKey(queueType, bracketId, desiredTeam));
+        return true;
+    }
+
+    static bool RTG_ShouldCancelPendingQueueAdd(std::string const& addData, std::string& reason)
+    {
+        uint32 queueType = 0;
+        uint32 bracketId = 0;
+        uint32 teamNeed = 0;
+        uint32 phase = 0;
+        char const* laneName = "queue";
+        if (!RTG_GetQueueRequestDemandState(addData, queueType, bracketId, teamNeed, phase, laneName))
+            return false;
+
+        if (!phase && !teamNeed)
+        {
+            reason = std::string(laneName) + "_demand_cleared";
+            return true;
+        }
+
+        if (!teamNeed)
+        {
+            reason = std::string(laneName) + "_team_satisfied";
+            return true;
+        }
+
+        return false;
+    }
+
+    static uint32 RTG_CountPendingHelpersForLane(char const* laneName)
+    {
+        uint32 count = 0;
+        RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
+        for (uint32 botId : ledger.GetTrackedBotIds())
+        {
+            RTG::RtgHelperLedgerEntry const* entry = ledger.Get(botId);
+            if (!entry || !RTG_IsTrackedPendingHelperState(*entry))
+                continue;
+
+            if (std::string(laneName) == "lfg")
+            {
+                if (entry->target.queueTypeId == BATTLEGROUND_QUEUE_NONE)
+                    ++count;
+                continue;
+            }
+
+            if (std::string(laneName) == "arena")
+            {
+                if (RTG_IsArenaQueueType(uint32(entry->target.queueTypeId)))
+                    ++count;
+                continue;
+            }
+
+            if (std::string(laneName) == "bg")
+            {
+                if (entry->target.queueTypeId != BATTLEGROUND_QUEUE_NONE && !RTG_IsArenaQueueType(uint32(entry->target.queueTypeId)))
+                    ++count;
+            }
+        }
+        return count;
+    }
+
+    static void RTG_ApplyArenaLaneScaffolding(RandomPlayerbotMgr& mgr)
+    {
+        if (!sPlayerbotAIConfig.rtgEventDriven)
+            return;
+
+        uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
+        uint32 arenaNeedTotal = 0;
+        bool anyRealArenaDemand = false;
+
+        for (auto const& queueTypePair : mgr.BattlegroundData)
+        {
+            BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueTypePair.first);
+            uint8 arenaType = BattlegroundMgr::BGArenaType(queueTypeId);
+            if (!arenaType)
+                continue;
+
+            for (auto const& bracketIdPair : queueTypePair.second)
+            {
+                BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketIdPair.first);
+                BattlegroundInfo const& arenaInfo = bracketIdPair.second;
+                if (!arenaInfo.minLevel)
+                    continue;
+
+                uint32 realPlayers = arenaInfo.skirmishArenaPlayerCount + arenaInfo.ratedArenaPlayerCount;
+                uint32 botPlayers = arenaInfo.skirmishArenaBotCount + arenaInfo.ratedArenaBotCount;
+                uint32 currentTotal = realPlayers + botPlayers;
+                uint32 activeQueues = arenaInfo.activeSkirmishArenaQueue + arenaInfo.activeRatedArenaQueue;
+                uint32 activeInstances = arenaInfo.skirmishArenaInstanceCount + arenaInfo.ratedArenaInstanceCount;
+                uint32 targetTotal = uint32(arenaType) * 2u;
+
+                bool hasRealDemand = realPlayers > 0 || activeQueues > 0 || activeInstances > 0;
+                uint32 phase = 0;
+                uint32 need = 0;
+
+                if (hasRealDemand)
+                {
+                    anyRealArenaDemand = true;
+                    need = targetTotal > currentTotal ? (targetTotal - currentTotal) : 0u;
+
+                    if (need)
+                        phase = activeInstances ? 3u : 2u; // live_refill or pop_or_invite scaffolding
+                    else if (activeInstances)
+                        phase = 4u; // finish_fill/steady-state scaffolding
+                }
+
+                mgr.RTG_SetGlobalEvent(RTG_MakeArenaNeedKey(uint32(queueTypeId), uint32(bracketId)), need, ttl);
+                mgr.RTG_SetGlobalEvent(RTG_MakeArenaPhaseKey(uint32(queueTypeId), uint32(bracketId)), phase, ttl);
+                arenaNeedTotal += need;
+
+                if (RTG_QueueDebugEnabled() && hasRealDemand)
+                {
+                    LOG_INFO("playerbots", "[RTG][ARENA][PHASE] queue={} bracket={} phase={} targetTotal={} currentTotal={} activeQueues={} activeInstances={}",
+                             uint32(queueTypeId), uint32(bracketId), phase ? phase : 0u, targetTotal, currentTotal, activeQueues, activeInstances);
+                    LOG_INFO("playerbots", "[RTG][ARENA][DEMAND] queue={} bracket={} need={} realPlayers={} botPlayers={} arenaType={}",
+                             uint32(queueTypeId), uint32(bracketId), need, realPlayers, botPlayers, uint32(arenaType));
+                }
+            }
+        }
+
+        mgr.RTG_SetGlobalEvent("rtg_arena_need_total", arenaNeedTotal, ttl);
+        mgr.RTG_SetGlobalEvent("rtg_arena_any_real_demand", anyRealArenaDemand ? 1u : 0u, ttl);
     }
 
     static void RTG_ClearQueueDebuffs(Player* bot)
@@ -2375,8 +2569,24 @@ for (auto const& c : candidates)
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][DISPATCH][BUDGET] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} maxAllowed={}",
-                     pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, maxAllowedBotCount);
+            uint32 pendingLfg = RTG_CountPendingHelpersForLane("lfg");
+            uint32 pendingBg = RTG_CountPendingHelpersForLane("bg");
+            uint32 pendingArena = RTG_CountPendingHelpersForLane("arena");
+            LOG_INFO("playerbots", "[RTG][DISPATCH][BUDGET] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} maxAllowed={} pendingLfg={} pendingBg={} pendingArena={}",
+                     pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, maxAllowedBotCount,
+                     pendingLfg, pendingBg, pendingArena);
+            LOG_INFO("playerbots", "[RTG][DISPATCH][AUDIT] lfgNeed={} bgNeed={} arenaNeed={} bgTurn={} pendingGlobal={} laneCaps(bgStartup={},bgLive={},bgFinish={},arenaStartup={},arenaLive={},arenaFinish={})",
+                     GetEventValue(0, "rtg_lfg_need_total"),
+                     GetEventValue(0, "rtg_bg_need_total"),
+                     GetEventValue(0, "rtg_arena_need_total"),
+                     GetEventValue(0, "rtg_queue_turn_bg"),
+                     RTG_CountPendingHelpers(),
+                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_WS, 2u),
+                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_WS, 3u),
+                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_WS, 4u),
+                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_2v2, 2u),
+                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_2v2, 3u),
+                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_2v2, 4u));
         }
     }
 
@@ -3531,7 +3741,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 uint32 pendingLane = RTG_CountPendingHelpers(bucket.queueTypeId, uint32(bucket.bracketId), bucket.team);
-                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.phase))
+                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.queueTypeId, bucket.phase))
                     return false;
 
                 return tryFillBgBucket(bucket, capacity);
@@ -4206,13 +4416,15 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     {
         RTG::RtgBgQueuePlanner bgPlanner;
         bgPlanner.ApplyDemandEvents(*this);
+        RTG_ApplyArenaLaneScaffolding(*this);
     }
 
     if (RTG_QueueDebugEnabled())
         LOG_INFO("playerbots",
-    "[RTGDBG][BG] check end anyRealDemand={} needTotal={} start={} turnBg={}",
+    "[RTGDBG][BG] check end anyRealDemand={} needTotal={} arenaNeedTotal={} start={} turnBg={}",
     GetEventValue(0, "rtg_bg_any_real_demand"),
     GetEventValue(0, "rtg_bg_need_total"),
+    GetEventValue(0, "rtg_arena_need_total"),
     GetEventValue(0, "rtg_bg_start"),
     GetEventValue(0, "rtg_queue_turn_bg"));
     LOG_DEBUG("playerbots", "BG Queue check finished");
@@ -4473,6 +4685,23 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
 
         if (RTG::IsQueueManagedAddData(addData))
         {
+            std::string cancelReason;
+            if (RTG_ShouldCancelPendingQueueAdd(addData, cancelReason))
+            {
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][CANCEL] helper={} reason={} add='{}'", bot, cancelReason, addData));
+                SetEventValue(bot, "add", 0, 0);
+                SetEventValue(bot, "logout", 0, 0);
+                SetEventValue(bot, "rtg_add_requested", 0, 0);
+                SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+                SetEventValue(bot, "rtg_bg_pending", 0, 0);
+                SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
+                SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
+                currentBots.remove(bot);
+                if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                    RTG::RtgQueueLedger::Instance().Remove(bot);
+                return false;
+            }
+
             uint32 requestTs = GetEventValue(bot, "rtg_add_requested");
             uint32 nowTs = NowSeconds();
             uint32 stallThreshold = RTG_GetDispatchStallThresholdSeconds();

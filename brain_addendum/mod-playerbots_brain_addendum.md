@@ -141,3 +141,68 @@ The queue system still needs a dedicated arena lane rather than treating arena d
 2. preserve lane separation doctrine
 3. add arena demand/planner/dispatch scaffolding as a third explicit service lane
 4. only then enable real arena helper materialization
+
+## 2026-03-17 — Phase A/B/C pass: stale pending cancellation + arena scaffolding + dispatch audit
+
+### Symptom
+After the account-pool repair, the system could reliably hit **minimum battleground fill** with fair adaptive levels and immediate queue-helper gearing, but `live_refill` and especially `finish_fill` still stalled. Logs showed:
+
+- healthy startup acquisition and login success
+- later `finish_fill` demand remaining non-zero on one lane
+- repeated `[RTG][DISPATCH][STALL]` on helpers reserved for lanes that had already become satisfied
+- elevated busy-account counts despite large configured account pools
+
+### Root cause
+The remaining choke point was **stale pre-login helper reservations**. Queue-managed helpers that had already been requested for queue 3 / queue 4 were allowed to remain reserved until the generic stall timeout even after planner demand for those specific teams had dropped to zero. Those stale pending helpers continued to consume:
+
+- busy accounts
+- tracked pending-helper slots
+- shared dispatch budget attention
+
+This created a false scarcity pattern during `live_refill` / `finish_fill`, where the lane that still needed bodies could not quickly reclaim capacity already reserved by no-longer-needed pending helpers.
+
+### Phase A fix
+Add **demand-aware pre-login cancellation** for queue-managed pending requests in `ProcessBot(uint32 bot)`.
+
+Offline helpers with RTG queue-managed add data are now revalidated against current planner demand **before** waiting for the stall timeout. If their lane no longer has demand for that request, the reservation is canceled immediately instead of waiting for the generic timeout.
+
+This preserves the stall timeout as a fallback, but removes stale-pending starvation when one battleground lane reaches target before another.
+
+### Phase B scaffolding
+Add **arena lane scaffolding** without prematurely forcing arena helper materialization.
+
+The battleground queue scan now computes arena-side RTG demand telemetry:
+
+- `rtg_arena_need:<queue>:<bracket>`
+- `rtg_arena_phase:<queue>:<bracket>`
+- `rtg_arena_need_total`
+- `rtg_arena_any_real_demand`
+
+This is scaffolding only. It creates an explicit third RTG service-lane visibility surface so arena demand can be tracked separately from battleground demand, which is required before safe full arena integration.
+
+### Phase C audit pass
+Extend dispatch budgeting with a clearer shared-lane audit:
+
+- pending LFG helpers
+- pending BG helpers
+- pending Arena helpers
+- LFG need total
+- BG need total
+- Arena need total
+- lane caps for BG and Arena startup/live/finish phases
+
+This makes it much faster to distinguish:
+
+- real finish-fill starvation
+- stale pending helper backlog
+- per-lane cap suppression
+- future arena-vs-BG budget contention
+
+### Doctrine note
+This pass follows the safer RTG path:
+1. remove stale pending starvation first
+2. expose arena as its own lane in telemetry/scaffolding
+3. strengthen shared dispatch observability
+4. only then move toward real arena helper acquisition
+
+That preserves the queue-lane separation doctrine and avoids reintroducing the same backlog problem into a future arena lane.
