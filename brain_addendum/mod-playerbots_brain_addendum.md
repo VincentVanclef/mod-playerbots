@@ -62,3 +62,38 @@ When an event-driven helper is level-synced on login, the bot now rebuilds equip
 - preserve the working queue system
 - make mixed-level brackets feel fairer to fresh and twink players alike
 - keep helper gearing consistent with synchronized helper level
+
+
+## Patch focus
+
+This patch repairs battleground phase semantics and queue-helper login preparation after the revert storm.
+
+## Problems observed
+
+- Battleground phase values drifted out of sync between the planner and the acquisition sorter.
+- `pop_or_invite` buckets were being treated like later phases during acquisition ordering.
+- `finish_fill` suppression checks were looking for phase `3` even though `finish_fill` is phase `4` in the overlay planner.
+- Queue helpers could log in at the correct synchronized level but still rely on stale pre-existing preparation unless their level actually changed.
+
+## Repair details
+
+- Re-aligned BG phase priority mapping in `RandomPlayerbotMgr.cpp` with the planner contract used by `RtgBgQueuePlanner.cpp`:
+  - `2 = pop_or_invite`
+  - `1 = starter_fill`
+  - `3 = live_refill`
+  - `4 = finish_fill`
+- Re-aligned startup detection so `pop_or_invite` really suppresses `finish_fill` acquisition during startup pressure.
+- Re-aligned all `finish_fill` suppression checks to phase `4`.
+- Centralized queue-helper login preparation into one helper path that:
+  - applies synchronized helper level
+  - rebuilds equipment with second-chance replacement
+  - refreshes spells / talents / consumables
+  - clears stale queue debuffs
+  - resets strategies so the helper starts its queue job in a clean state
+
+## Intent
+
+- restore battleground startup-before-growth discipline after the regressions
+- stop `finish_fill` from stealing acquisition cycles while launch buckets still need bodies
+- make synchronized queue helpers enter the world battle-ready immediately
+- keep the current BG/LFG ownership pipeline intact while stabilizing future arena-lane expansion groundwork

@@ -207,6 +207,40 @@ namespace
         return urand(avgLevel, maxLevel);
     }
 
+    static void RTG_ApplyQueueHelperLoginProfile(Player* bot, uint32 desiredLevel, char const* laneTag)
+    {
+        if (!bot)
+            return;
+
+        uint32 targetLevel = desiredLevel ? desiredLevel : bot->GetLevel();
+        bool levelChanged = targetLevel && bot->GetLevel() != targetLevel;
+
+        if (levelChanged)
+        {
+            bot->GiveLevel(targetLevel);
+            bot->InitStatsForLevel(true);
+            bot->SetUInt32Value(PLAYER_XP, 0);
+        }
+
+        PlayerbotFactory factory(bot, targetLevel);
+        factory.InitEquipment(true, true);
+        factory.Refresh();
+
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            botAI->ResetStrategies(false);
+
+        RTG_ClearQueueDebuffs(bot);
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][LOGIN][PROFILE] helper={} lane={} level={} changed={}",
+                     bot->GetGUID().GetCounter(),
+                     laneTag ? laneTag : "queue",
+                     bot->GetLevel(),
+                     levelChanged ? 1u : 0u);
+        }
+    }
+
     static bool RTG_IsTrackedPendingHelperState(RTG::RtgHelperLedgerEntry const& entry)
     {
         if (!entry.isEventDrivenHelper || entry.pendingRetire)
@@ -3259,10 +3293,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 switch (phase)
                 {
-                    case 0: return 0; // pop_or_invite
+                    case 2: return 0; // pop_or_invite
                     case 1: return 1; // starter_fill
-                    case 2: return 2; // live_refill
-                    case 3: return 3; // finish_fill
+                    case 3: return 2; // live_refill
+                    case 4: return 3; // finish_fill
                     default: return 4;
                 }
             };
@@ -3290,7 +3324,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 if (!bucket.need)
                     continue;
-                if (bucket.phase == 0)
+                if (bucket.phase == 2)
                     bgHasStartupNeed = true;
                 else if (bucket.phase == 1)
                     bgHasStarterNeed = true;
@@ -3482,7 +3516,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     {
                         if (!capacity || !remainingCapacity)
                             break;
-                        if (suppressBgFinishFill && bucket.phase == 3)
+                        if (suppressBgFinishFill && bucket.phase == 4)
                             continue;
                         if (tryFillBgBucketOnce(bucket, capacity))
                             added = true;
@@ -3518,7 +3552,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         {
                             for (RtgBgBucket& bucket : orderedBgBuckets)
                             {
-                                if (suppressBgFinishFill && bucket.phase == 3)
+                                if (suppressBgFinishFill && bucket.phase == 4)
                                     continue;
                                 if (tryFillBgBucketOnce(bucket, sharedSurplus))
                                     return true;
@@ -3542,7 +3576,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             }
                             for (RtgBgBucket& bucket : orderedBgBuckets)
                             {
-                                if (suppressBgFinishFill && bucket.phase == 3)
+                                if (suppressBgFinishFill && bucket.phase == 4)
                                     continue;
                                 if (tryFillBgBucketOnce(bucket, sharedSurplus))
                                     return true;
@@ -6137,32 +6171,14 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
         if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel))
         {
-            if (desiredLevel && bot->GetLevel() != desiredLevel)
-            {
-                bot->GiveLevel(desiredLevel);
-                bot->InitStatsForLevel(true);
-                bot->SetUInt32Value(PLAYER_XP, 0);
-
-                PlayerbotFactory factory(bot, desiredLevel);
-                factory.InitEquipment(true, true);
-                factory.Refresh();
-            }
+            RTG_ApplyQueueHelperLoginProfile(bot, desiredLevel, "lfg");
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
-            if (desiredLevel && bot->GetLevel() != desiredLevel)
-            {
-                bot->GiveLevel(desiredLevel);
-                bot->InitStatsForLevel(true);
-                bot->SetUInt32Value(PLAYER_XP, 0);
-
-                PlayerbotFactory factory(bot, desiredLevel);
-                factory.InitEquipment(true, true);
-                factory.Refresh();
-            }
+            RTG_ApplyQueueHelperLoginProfile(bot, desiredLevel, "bg");
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
