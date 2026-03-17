@@ -44,10 +44,17 @@ static bool RTG_IsOrphanQueuedBgHelper(Player* bot, RtgHelperLedgerEntry const& 
 
     uint32 queueType = uint32(entry.target.queueTypeId);
     uint32 bracketId = uint32(entry.target.bracketId);
-    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) != 0)
+    bool isArenaQueue = BattlegroundMgr::BGArenaType(entry.target.queueTypeId) != 0;
+    std::string demandKey = isArenaQueue ?
+        (std::string("rtg_arena_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+        (std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
+    std::string phaseKey = isArenaQueue ?
+        (std::string("rtg_arena_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+        (std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0)
         return false;
 
-    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) != 0)
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, phaseKey) != 0)
         return false;
 
     if (sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending") != 0)
@@ -92,13 +99,18 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
                 if (PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), level ? level : bot->GetLevel()))
                 {
                     uint32 bracketId = uint32(pvpDiff->GetBracketId());
-                    std::string demandKey = std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
-                    std::string phaseKey = std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+                    bool isArenaQueue = BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueType)) != 0;
+                    std::string demandKey = isArenaQueue ?
+                        (std::string("rtg_arena_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+                        (std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
+                    std::string phaseKey = isArenaQueue ?
+                        (std::string("rtg_arena_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+                        (std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
                     std::string teamNeedKey = std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(team);
                     bool queueDemandActive =
                         sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0 ||
                         sRandomPlayerbotMgr.RTG_GetBotEventValue(0, phaseKey) != 0 ||
-                        sRandomPlayerbotMgr.RTG_GetBotEventValue(0, teamNeedKey) != 0;
+                        (!isArenaQueue && sRandomPlayerbotMgr.RTG_GetBotEventValue(0, teamNeedKey) != 0);
 
                     if (queueDemandActive)
                     {
