@@ -181,6 +181,86 @@ namespace
         return nowSecs >= itr->second && (nowSecs - itr->second) >= 300u;
     }
 
+    static bool RTG_DirectJoinArenaQueue(Player* bot, BattlegroundQueueTypeId queueTypeId, ArenaType arenaType, bool isRated)
+    {
+        if (!bot || queueTypeId == BATTLEGROUND_QUEUE_NONE || arenaType == ARENA_TYPE_NONE)
+            return false;
+
+        if (bot->InBattleground() || bot->InArena())
+            return false;
+
+        if (bot->GetBattlegroundQueueIndex(queueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
+            return false;
+
+        if (!bot->HasFreeBattlegroundQueueId())
+            return false;
+
+        Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(BATTLEGROUND_AA);
+        if (!bg)
+            return false;
+
+        PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bg->GetMapId(), bot->GetLevel());
+        if (!bracketEntry)
+            return false;
+
+        uint32 arenaRating = 0;
+        uint32 matchmakerRating = 0;
+        uint32 arenaTeamId = 0;
+
+        if (isRated)
+        {
+            uint8 arenaSlot = 0;
+            switch (arenaType)
+            {
+                case ARENA_TYPE_2v2: arenaSlot = 0; break;
+                case ARENA_TYPE_3v3: arenaSlot = 1; break;
+                case ARENA_TYPE_5v5: arenaSlot = 2; break;
+                default: arenaSlot = ArenaTeam::GetSlotByType(arenaType); break;
+            }
+
+            arenaTeamId = bot->GetArenaTeamId(arenaSlot);
+            if (arenaTeamId)
+            {
+                if (ArenaTeam* at = sArenaTeamMgr->GetArenaTeamById(arenaTeamId))
+                {
+                    arenaRating = std::max(0u, at->GetRating());
+                    matchmakerRating = arenaRating;
+                }
+                else
+                    arenaTeamId = 0;
+            }
+        }
+
+        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
+        bg->SetRated(isRated);
+        switch (arenaType)
+        {
+            case ARENA_TYPE_2v2: bg->SetMinPlayersPerTeam(2); break;
+            case ARENA_TYPE_3v3: bg->SetMinPlayersPerTeam(3); break;
+            case ARENA_TYPE_5v5: bg->SetMinPlayersPerTeam(5); break;
+            default: break;
+        }
+
+        GroupQueueInfo* ginfo = bgQueue.AddGroup(bot, nullptr, BATTLEGROUND_AA, bracketEntry, uint8(arenaType), isRated, false,
+            arenaRating, matchmakerRating, arenaTeamId, 0);
+        if (!ginfo)
+            return false;
+
+        uint32 avgTime = bgQueue.GetAverageQueueWaitTime(ginfo);
+        uint32 queueSlot = bot->AddBattlegroundQueueId(queueTypeId);
+
+        WorldPacket data;
+        sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_WAIT_QUEUE, avgTime, 0, uint8(arenaType), TEAM_NEUTRAL, isRated);
+        bot->GetSession()->SendPacket(&data);
+
+        if (isRated && matchmakerRating == 0)
+            matchmakerRating = 1;
+
+        sBattlegroundMgr->ScheduleQueueUpdate(matchmakerRating, uint8(arenaType), queueTypeId, BATTLEGROUND_AA, bracketEntry->GetBracketId());
+        sScriptMgr->OnPlayerJoinArena(bot);
+        return true;
+    }
+
     static void RTG_ClearQueuePenalties(Player* bot)
     {
         if (!bot)
@@ -679,9 +759,7 @@ bool BGJoinAction::JoinQueue(uint32 type)
     Unit* unit = botAI->GetUnit(sRandomPlayerbotMgr.GetBattleMasterGUID(bot, bgTypeId));
     if (!unit && isArena)
     {
-        botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(0);
-        LOG_DEBUG("playerbots", "Bot {} could not find Battlemaster to join", bot->GetGUID().ToString().c_str());
-        return false;
+        LOG_DEBUG("playerbots", "Bot {} could not find Arena Battlemaster; using direct queue path", bot->GetGUID().ToString().c_str());
     }
 
     // This breaks groups as refresh includes a remove from group function call.
@@ -723,8 +801,8 @@ bool BGJoinAction::JoinQueue(uint32 type)
     if (isArena)
     {
         isArena = true;
-        BracketSize = type * 2;
-        TeamSize = type;
+        BracketSize = uint32(arenaType) * 2;
+        TeamSize = uint32(arenaType);
         isRated = botAI->GetAiObjectContext()->GetValue<uint32>("arena type")->Get();
 
         if (joinAsGroup)
@@ -791,50 +869,15 @@ bool BGJoinAction::JoinQueue(uint32 type)
     }
     else
     {
-        uint32 assignedQueueType = 0;
-        bool isRtgAssignedArenaHelper = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType == uint32(queueTypeId);
+        if (RTG_DirectJoinArenaQueue(bot, queueTypeId, arenaType, isRated))
+            return true;
 
-        // RTG direct arena queue path:
-        // battleground helpers can be logged in anywhere in the world, while the legacy arena
-        // join path depends on finding a same-map battlemaster GUID. That causes helper bots to
-        // fail arena queue admission even when the planner successfully reserved them.
-        // For event-driven assigned arena helpers, queue directly through BattlegroundQueue just
-        // like the custom 1v1 / solo-3v3 modules do.
-        if (isRtgAssignedArenaHelper && !isRated)
-        {
-            if (bot->GetBattlegroundQueueIndex(queueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
-                return false;
+        if (!unit)
+            return false;
 
-            if (!bot->HasFreeBattlegroundQueueId())
-                return false;
-
-            BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
-            uint8 queueArenaType = uint8(arenaType);
-            uint32 arenaRating = 0;
-            uint32 matchmakerRating = 0;
-            uint32 ateamId = 0;
-
-            GroupQueueInfo* ginfo = bgQueue.AddGroup(bot, nullptr, bgTypeId, pvpDiff, queueArenaType, false, false,
-                                                     arenaRating, matchmakerRating, ateamId, 0);
-            if (!ginfo)
-                return false;
-
-            uint32 avgTime = bgQueue.GetAverageQueueWaitTime(ginfo);
-            uint32 queueSlot = bot->AddBattlegroundQueueId(queueTypeId);
-
-            WorldPacket data;
-            sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_WAIT_QUEUE, avgTime, 0,
-                                                            queueArenaType, TEAM_NEUTRAL, false);
-            bot->GetSession()->SendPacket(&data);
-            sBattlegroundMgr->ScheduleQueueUpdate(matchmakerRating, queueArenaType, queueTypeId, bgTypeId, bracketId);
-            sScriptMgr->OnPlayerJoinArena(bot);
-        }
-        else
-        {
-            WorldPacket arena_packet(CMSG_BATTLEMASTER_JOIN_ARENA, 20);
-            arena_packet << unit->GetGUID() << arenaslot << asGroup << uint8(isRated);
-            bot->GetSession()->HandleBattlemasterJoinArena(arena_packet);
-        }
+        WorldPacket arena_packet(CMSG_BATTLEMASTER_JOIN_ARENA, 20);
+        arena_packet << unit->GetGUID() << arenaslot << asGroup << uint8(isRated);
+        bot->GetSession()->HandleBattlemasterJoinArena(arena_packet);
     }
 
     return true;
