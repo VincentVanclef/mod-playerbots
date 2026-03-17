@@ -5970,6 +5970,7 @@ uint32 RandomPlayerbotMgr::GetTuningOrDefault(std::string const& key, uint32 def
 void RandomPlayerbotMgr::GetBots()
 {
     uint32 target = sPlayerbotAIConfig.rtgEventDriven ? GetEventValue(0, "rtg_target") : GetMaxAllowedBotCount();
+    bool includeAllQueueManagedAdds = sPlayerbotAIConfig.rtgEventDriven;
 
     for (auto it = currentBots.begin(); it != currentBots.end();)
     {
@@ -5992,7 +5993,7 @@ void RandomPlayerbotMgr::GetBots()
         ++it;
     }
 
-    if (currentBots.size() >= target)
+    if (!includeAllQueueManagedAdds && currentBots.size() >= target)
         return;
 
     PlayerbotsDatabasePreparedStatement* stmt =
@@ -6022,7 +6023,7 @@ void RandomPlayerbotMgr::GetBots()
             if (already.insert(bot).second)
                 currentBots.push_back(bot);
 
-            if (currentBots.size() >= target)
+            if (!includeAllQueueManagedAdds && currentBots.size() >= target)
                 break;
 
         } while (result->NextRow());
