@@ -520,3 +520,81 @@ and
 > **LFG group exists** does not automatically mean **dungeon session is still live**
 
 Those two assumptions caused opposite symptoms at the same time: some helpers retired too early, while others retired too late.
+
+---
+
+## 2026-03-16 — adaptive queue helper level distribution for mixed-level RTG sessions
+
+### Problem statement
+The RTG queue system had become broadly functional, but queue helpers were still too level-19-centric in mixed or low-level queues.
+
+Observed failure mode:
+
+- a low-level real player (for example level 1 or level 10) could queue into battlegrounds and receive helper bots far above their effective play level
+- the earlier bucket model keyed many helper decisions too directly off per-level slices or fallback bracket max-level behavior
+- opposite-team helper fill could drift toward bracket fallback levels instead of mirroring the actual level makeup of the real players who created that session
+- queue helpers that were force-leveled on login were not always being freshly equipment-initialized for the new target level, which could leave them under-geared for that adapted level
+
+### Design correction
+The RTG helper model was revised so helper level assignment follows the **real-player level composition of the active queue session**, not a blanket level-19 assumption and not a pure bracket-max fallback.
+
+#### RDF/LFG
+LFG buckets now aggregate real players by:
+
+- owner/session
+- faction/team
+- role counts
+- **real-player level histogram**
+
+When a helper role is added, the helper is assigned a level by comparing:
+
+- real-player level distribution in that RDF session
+- already queued helper levels
+- already assigned-but-not-yet-counted helper levels
+
+This produces a rolling deficit-based fill so helper levels stay parallel to the real player levels that formed the session.
+
+Practical example:
+
+- two real level 15s -> helpers trend level 15
+- one level 15 and one level 16 -> helpers split between 15 and 16 instead of collapsing to one unrelated fallback level
+
+#### Battlegrounds
+Battleground helper fill now uses a **session-level histogram** per battleground queue/bracket and shares that real-player level picture across both factions for the same battleground session.
+
+This is important because the old team-local/fallback approach could let the opposite faction drift toward bracket fallback levels even when the real players who triggered the battleground were much lower.
+
+Now both battleground teams derive helper levels from the same real queued-player level distribution for that battleground session.
+
+### Implementation notes
+The patch introduced:
+
+- real-level histograms for RTG LFG buckets
+- real-level histograms for RTG BG session buckets
+- queued/assigned helper level histograms so level selection can balance itself progressively instead of repeatedly choosing the same level
+- adaptive level picking based on under-represented real-player levels in the current session composition
+
+### Gear follow-up
+When an RTG helper is re-leveled on login to match the desired queue level, the helper now immediately runs equipment initialization for that target level and refreshes ammo as part of the same login path.
+
+This is meant to stop the common low-level-helper failure mode where the bot reaches the correct numeric level but still looks/functionally behaves like it is wearing poor carryover gear.
+
+### Intended live result
+The target live behavior after this patch is:
+
+- low-level real players should see helpers closer to their own session levels
+- mixed-level sessions should produce a blended helper level spread rather than a single high fallback level
+- opposite-team battleground helpers should mirror the real queued session more faithfully
+- helpers force-leveled for queue support should enter with gear initialized for that adapted level
+
+### Safety doctrine preserved
+This patch was intentionally scoped to **level selection and level-synced equipment refresh only**.
+
+It should not re-open the already-stabilized RTG queue lifecycle behaviors around:
+
+- fill triggering
+- scoreboard-safe battleground exit
+- RDF abandonment retirement
+- helper ownership and retirement sequencing
+
+That isolation is important because the queue system is finally near-stable and this change is meant to improve fairness without destabilizing the acquisition/retirement foundation.
