@@ -2978,7 +2978,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             for (auto& kv : lfgBuckets)
             {
                 RtgLfgBucket& bucket = kv.second;
-                RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(bucket.realLevels, bucket.fallbackLevel ? bucket.fallbackLevel : sPlayerbotAIConfig.rtgQueueBotLevel);
+                RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(bucket.realLevels, bucket.fallbackLevel ? bucket.fallbackLevel : 19u);
                 bucket.minLevel = window.minLevel;
                 bucket.maxLevel = window.maxLevel;
                 bucket.avgLevel = window.avgLevel;
@@ -3080,7 +3080,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 uint32 queueTypeId = queuePair.first.first;
                 uint32 bracketId = queuePair.first.second;
-                RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(queuePair.second, sPlayerbotAIConfig.rtgQueueBotLevel);
+                RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(queuePair.second, 19u);
                 uint32 phase = GetEventValue(0, RTG_MakeBgPhaseKey(queueTypeId, bracketId));
 
                 for (uint32 teamId : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
@@ -3091,7 +3091,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     std::unordered_map<uint32, uint32> levelCounts;
                     for (uint32 i = 0; i < teamNeed; ++i)
-                        ++levelCounts[RTG_ChooseAdaptiveQueueBotLevel(window, sPlayerbotAIConfig.rtgQueueBotLevel)];
+                        ++levelCounts[RTG_ChooseAdaptiveQueueBotLevel(window, 19u)];
 
                     for (auto const& lc : levelCounts)
                     {
@@ -3356,7 +3356,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!capacity)
                     return false;
 
-                uint32 adaptiveLevel = RTG_ChooseAdaptiveQueueBotLevel({bucket.minLevel, bucket.maxLevel, bucket.avgLevel}, bucket.fallbackLevel ? bucket.fallbackLevel : sPlayerbotAIConfig.rtgQueueBotLevel);
+                uint32 adaptiveLevel = RTG_ChooseAdaptiveQueueBotLevel({bucket.minLevel, bucket.maxLevel, bucket.avgLevel}, bucket.fallbackLevel ? bucket.fallbackLevel : 19u);
                 std::string addData = RTG::MakeLfgAddData(bucket.team, adaptiveLevel, desiredRole, bucket.owner);
                 for (auto const& charInfo : allCharacters)
                 {
