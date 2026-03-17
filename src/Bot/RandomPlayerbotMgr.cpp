@@ -3557,50 +3557,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 missingBotsTimer = 0;
             }
 
-            // RTG queue helpers acquired above must be eligible for dispatch in the SAME tick.
-            // Returning here starves freshly reserved BG/LFG helpers until a later pass, and under
-            // continuous multi-queue pressure that later pass may never get enough room before the
-            // stall watchdog reaps them. Refresh dispatch state and fall through to the normal
-            // ProcessBot login loop instead of exiting early.
-            availableBots = currentBots;
-            availableBotCount = availableBots.size();
-            onlineBotCount = playerBots.size();
-
-            pendingQueuedLogins = 0;
-            for (uint32 botId : currentBots)
-            {
-                if (!GetEventValue(botId, "add"))
-                    continue;
-
-                if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
-                    continue;
-
-                std::string addData = GetEventData(botId, "add");
-                if (!RTG::IsQueueManagedAddData(addData))
-                    continue;
-
-                ++pendingQueuedLogins;
-            }
-
-            if (pendingQueuedLogins)
-            {
-                intervalCap = std::max(intervalCap, pendingQueuedLogins);
-
-                uint32 dispatchHeadroom = 0;
-                if (maxAllowedBotCount > onlineBotCount)
-                    dispatchHeadroom = (maxAllowedBotCount - onlineBotCount);
-
-                maxNewBots = std::min<uint32>(pendingQueuedLogins, dispatchHeadroom);
-                loginBots = maxNewBots;
-                if (updateBots + loginBots > intervalCap)
-                    updateBots = (intervalCap > loginBots) ? (intervalCap - loginBots) : 0u;
-
-                if (RTG_QueueDebugEnabled())
-                {
-                    LOG_INFO("playerbots", "[RTG][DISPATCH][POST-ACQUIRE] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} eventMax={}",
-                             pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, sPlayerbotAIConfig.rtgEventMaxBots);
-                }
-            }
+            // Keep the RTG acquire pass surgical here: helper reservations are already created above.
+            // Dispatch budgeting for queue-managed pending helpers is handled earlier in the main
+            // update/login budget path where availableBots / onlineBotCount / intervalCap live.
+            // Do not re-run that budget logic here; doing so crosses scope boundaries and can regress
+            // compilation without improving same-tick ownership safety.
         }
         else
         {
