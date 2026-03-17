@@ -12,6 +12,7 @@
 #include "GroupMgr.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
+#include "ScriptMgr.h"
 
 #include <ctime>
 #include <unordered_map>
