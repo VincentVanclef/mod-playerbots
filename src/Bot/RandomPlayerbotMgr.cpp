@@ -120,25 +120,20 @@ namespace
 
     static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 phase)
     {
-        uint32 globalCap = RTG_GetPendingHelperLoginGlobalCap();
-        uint32 ceiling = RTG_GetStandaloneHelperCeiling();
-
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
-            uint32 dynamicLaneCap = std::max<uint32>(12u, std::min<uint32>(24u, std::max<uint32>(12u, ceiling / 3u)));
-
             if (phase >= 4u)
-                return std::min<uint32>(globalCap, std::max<uint32>(12u, dynamicLaneCap));
+                return 12u;
             if (phase == 3u)
-                return std::min<uint32>(globalCap, std::max<uint32>(10u, dynamicLaneCap > 2u ? (dynamicLaneCap - 2u) : dynamicLaneCap));
-            return std::min<uint32>(globalCap, std::max<uint32>(10u, dynamicLaneCap));
+                return 10u;
+            return std::max<uint32>(10u, std::min<uint32>(16u, RTG_GetPendingHelperLoginGlobalCap()));
         }
 
         if (phase >= 4u)
             return 4u;
         if (phase == 3u)
             return 6u;
-        return std::max<uint32>(8u, std::min<uint32>(12u, globalCap));
+        return std::max<uint32>(8u, std::min<uint32>(12u, RTG_GetPendingHelperLoginGlobalCap()));
     }
 
     static bool RTG_IsTrackedPendingHelperState(RTG::RtgHelperLedgerEntry const& entry)
@@ -860,35 +855,7 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         if (!bot || !bot->IsInWorld())
         {
             if (entry->state == RTG::RtgHelperState::Retired)
-            {
                 ledger.Remove(botId);
-                continue;
-            }
-
-            uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
-            uint32 requestAge = (requestTs && NowSeconds() > requestTs) ? (NowSeconds() - requestTs) : 0u;
-            bool staleOfflineTransition =
-                (entry->state == RTG::RtgHelperState::Reserved ||
-                 entry->state == RTG::RtgHelperState::LoggingIn ||
-                 entry->state == RTG::RtgHelperState::WorldIdle ||
-                 entry->state == RTG::RtgHelperState::Releasing) &&
-                requestAge >= RTG_GetDispatchStallThresholdSeconds();
-
-            if (staleOfflineTransition)
-            {
-                std::string addData = GetEventData(botId, "add");
-                SetEventValue(botId, "add", 0, 0);
-                SetEventValue(botId, "logout", 0, 0);
-                SetEventValue(botId, "rtg_add_requested", 0, 0);
-                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-                SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-                SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-                currentBots.remove(botId);
-                ledger.Remove(botId);
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RECOVER][OFFLINE_RELEASE] helper={} age={}s add='{}'", botId, requestAge, addData));
-            }
             continue;
         }
 
@@ -3364,10 +3331,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 uint32 pendingLane = RTG_CountPendingHelpers(bucket.queueTypeId, uint32(bucket.bracketId), bucket.team);
-                uint32 pendingLaneCap = RTG_GetPendingHelperLoginLaneCap(bucket.phase);
-                if (bucket.need > pendingLaneCap)
-                    pendingLaneCap = std::min<uint32>(RTG_GetPendingHelperLoginGlobalCap(), std::max<uint32>(pendingLaneCap, std::min<uint32>(bucket.need, pendingLaneCap + 8u)));
-                if (pendingLane >= pendingLaneCap)
+                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.phase))
                     return false;
 
                 return tryFillBgBucket(bucket, capacity);
@@ -3503,50 +3467,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 missingBotsTimer = 0;
             }
 
-            // RTG queue helpers acquired above must be eligible for dispatch in the SAME tick.
-            // Returning here starves freshly reserved BG/LFG helpers until a later pass, and under
-            // continuous multi-queue pressure that later pass may never get enough room before the
-            // stall watchdog reaps them. Refresh dispatch state and fall through to the normal
-            // ProcessBot login loop instead of exiting early.
-            availableBots = currentBots;
-            availableBotCount = availableBots.size();
-            onlineBotCount = playerBots.size();
-
-            pendingQueuedLogins = 0;
-            for (uint32 botId : currentBots)
-            {
-                if (!GetEventValue(botId, "add"))
-                    continue;
-
-                if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
-                    continue;
-
-                std::string addData = GetEventData(botId, "add");
-                if (!RTG::IsQueueManagedAddData(addData))
-                    continue;
-
-                ++pendingQueuedLogins;
-            }
-
-            if (pendingQueuedLogins)
-            {
-                intervalCap = std::max(intervalCap, pendingQueuedLogins);
-
-                uint32 dispatchHeadroom = 0;
-                if (maxAllowedBotCount > onlineBotCount)
-                    dispatchHeadroom = (maxAllowedBotCount - onlineBotCount);
-
-                maxNewBots = std::min<uint32>(pendingQueuedLogins, dispatchHeadroom);
-                loginBots = maxNewBots;
-                if (updateBots + loginBots > intervalCap)
-                    updateBots = (intervalCap > loginBots) ? (intervalCap - loginBots) : 0u;
-
-                if (RTG_QueueDebugEnabled())
-                {
-                    LOG_INFO("playerbots", "[RTG][DISPATCH][POST-ACQUIRE] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} maxAllowed={}",
-                             pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, maxAllowedBotCount);
-                }
-            }
         }
         else
         {
