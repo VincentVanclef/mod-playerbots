@@ -125,6 +125,10 @@ namespace
 
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
+            // Do not hard-freeze a busy battleground lane at ~10 pending helpers when the
+            // overall RTG event budget and account pool can safely sustain more. Scale the
+            // lane ceiling with the configured standalone helper ceiling while still keeping
+            // a bounded per-lane budget so one queue family cannot absorb the entire realm.
             uint32 dynamicLaneCap = std::max<uint32>(12u, std::min<uint32>(24u, std::max<uint32>(12u, ceiling / 3u)));
 
             if (phase >= 4u)
@@ -899,7 +903,9 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         if (!entry)
             continue;
 
-        bool transitionState = entry->state == RTG::RtgHelperState::LoggingIn ||
+        bool transitionState = entry->state == RTG::RtgHelperState::Reserved ||
+                               entry->state == RTG::RtgHelperState::LoggingIn ||
+                               entry->state == RTG::RtgHelperState::WorldIdle ||
                                entry->state == RTG::RtgHelperState::Queued ||
                                entry->state == RTG::RtgHelperState::Invited ||
                                entry->state == RTG::RtgHelperState::Releasing;
@@ -907,19 +913,67 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         uint32 nowMs = RTG::RTG_GetNowMs32();
         if (transitionState && entry->updatedAtMs && nowMs > entry->updatedAtMs && (nowMs - entry->updatedAtMs) >= maxTransitionMs)
         {
-            if (!bot->InBattleground() && !bot->InArena() && !bot->InBattlegroundQueue() && !bot->IsInvitedForBattlegroundInstance())
-            {
-                if (entry->pendingRetire)
-                    ledger.MarkState(botId, RTG::RtgHelperState::Releasing, "transition watchdog preserving retire state");
-                else
-                    ledger.MarkState(botId, RTG::RtgHelperState::WorldIdle, "transition watchdog reset");
+            std::string addData = GetEventData(botId, "add");
+            uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
+            uint32 requestAge = (requestTs && NowSeconds() > requestTs) ? (NowSeconds() - requestTs) : 0u;
+            bool hasQueuedAddData = RTG::IsQueueManagedAddData(addData);
+            bool activeBgState = bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
 
-                if (!entry->pendingRetire)
-                    ledger.ClearOwnership(botId, "transition watchdog clear ownership");
+            if (!activeBgState)
+            {
+                bool recovered = false;
+                if (entry->pendingRetire)
+                {
+                    ledger.MarkState(botId, RTG::RtgHelperState::Releasing, "transition watchdog preserving retire state");
+                }
+                else
+                {
+                    uint32 desiredTeam = 0;
+                    uint32 desiredLevel = 0;
+                    uint32 desiredQueueType = 0;
+                    if (hasQueuedAddData && RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
+                    {
+                        recovered = RTG_DispatchImmediateBgQueueJoin(bot, desiredQueueType, "transition_watchdog_requeue");
+                        if (recovered)
+                        {
+                            ledger.AssignQueueOwnership(botId, entry->target, entry->purpose, "transition watchdog requeue");
+                            ledger.MarkState(botId, RTG::RtgHelperState::Queued, "transition watchdog requeue");
+                            entry->pendingQueueJoin = true;
+                            SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
+                            SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
+                            SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+                            SetEventValue(botId, "rtg_add_requested", 0, 0);
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][RECOVER][DISPATCH] helper={} queue={} age={}s", botId, desiredQueueType, requestAge));
+                        }
+                    }
+
+                    if (!recovered)
+                    {
+                        ledger.MarkState(botId, RTG::RtgHelperState::WorldIdle, "transition watchdog reset");
+                        ledger.ClearOwnership(botId, "transition watchdog clear ownership");
+
+                        // If this reservation never reached the world/queue after a full stall window,
+                        // release it so capacity and ownership can continue moving under load.
+                        if (requestAge >= RTG_GetDispatchStallThresholdSeconds())
+                        {
+                            SetEventValue(botId, "add", 0, 0);
+                            SetEventValue(botId, "rtg_add_requested", 0, 0);
+                            SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                            SetEventValue(botId, "rtg_bg_pending", 0, 0);
+                            SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
+                            SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+                            SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+                            currentBots.remove(botId);
+                            ledger.Remove(botId);
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][RECOVER][RELEASE] helper={} age={}s add='{}'", botId, requestAge, addData));
+                            continue;
+                        }
+                    }
+                }
 
                 if (RTG_QueueOwnershipDebugEnabled())
-                    LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} transition watchdog reset state={} queue={} instance={}",
-                             botId, uint32(entry->state), uint32(entry->target.queueTypeId), entry->ownerInstanceId);
+                    LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} transition watchdog reset state={} queue={} instance={} requestAge={} recovered={}",
+                             botId, uint32(entry->state), uint32(entry->target.queueTypeId), entry->ownerInstanceId, requestAge, recovered ? 1u : 0u);
             }
         }
 
@@ -3503,50 +3557,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 missingBotsTimer = 0;
             }
 
-            // RTG queue helpers acquired above must be eligible for dispatch in the SAME tick.
-            // Returning here starves freshly reserved BG/LFG helpers until a later pass, and under
-            // continuous multi-queue pressure that later pass may never get enough room before the
-            // stall watchdog reaps them. Refresh dispatch state and fall through to the normal
-            // ProcessBot login loop instead of exiting early.
-            availableBots = currentBots;
-            availableBotCount = availableBots.size();
-            onlineBotCount = playerBots.size();
-
-            pendingQueuedLogins = 0;
-            for (uint32 botId : currentBots)
-            {
-                if (!GetEventValue(botId, "add"))
-                    continue;
-
-                if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
-                    continue;
-
-                std::string addData = GetEventData(botId, "add");
-                if (!RTG::IsQueueManagedAddData(addData))
-                    continue;
-
-                ++pendingQueuedLogins;
-            }
-
-            if (pendingQueuedLogins)
-            {
-                intervalCap = std::max(intervalCap, pendingQueuedLogins);
-
-                uint32 dispatchHeadroom = 0;
-                if (maxAllowedBotCount > onlineBotCount)
-                    dispatchHeadroom = (maxAllowedBotCount - onlineBotCount);
-
-                maxNewBots = std::min<uint32>(pendingQueuedLogins, dispatchHeadroom);
-                loginBots = maxNewBots;
-                if (updateBots + loginBots > intervalCap)
-                    updateBots = (intervalCap > loginBots) ? (intervalCap - loginBots) : 0u;
-
-                if (RTG_QueueDebugEnabled())
-                {
-                    LOG_INFO("playerbots", "[RTG][DISPATCH][POST-ACQUIRE] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} maxAllowed={}",
-                             pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, maxAllowedBotCount);
-                }
-            }
+            // Keep the RTG acquire pass surgical here: helper reservations are already created above.
+            // Dispatch budgeting for queue-managed pending helpers is handled earlier in the main
+            // update/login budget path where availableBots / onlineBotCount / intervalCap live.
+            // Do not re-run that budget logic here; doing so crosses scope boundaries and can regress
+            // compilation without improving same-tick ownership safety.
         }
         else
         {
