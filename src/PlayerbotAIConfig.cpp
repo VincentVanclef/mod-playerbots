@@ -197,6 +197,7 @@ bool PlayerbotAIConfig::Initialize()
     rtgSmartQueue = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.SmartQueue.Enable", true);
     rtgDemandCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.DemandCheckSeconds", 5);
     rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
+    rtgQueueBotLevel = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.QueueBotLevel", 19);
     rtgQueueOwnershipEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Enable", true);
     rtgQueueOwnershipProtectInBattleground = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground", true);
     rtgQueueOwnershipRetireRetrySeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds", 15);

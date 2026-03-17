@@ -207,40 +207,6 @@ namespace
         return urand(avgLevel, maxLevel);
     }
 
-    static void RTG_ApplyQueueHelperLoginProfile(Player* bot, uint32 desiredLevel, char const* laneTag)
-    {
-        if (!bot)
-            return;
-
-        uint32 targetLevel = desiredLevel ? desiredLevel : bot->GetLevel();
-        bool levelChanged = targetLevel && bot->GetLevel() != targetLevel;
-
-        if (levelChanged)
-        {
-            bot->GiveLevel(targetLevel);
-            bot->InitStatsForLevel(true);
-            bot->SetUInt32Value(PLAYER_XP, 0);
-        }
-
-        PlayerbotFactory factory(bot, targetLevel);
-        factory.InitEquipment(true, true);
-        factory.Refresh();
-
-        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-            botAI->ResetStrategies(false);
-
-        RTG_ClearQueueDebuffs(bot);
-
-        if (RTG_QueueDebugEnabled())
-        {
-            LOG_INFO("playerbots", "[RTG][LOGIN][PROFILE] helper={} lane={} level={} changed={}",
-                     bot->GetGUID().GetCounter(),
-                     laneTag ? laneTag : "queue",
-                     bot->GetLevel(),
-                     levelChanged ? 1u : 0u);
-        }
-    }
-
     static bool RTG_IsTrackedPendingHelperState(RTG::RtgHelperLedgerEntry const& entry)
     {
         if (!entry.isEventDrivenHelper || entry.pendingRetire)
@@ -535,6 +501,40 @@ namespace
             bot->ResurrectPlayer(1.0f, false);
             bot->SpawnCorpseBones();
             bot->SetFullHealth();
+        }
+    }
+
+    static void RTG_ApplyQueueHelperLoginProfile(Player* bot, uint32 desiredLevel, char const* laneTag)
+    {
+        if (!bot)
+            return;
+
+        uint32 targetLevel = desiredLevel ? desiredLevel : bot->GetLevel();
+        bool levelChanged = targetLevel && bot->GetLevel() != targetLevel;
+
+        if (levelChanged)
+        {
+            bot->GiveLevel(targetLevel);
+            bot->InitStatsForLevel(true);
+            bot->SetUInt32Value(PLAYER_XP, 0);
+        }
+
+        PlayerbotFactory factory(bot, targetLevel);
+        factory.InitEquipment(true, true);
+        factory.Refresh();
+
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            botAI->ResetStrategies(false);
+
+        RTG_ClearQueueDebuffs(bot);
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][LOGIN][PROFILE] helper={} lane={} level={} changed={}",
+                     bot->GetGUID().GetCounter(),
+                     laneTag ? laneTag : "queue",
+                     bot->GetLevel(),
+                     levelChanged ? 1u : 0u);
         }
     }
 
