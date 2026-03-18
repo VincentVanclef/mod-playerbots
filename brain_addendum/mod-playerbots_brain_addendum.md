@@ -207,41 +207,36 @@ This pass follows the safer RTG path:
 
 That preserves the queue-lane separation doctrine and avoids reintroducing the same backlog problem into a future arena lane.
 
-## 2026-03-18 — Arena lane normalization pass: custom team-size normalization + real-demand anchoring
+## 2026-03-18 — Arena lane sync repair: LFG bleed-through + arena target integration + team-side anchoring
 
-This pass responds to field testing where battleground support had stabilized but arena behavior still showed three distinct pathologies:
+### Symptom
+Latest arena testing showed three connected failures:
 
-1. solo/custom arena queues inherited the raw backend arena type as their required team size, which made a solo 3v3 backend exposing arena type `4` behave like an 8-player queue instead of a 6-player queue;
-2. arena helper demand could persist from queue/bot state alone, allowing bot-only continuation pressure instead of staying anchored to real-player arena demand;
-3. arena helper acquisition still filtered by bot faction for virtual arena-side demand, which prevented same-faction arena support from materializing cleanly and could starve one virtual side even when enough random bots existed overall.
+- helpers could come online from the **LFG lane** even when the player was only testing arena queues
+- arena demand existed, but the global RTG population target still only sized itself from **LFG + BG**, so arena materialization was not fully synchronized with the controller math
+- regular arena helpers could be reserved for one side in logs but then behave as if they were attached to the wrong side during login / queue progression, which is unsafe for faction-compatible arena entry and same-faction handling
 
-### Corrections
+### Root cause
+This was not one bug. It was a lane-sync defect across three layers:
 
-- Added **arena team-size normalization** in both `BattleGroundJoinAction.cpp` and `RandomPlayerbotMgr.cpp`:
-  - custom arena type `1` normalizes to 1v1,
-  - custom arena type `4` normalizes to **3v3 solo**,
-  - Blizzard-native arena sizes remain unchanged.
-- Updated arena queue math to use normalized effective team size for:
-  - arena demand targets,
-  - bucket sizing,
-  - join-time helper sizing,
-  - direct queue minimum-player setup.
-- Tightened **arena lane demand anchoring** so RTG arena demand now persists only while **real arena participants are present**, instead of treating bot-only queue state as continued demand.
-- Removed faction hard-filtering from arena helper acquisition so arena buckets can fill **virtual opposing sides** even when same-faction arena behavior is desired.
+1. **LFG demand creation** still accepted owners who were already in battleground/arena states, which allowed stale RDF ownership to keep spawning helpers during pure arena testing.
+2. **Arena demand** was exposed in telemetry/scaffolding, but the RTG control target still only consumed `rtg_lfg_need_total` and `rtg_bg_need_total`, leaving arena outside the main population-sizing formula.
+3. **Arena helper reservation / logging** still recorded the helper's actual faction-side instead of the desired assigned side from add-data, which blurred the distinction between:
+   - desired arena side
+   - actual character faction
+   - queue-side ownership / retirement logic
+
+### Repair
+This pass tightens the arena lane without rewriting the planner:
+
+- suppress LFG demand creation for real players already in BG/arena/BG-queue state
+- fold `rtg_arena_need_total` into the RTG controller target calculation so LFG/BG/Arena lanes stay synchronized under one ceiling
+- normalize custom arena backend sizes consistently in both planner math and direct-join logic
+- record and log **desired arena side** at helper login / reservation time rather than only the bot's current faction side
+- hard-abandon regular arena helpers whose actual faction side does not match the desired assigned side, so the system replaces them instead of letting mismatched helpers poison match assembly
 
 ### Intent
-
-This keeps battleground/RDF stability intact while moving arena support closer to the RTG target doctrine:
-
-- no bot-only free-running arena pressure,
-- correct solo-queue sizing,
-- same-faction-compatible helper supply,
-- arena demand that follows real-player presence instead of self-sustaining bot residue.
-
-### Remaining adjacent work (separate subsystem)
-
-RDF role/spec/gear alignment is a distinct repair lane and should be handled separately through:
-
-- offline spec-role derivation,
-- role-locked helper selection,
-- spec-aware equipment generation in `PlayerbotFactory`.
+- stop stale RDF demand from bleeding into arena-only test sessions
+- make arena demand visible to the same population controller used by BG/RDF
+- keep helper-side ownership consistent enough for real-player arena entry to remain compatible
+- preserve the doctrine that arena should become a first-class RTG service lane rather than a half-detached battleground shadow lane
