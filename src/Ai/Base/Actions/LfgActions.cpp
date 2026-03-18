@@ -314,12 +314,30 @@ bool LfgJoinAction::JoinLFG()
             std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
             if (RTG_ParseLfgDesiredRole(addData, desiredRole) && desiredRole)
             {
+                uint32 actualRole = RTG_ActualRoleForBot(bot);
+                if (actualRole != desiredRole)
+                {
+                    LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=logout_mismatch_join", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "add", 0, 0);
+                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_add_requested", 0, 0);
+                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
+                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_role_ready", 0, 0);
+                    rtgNextJoinAttempt.erase(botId);
+                    sRandomPlayerbotMgr.RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_role_mismatch_join");
+                    return false;
+                }
+
                 uint32 currentRoles = sLFGMgr->GetRoles(bot->GetGUID());
                 if (currentRoles != desiredRole)
                 {
                     WorldPacket* rolePacket = new WorldPacket(CMSG_LFG_SET_ROLES);
                     *rolePacket << (uint8)desiredRole;
                     bot->GetSession()->QueuePacket(rolePacket);
+                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
+                    rtgNextJoinAttempt[botId] = now + 1;
+                    if (RTG_LfgDebugEnabled())
+                        LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} waiting role_sync desiredRole={} currentRoles={}", botId, desiredRole, currentRoles);
+                    return false;
                 }
             }
 
