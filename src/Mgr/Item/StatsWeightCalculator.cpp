@@ -606,7 +606,7 @@ void StatsWeightCalculator::CalculateItemTypePenalty(ItemTemplate const* proto)
     if ((cls == CLASS_PALADIN && tab == PALADIN_TAB_RETRIBUTION) ||
         (cls == CLASS_SHAMAN && tab == SHAMAN_TAB_ENHANCEMENT) ||
         cls == CLASS_WARRIOR || cls == CLASS_ROGUE || cls == CLASS_HUNTER ||
-        (cls == CLASS_DEATH_KNIGHT && tab != DEATH_KNIGHT_TAB_BLOOD && !PlayerbotAI::IsTank(player)))
+        (cls == CLASS_DEATH_KNIGHT && tab != DEATH_KNIGHT_TAB_BLOOD && !PlayerbotAI::IsTank(player_)))
     {
         stats_weights_[STATS_TYPE_INTELLECT] = 0.0f;
         stats_weights_[STATS_TYPE_SPIRIT] = 0.0f;
