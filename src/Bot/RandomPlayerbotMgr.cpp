@@ -2965,6 +2965,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         uint32 rtgTarget = GetEventValue(0, "rtg_target");
         uint32 lfgNeed = GetEventValue(0, "rtg_lfg_need_total");
         uint32 bgNeed = GetEventValue(0, "rtg_bg_need_total");
+        uint32 arenaNeed = GetEventValue(0, "rtg_arena_need_total");
 
         uint32 trackedManaged = 0;
         for (uint32 botId : currentBots)
@@ -2992,8 +2993,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} cappedLfgNeed={} cappedBgNeed={}",
-                     GetMaxAllowedBotCount(), rtgTarget, trackedManaged, unresolvedNeed, lfgNeed, bgNeed, cappedLfgNeed, cappedBgNeed);
+            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} arenaNeed={} cappedLfgNeed={} cappedBgNeed={} cappedArenaNeed={}",
+                     GetMaxAllowedBotCount(), rtgTarget, trackedManaged, unresolvedNeed, lfgNeed, bgNeed, arenaNeed, cappedLfgNeed, cappedBgNeed, cappedArenaNeed);
             LOG_INFO("playerbots", "[RTG][ACQUIRE][HEADROOM] need={} trackedManaged={} maxAllowed={} headroom={} addInterval={}",
                      unresolvedNeed, trackedManaged, maxAllowedBotCount, onlineHeadroom, botsToAddThisInterval);
         }
