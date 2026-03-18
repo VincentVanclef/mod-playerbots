@@ -509,6 +509,17 @@ namespace
         return "rtg_arena_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+
+    static uint32 RTG_NormalizeArenaTeamSize(uint32 arenaType)
+    {
+        switch (arenaType)
+        {
+            case 1: return 1; // custom 1v1 arena queue
+            case 4: return 3; // solo 3v3 queue may expose raw arena type 4
+            default: return arenaType;
+        }
+    }
+
     static bool RTG_IsArenaQueueType(uint32 queueType)
     {
         return queueType > BATTLEGROUND_QUEUE_NONE && queueType < MAX_BATTLEGROUND_QUEUE_TYPES &&
@@ -641,9 +652,10 @@ namespace
                 uint32 currentTotal = realPlayers + botPlayers;
                 uint32 activeQueues = arenaInfo.activeSkirmishArenaQueue + arenaInfo.activeRatedArenaQueue;
                 uint32 activeInstances = arenaInfo.skirmishArenaInstanceCount + arenaInfo.ratedArenaInstanceCount;
-                uint32 targetTotal = uint32(arenaType) * 2u;
+                uint32 teamSize = RTG_NormalizeArenaTeamSize(uint32(arenaType));
+                uint32 targetTotal = teamSize * 2u;
 
-                bool hasRealDemand = realPlayers > 0 || activeQueues > 0 || activeInstances > 0;
+                bool hasRealDemand = realPlayers > 0;
                 uint32 phase = 0;
                 uint32 need = 0;
 
@@ -3288,7 +3300,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     if (isArenaQueue)
                     {
-                        uint32 arenaSize = uint32(BattlegroundMgr::BGArenaType(queueTypeId));
+                        uint32 arenaSize = RTG_NormalizeArenaTeamSize(uint32(BattlegroundMgr::BGArenaType(queueTypeId)));
                         auto arenaBracketKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()));
                         arenaSizes[arenaBracketKey] = arenaSize;
                         arenaAdaptiveLevels[arenaBracketKey].push_back(static_cast<uint32>(player->GetLevel()));
@@ -3397,7 +3409,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             bucket.team = dataTeam;
                             bucket.level = dataLevel;
                             bucket.bracketId = bracketId;
-                            bucket.arenaSize = uint32(BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(desiredQueueType)));
+                            bucket.arenaSize = RTG_NormalizeArenaTeamSize(uint32(BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(desiredQueueType))));
                             bucket.realQueued = arenaCurrentTeamCounts[std::make_tuple(desiredQueueType, uint32(bracketId), dataTeam)];
                             bucket.phase = GetEventValue(0, RTG_MakeArenaPhaseKey(desiredQueueType, uint32(bracketId)));
                             bucket.currentTeamCount = arenaCurrentTeamCounts[std::make_tuple(desiredQueueType, uint32(bracketId), dataTeam)];
@@ -3504,7 +3516,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 bracketId = queuePair.first.second;
                 uint32 plannerNeed = GetEventValue(0, RTG_MakeArenaNeedKey(queueTypeId, bracketId));
                 uint32 phase = GetEventValue(0, RTG_MakeArenaPhaseKey(queueTypeId, bracketId));
-                uint32 arenaSize = arenaSizes[queuePair.first] ? arenaSizes[queuePair.first] : uint32(BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueTypeId)));
+                uint32 arenaSize = arenaSizes[queuePair.first] ? arenaSizes[queuePair.first] : RTG_NormalizeArenaTeamSize(uint32(BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueTypeId))));
                 if (!plannerNeed || !arenaSize)
                     continue;
 
@@ -3947,9 +3959,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!capacity)
                         return false;
 
-                    uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
-                    if (charTeam != bucket.team)
-                        continue;
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
@@ -4011,9 +4020,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!capacity)
                         return false;
 
-                    uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
-                    if (charTeam != bucket.team)
-                        continue;
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 

@@ -206,3 +206,42 @@ This pass follows the safer RTG path:
 4. only then move toward real arena helper acquisition
 
 That preserves the queue-lane separation doctrine and avoids reintroducing the same backlog problem into a future arena lane.
+
+## 2026-03-18 — Arena lane normalization pass: custom team-size normalization + real-demand anchoring
+
+This pass responds to field testing where battleground support had stabilized but arena behavior still showed three distinct pathologies:
+
+1. solo/custom arena queues inherited the raw backend arena type as their required team size, which made a solo 3v3 backend exposing arena type `4` behave like an 8-player queue instead of a 6-player queue;
+2. arena helper demand could persist from queue/bot state alone, allowing bot-only continuation pressure instead of staying anchored to real-player arena demand;
+3. arena helper acquisition still filtered by bot faction for virtual arena-side demand, which prevented same-faction arena support from materializing cleanly and could starve one virtual side even when enough random bots existed overall.
+
+### Corrections
+
+- Added **arena team-size normalization** in both `BattleGroundJoinAction.cpp` and `RandomPlayerbotMgr.cpp`:
+  - custom arena type `1` normalizes to 1v1,
+  - custom arena type `4` normalizes to **3v3 solo**,
+  - Blizzard-native arena sizes remain unchanged.
+- Updated arena queue math to use normalized effective team size for:
+  - arena demand targets,
+  - bucket sizing,
+  - join-time helper sizing,
+  - direct queue minimum-player setup.
+- Tightened **arena lane demand anchoring** so RTG arena demand now persists only while **real arena participants are present**, instead of treating bot-only queue state as continued demand.
+- Removed faction hard-filtering from arena helper acquisition so arena buckets can fill **virtual opposing sides** even when same-faction arena behavior is desired.
+
+### Intent
+
+This keeps battleground/RDF stability intact while moving arena support closer to the RTG target doctrine:
+
+- no bot-only free-running arena pressure,
+- correct solo-queue sizing,
+- same-faction-compatible helper supply,
+- arena demand that follows real-player presence instead of self-sustaining bot residue.
+
+### Remaining adjacent work (separate subsystem)
+
+RDF role/spec/gear alignment is a distinct repair lane and should be handled separately through:
+
+- offline spec-role derivation,
+- role-locked helper selection,
+- spec-aware equipment generation in `PlayerbotFactory`.

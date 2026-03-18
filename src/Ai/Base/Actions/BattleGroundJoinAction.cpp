@@ -181,6 +181,26 @@ namespace
         return nowSecs >= itr->second && (nowSecs - itr->second) >= 300u;
     }
 
+
+    static uint32 RTG_NormalizeArenaTeamSize(uint32 arenaType)
+    {
+        // Custom arena modules may register non-Blizzard arena type IDs while still
+        // using standard match sizes underneath. Keep queue math anchored to the
+        // effective team size rather than the raw custom queue token.
+        switch (arenaType)
+        {
+            case 1: return 1; // 1v1 custom arena
+            case 4: return 3; // solo 3v3 custom backend often uses arena type 4
+            default: return arenaType;
+        }
+    }
+
+    static uint32 RTG_NormalizeArenaBracketSize(uint32 arenaType)
+    {
+        uint32 teamSize = RTG_NormalizeArenaTeamSize(arenaType);
+        return teamSize ? (teamSize * 2u) : 0u;
+    }
+
     static bool RTG_DirectJoinArenaQueue(Player* bot, BattlegroundQueueTypeId queueTypeId, ArenaType arenaType, bool isRated)
     {
         if (!bot || queueTypeId == BATTLEGROUND_QUEUE_NONE || arenaType == ARENA_TYPE_NONE)
@@ -238,7 +258,10 @@ namespace
             case ARENA_TYPE_2v2: bg->SetMinPlayersPerTeam(2); break;
             case ARENA_TYPE_3v3: bg->SetMinPlayersPerTeam(3); break;
             case ARENA_TYPE_5v5: bg->SetMinPlayersPerTeam(5); break;
-            default: break;
+            default:
+                if (uint32 normalizedTeamSize = RTG_NormalizeArenaTeamSize(uint32(arenaType)))
+                    bg->SetMinPlayersPerTeam(normalizedTeamSize);
+                break;
         }
 
         GroupQueueInfo* ginfo = bgQueue.AddGroup(bot, nullptr, BATTLEGROUND_AA, bracketEntry, uint8(arenaType), isRated, false,
@@ -548,8 +571,8 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     ArenaType type = ArenaType(BattlegroundMgr::BGArenaType(queueTypeId));
     if (type != ARENA_TYPE_NONE)
     {
-        BracketSize = (uint32)(type * 2);
-        TeamSize = (uint32)type;
+        BracketSize = RTG_NormalizeArenaBracketSize(uint32(type));
+        TeamSize = RTG_NormalizeArenaTeamSize(uint32(type));
 
         // Check if bots should join Rated Arena (Only captains can queue)
         uint32 ratedArenaBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].ratedArenaBotCount;
@@ -801,8 +824,8 @@ bool BGJoinAction::JoinQueue(uint32 type)
     if (isArena)
     {
         isArena = true;
-        BracketSize = uint32(arenaType) * 2;
-        TeamSize = uint32(arenaType);
+        BracketSize = RTG_NormalizeArenaBracketSize(uint32(arenaType));
+        TeamSize = RTG_NormalizeArenaTeamSize(uint32(arenaType));
         isRated = botAI->GetAiObjectContext()->GetValue<uint32>("arena type")->Get();
 
         if (joinAsGroup)
@@ -908,8 +931,8 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
     ArenaType type = ArenaType(BattlegroundMgr::BGArenaType(queueTypeId));
     if (type != ARENA_TYPE_NONE)
     {
-        BracketSize = (uint32)(type * 2);
-        TeamSize = (uint32)type;
+        BracketSize = RTG_NormalizeArenaBracketSize(uint32(type));
+        TeamSize = RTG_NormalizeArenaTeamSize(uint32(type));
 
         // Check if bots should join Rated Arena (Only captains can queue)
         uint32 ratedArenaBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].ratedArenaBotCount;
