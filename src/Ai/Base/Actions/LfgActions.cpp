@@ -214,16 +214,23 @@ uint32 LfgJoinAction::GetRoles()
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         uint32 desiredRole = 0;
-        if (RTG_ParseLfgDesiredRole(sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add"), desiredRole) && desiredRole)
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+        if (RTG_ParseLfgDesiredRole(addData, desiredRole) && desiredRole)
         {
-            if (desiredRole == actualRole)
-                return actualRole;
+            if (desiredRole != actualRole)
+            {
+                if (RTG_LfgDebugEnabled())
+                {
+                    LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=mismatch usingActualRole", bot->GetGUID().GetCounter(), desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                }
 
-            if (RTG_ClassCanRole(bot->getClass(), desiredRole))
-                return desiredRole;
-
-            LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, using actual role", bot->GetGUID().ToString().c_str(),
-                     bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), desiredRole, actualRole);
+                LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, enforcing actual role", bot->GetGUID().ToString().c_str(),
+                         bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), desiredRole, actualRole);
+            }
+            else if (RTG_LfgDebugEnabled())
+            {
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=aligned", bot->GetGUID().GetCounter(), desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+            }
         }
     }
 

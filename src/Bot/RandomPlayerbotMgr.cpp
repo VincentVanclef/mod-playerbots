@@ -1904,9 +1904,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				uint32 actualRole = RTG_ActualRoleForBot(bot);
 				if (actualRole != desiredRole)
 				{
+					RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ROLE] helper={} owner={} desiredRole={} actualRole={} class={} specTab={} verdict=logout_mismatch", botId, desiredOwner, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
 					rtgStaleQueueBots.push_back(botGuid);
 					continue;
 				}
+
+				RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ROLE] helper={} owner={} desiredRole={} actualRole={} class={} specTab={} verdict=ready", botId, desiredOwner, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
 			}
 
 			lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
@@ -2025,6 +2028,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					uint32 actualRoles = sLFGMgr->GetRoles(bot->GetGUID());
 					if ((actualRoles & desiredRole) == 0)
 					{
+						RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ROLE] helper={} owner={} desiredRole={} queuedRoles={} verdict=queued_mask_mismatch", botId, desiredOwner, desiredRole, actualRoles));
 						SetEventValue(botId, "add", 0, 0);
 						SetEventValue(botId, "rtg_lfg_pending", 0, 0);
 						currentBots.remove(botId);

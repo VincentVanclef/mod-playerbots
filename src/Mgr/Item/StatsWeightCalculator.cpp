@@ -301,9 +301,7 @@ void StatsWeightCalculator::GenerateBasicWeights(Player* player)
     {
         stats_weights_[STATS_TYPE_AGILITY] += 1.6f;
         stats_weights_[STATS_TYPE_STRENGTH] += 2.5f;
-        stats_weights_[STATS_TYPE_INTELLECT] += 0.1f;
         stats_weights_[STATS_TYPE_ATTACK_POWER] += 1.0f;
-        stats_weights_[STATS_TYPE_SPELL_POWER] += 0.3f;
         stats_weights_[STATS_TYPE_ARMOR_PENETRATION] += 1.5f;
         stats_weights_[STATS_TYPE_HIT] += 1.9f;
         stats_weights_[STATS_TYPE_CRIT] += 1.7f;
@@ -313,11 +311,9 @@ void StatsWeightCalculator::GenerateBasicWeights(Player* player)
     }
     else if ((cls == CLASS_SHAMAN && tab == SHAMAN_TAB_ENHANCEMENT))
     {
-        stats_weights_[STATS_TYPE_AGILITY] += 1.4f;
-        stats_weights_[STATS_TYPE_STRENGTH] += 1.1f;
-        stats_weights_[STATS_TYPE_INTELLECT] += 0.3f;
+        stats_weights_[STATS_TYPE_AGILITY] += 1.6f;
+        stats_weights_[STATS_TYPE_STRENGTH] += 1.25f;
         stats_weights_[STATS_TYPE_ATTACK_POWER] += 1.0f;
-        stats_weights_[STATS_TYPE_SPELL_POWER] += 0.95f;
         stats_weights_[STATS_TYPE_ARMOR_PENETRATION] += 0.9f;
         stats_weights_[STATS_TYPE_HIT] += 2.1f;
         stats_weights_[STATS_TYPE_CRIT] += 1.5f;
@@ -375,7 +371,6 @@ void StatsWeightCalculator::GenerateBasicWeights(Player* player)
         stats_weights_[STATS_TYPE_MANA_REGENERATION] += 0.9f;
         stats_weights_[STATS_TYPE_CRIT] += 0.6f;
         stats_weights_[STATS_TYPE_HASTE] += 0.8f;
-        stats_weights_[STATS_TYPE_RANGED_DPS] += 1.0f;
     }
     else if ((cls == CLASS_WARRIOR && tab == WARRIOR_TAB_PROTECTION) ||
              (cls == CLASS_PALADIN && tab == PALADIN_TAB_PROTECTION))
@@ -605,6 +600,44 @@ void StatsWeightCalculator::CalculateItemTypePenalty(ItemTemplate const* proto)
         bool slowDelay = proto->Delay > 2500;
         if (cls == CLASS_SHAMAN && tab == SHAMAN_TAB_ENHANCEMENT && slowDelay)
             weight_ *= 1.1;
+    }
+
+    // RTG strict role/spec cleanup: prevent cross-role stat bleed for queue-managed helpers.
+    if ((cls == CLASS_PALADIN && tab == PALADIN_TAB_RETRIBUTION) ||
+        (cls == CLASS_SHAMAN && tab == SHAMAN_TAB_ENHANCEMENT) ||
+        cls == CLASS_WARRIOR || cls == CLASS_ROGUE || cls == CLASS_HUNTER ||
+        (cls == CLASS_DEATH_KNIGHT && tab != DEATH_KNIGHT_TAB_BLOOD && !PlayerbotAI::IsTank(player)))
+    {
+        stats_weights_[STATS_TYPE_INTELLECT] = 0.0f;
+        stats_weights_[STATS_TYPE_SPIRIT] = 0.0f;
+        stats_weights_[STATS_TYPE_SPELL_POWER] = 0.0f;
+        stats_weights_[STATS_TYPE_HEAL_POWER] = 0.0f;
+        stats_weights_[STATS_TYPE_MANA_REGENERATION] = 0.0f;
+    }
+
+    if ((cls == CLASS_PRIEST && tab != PRIEST_TAB_SHADOW) ||
+        (cls == CLASS_PALADIN && tab == PALADIN_TAB_HOLY) ||
+        (cls == CLASS_DRUID && tab == DRUID_TAB_RESTORATION) ||
+        (cls == CLASS_SHAMAN && tab == SHAMAN_TAB_RESTORATION) ||
+        cls == CLASS_MAGE || cls == CLASS_WARLOCK ||
+        (cls == CLASS_SHAMAN && tab == SHAMAN_TAB_ELEMENTAL) ||
+        (cls == CLASS_PRIEST && tab == PRIEST_TAB_SHADOW) ||
+        (cls == CLASS_DRUID && tab == DRUID_TAB_BALANCE))
+    {
+        stats_weights_[STATS_TYPE_STRENGTH] = 0.0f;
+        stats_weights_[STATS_TYPE_ATTACK_POWER] = 0.0f;
+        stats_weights_[STATS_TYPE_ARMOR_PENETRATION] = 0.0f;
+        stats_weights_[STATS_TYPE_EXPERTISE] = 0.0f;
+        stats_weights_[STATS_TYPE_MELEE_DPS] = 0.0f;
+    }
+
+    if (cls == CLASS_DRUID && tab == DRUID_TAB_FERAL)
+    {
+        stats_weights_[STATS_TYPE_INTELLECT] = 0.0f;
+        stats_weights_[STATS_TYPE_SPIRIT] = 0.0f;
+        stats_weights_[STATS_TYPE_SPELL_POWER] = 0.0f;
+        stats_weights_[STATS_TYPE_HEAL_POWER] = 0.0f;
+        stats_weights_[STATS_TYPE_MANA_REGENERATION] = 0.0f;
     }
 }
 
