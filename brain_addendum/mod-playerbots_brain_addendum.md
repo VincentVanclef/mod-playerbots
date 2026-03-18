@@ -240,3 +240,26 @@ This pass tightens the arena lane without rewriting the planner:
 - make arena demand visible to the same population controller used by BG/RDF
 - keep helper-side ownership consistent enough for real-player arena entry to remain compatible
 - preserve the doctrine that arena should become a first-class RTG service lane rather than a half-detached battleground shadow lane
+
+
+---
+
+## 2026-03-18 — Queue follow-up: stale RDF pending + penalty cleanup
+
+### Summary
+Follow-up pass after the queue lifecycle stabilization work.
+
+### Added / changed
+- RDF pending helpers now age out instead of renewing forever when they never fully enter queue/group ownership.
+- Exact-role RDF helpers retry faster after login so role-correct fills materialize with less standby delay.
+- Queue penalty cleanup was broadened to include additional dungeon deserter/cooldown variants.
+- Assigned RDF helpers now refresh queued role state earlier before join when desired role data exists.
+
+### Why
+Live testing still showed:
+- leftover bots online after queue work ended
+- RDF helpers standing by too long before actually entering queue state
+- stale account pressure after missed/partial queue cycles
+
+### Expected result
+Cleaner helper retirement, faster exact-role RDF convergence, and fewer busy random-bot accounts held by stalled queue helpers.

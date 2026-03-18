@@ -210,6 +210,7 @@ uint32 LfgJoinAction::GetRoles()
     }
 
     uint32 actualRole = RTG_ActualRoleForBot(bot);
+    uint32 botId = bot->GetGUID().GetCounter();
 
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
@@ -221,7 +222,7 @@ uint32 LfgJoinAction::GetRoles()
             {
                 if (RTG_LfgDebugEnabled())
                 {
-                    LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=mismatch usingActualRole", bot->GetGUID().GetCounter(), desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                    LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=mismatch usingActualRole", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
                 }
 
                 LOG_INFO("playerbots", "Bot {} {}:{} <{}>: RTG desired LFG role {} mismatched actual spec role {}, enforcing actual role", bot->GetGUID().ToString().c_str(),
@@ -229,7 +230,7 @@ uint32 LfgJoinAction::GetRoles()
             }
             else if (RTG_LfgDebugEnabled())
             {
-                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=aligned", bot->GetGUID().GetCounter(), desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=aligned", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
             }
         }
     }
@@ -240,6 +241,8 @@ uint32 LfgJoinAction::GetRoles()
 bool LfgJoinAction::JoinLFG()
 {
     static std::unordered_map<uint32, time_t> rtgNextJoinAttempt;
+
+    RTG_ClearDungeonQueuePenalties(bot);
 
     // check if already in lfg
     LfgState state = sLFGMgr->GetState(bot->GetGUID());
@@ -306,7 +309,21 @@ bool LfgJoinAction::JoinLFG()
             }
 
             RTG_ClearDungeonQueuePenalties(bot);
-            rtgNextJoinAttempt[botId] = now + 5;
+
+            uint32 desiredRole = 0;
+            std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+            if (RTG_ParseLfgDesiredRole(addData, desiredRole) && desiredRole)
+            {
+                uint32 currentRoles = sLFGMgr->GetRoles(bot->GetGUID());
+                if (currentRoles != desiredRole)
+                {
+                    WorldPacket* rolePacket = new WorldPacket(CMSG_LFG_SET_ROLES);
+                    *rolePacket << (uint8)desiredRole;
+                    bot->GetSession()->QueuePacket(rolePacket);
+                }
+            }
+
+            rtgNextJoinAttempt[botId] = now + 1;
         }
     }
 
@@ -366,6 +383,9 @@ bool LfgJoinAction::JoinLFG()
         _roles = "DPS";
 
     RTG_ClearDungeonQueuePenalties(bot);
+
+    if (RTG_IsQueuedLfgBot(bot))
+        sRandomPlayerbotMgr.RTG_SetBotEvent(botId, "rtg_lfg_pending", 1, 20, sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add"));
 
     LOG_INFO("playerbots", "Bot {} {}:{} <{}>: queues LFG, Dungeon as {} ({})", bot->GetGUID().ToString().c_str(),
              bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), _roles,

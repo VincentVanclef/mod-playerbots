@@ -706,6 +706,7 @@ namespace
 
         bot->RemoveAura(26013); // Deserter
         bot->RemoveAura(71041); // Dungeon Deserter
+        bot->RemoveAura(71328); // Dungeon cooldown / random dungeon deserter variants
     }
 
     static void RTG_PrepareBotForLogout(Player* bot)
@@ -2053,9 +2054,30 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			// Pending bots get more patience
+			uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
+			uint32 pendingAge = 0;
+			if (requestTs)
+			{
+				uint32 nowTs = NowSeconds();
+				if (nowTs > requestTs)
+					pendingAge = nowTs - requestTs;
+			}
+
+			// Pending bots get more patience, but not forever.
+			// Exact-role RDF helpers that never fully enter queue/group state can otherwise
+			// sit online indefinitely and keep their random-bot account busy.
 			if (GetEventValue(botId, "rtg_lfg_pending"))
 			{
+				bool pendingTimedOut = pendingAge >= 20;
+				if (!ownerHasRealDemand || pendingTimedOut)
+				{
+					SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+					SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
+					currentBots.remove(botId);
+					rtgStaleQueueBots.push_back(botGuid);
+					continue;
+				}
+
 				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
 				continue;
 			}
