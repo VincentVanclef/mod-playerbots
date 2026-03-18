@@ -323,7 +323,7 @@ bool LfgJoinAction::JoinLFG()
                     sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
                     sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_role_ready", 0, 0);
                     rtgNextJoinAttempt.erase(botId);
-                    sRandomPlayerbotMgr.RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_role_mismatch_join");
+                    sRandomPlayerbotMgr.LogoutPlayerBot(bot->GetGUID());
                     return false;
                 }
 
