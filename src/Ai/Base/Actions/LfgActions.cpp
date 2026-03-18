@@ -385,7 +385,7 @@ bool LfgJoinAction::JoinLFG()
     RTG_ClearDungeonQueuePenalties(bot);
 
     if (RTG_IsQueuedLfgBot(bot))
-        sRandomPlayerbotMgr.RTG_SetBotEvent(botId, "rtg_lfg_pending", 1, 20, sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add"));
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 20, sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add"));
 
     LOG_INFO("playerbots", "Bot {} {}:{} <{}>: queues LFG, Dungeon as {} ({})", bot->GetGUID().ToString().c_str(),
              bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), _roles,
