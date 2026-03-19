@@ -264,51 +264,35 @@ Live testing still showed:
 ### Expected result
 Cleaner helper retirement, faster exact-role RDF convergence, and fewer busy random-bot accounts held by stalled queue helpers.
 
-## 2026-03-19 — Multi-arena demand scaling + replay spectator isolation
+## 2026-03-19 — Arena orphan-demand collapse and helper retirement tightening
 
-### Problem surface
-Live queue testing showed three linked arena-lane failures:
+### Summary
+Follow-up pass focused on the specific arena symptom where helper bots could remain online after all real arena demand was gone.
 
-- only one arena formation would reliably summon helpers, while a second simultaneous arena queue often stalled behind the first
-- replay viewers could remain inside battleground/arena shell state long enough to pollute playerbot arena accounting
-- completed arena helpers could linger online after the queue/match surface should have been considered closed because stale arena demand stayed artificially alive
+### Symptoms observed
+- helper bots could stay online after arena testing ended even though no characters remained queued
+- arena lane demand could stay alive from stale arena activity surfaces longer than real-player ownership justified
+- arena cleanup could miss alliance-side mismatches because desired team `0` was being treated like an unset value
 
 ### Root cause
-The arena scaffolding pass was still effectively sized around a **single match target**:
+The arena scaffolding was still permissive enough to treat non-owner arena activity as live demand. In practice that meant bot-only residue could keep the lane warm long enough to delay retirement. Separately, the battleground/arena cleanup path used a truthiness check on `desiredTeam`, which silently skipped mismatch detection for team `0`.
 
-- `targetTotal = normalizedArenaSize * 2`
+### Implemented correction
+- tighten arena scaffolding so `hasRealDemand` is driven by **real players or active arena instances**, not raw arena queue flags alone
+- scale arena demand by `matchesNeeded` and `targetTotal` instead of one flat match target, so simultaneous arena formations have a clearer control surface
+- emit explicit `[RTG][ARENA][ORPHAN]` breadcrumbs when bot-only arena residue remains without a real owner
+- emit `[RTG][ARENA][OWNER]` breadcrumbs during helper cleanup to show whether a helper is still protected by real demand or lifecycle ownership
+- fix cleanup-side team mismatch handling so desired team `0` is treated as a valid target side and not ignored
 
-That meant RTG could satisfy one arena's worth of bodies while underestimating demand for any second concurrent real-player arena.
+### Intent
+- let arena demand collapse quickly once the real owner disappears
+- reduce leftover arena helpers that linger for long periods after queue tests
+- preserve the queue-ownership doctrine while making arena residue visible in logs instead of guesswork
 
-At the same time, replay viewers still present as spectator-shell battleground residents. Without an explicit spectator filter in playerbot battleground/arena accounting, replay-owned shell state could count as real arena activity and keep helper-retire conditions noisy.
+### Files modified in this revision
+- `src/Bot/RandomPlayerbotMgr.cpp`
 
-### Repair applied
-This pass tightens the arena lane in two places:
-
-1. **Replay spectator isolation in playerbot accounting**
-   - real-player battleground/arena accounting now ignores spectator-state players
-   - this prevents replay viewers from contributing to arena queue/instance demand surfaces inside `RandomPlayerbotMgr`
-
-2. **Multi-match arena demand scaffolding**
-   - arena scaffolding no longer assumes one-match total demand
-   - match demand now scales from the largest of:
-     - queued + active arena matches
-     - real-player occupancy converted into whole-match demand
-     - a minimum single-match floor whenever real arena demand exists
-   - arena phase/demand logs now expose:
-     - `matchesNeeded`
-     - `targetTotal`
-     - `matchSize`
-     - current queue/instance counts
-
-### Why this matters
-This restores the intended RTG doctrine for arena as a first-class queue lane:
-
-- one active arena no longer suppresses helper demand for a second simultaneous arena
-- replay spectator shells stop contaminating live queue math
-- stale post-match helpers have a cleaner path to retire because false arena demand is less likely to remain active
-
-### Verification targets
-- queue one arena, enter it, then queue a second arena on another account and confirm a second helper wave is planned
-- confirm replay viewing alone does not create arena helper demand
-- confirm post-arena helper linger count drops once replay shell activity is excluded from live queue accounting
+### Expected result
+- arena helpers should retire more reliably once the lane becomes bot-only residue
+- simultaneous arena demand should size more clearly through `matchesNeeded` / `targetTotal`
+- team-side cleanup should no longer silently ignore alliance-side mismatches
