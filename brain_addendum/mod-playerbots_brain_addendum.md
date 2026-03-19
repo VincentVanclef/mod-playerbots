@@ -263,3 +263,52 @@ Live testing still showed:
 
 ### Expected result
 Cleaner helper retirement, faster exact-role RDF convergence, and fewer busy random-bot accounts held by stalled queue helpers.
+
+## 2026-03-19 — Multi-arena demand scaling + replay spectator isolation
+
+### Problem surface
+Live queue testing showed three linked arena-lane failures:
+
+- only one arena formation would reliably summon helpers, while a second simultaneous arena queue often stalled behind the first
+- replay viewers could remain inside battleground/arena shell state long enough to pollute playerbot arena accounting
+- completed arena helpers could linger online after the queue/match surface should have been considered closed because stale arena demand stayed artificially alive
+
+### Root cause
+The arena scaffolding pass was still effectively sized around a **single match target**:
+
+- `targetTotal = normalizedArenaSize * 2`
+
+That meant RTG could satisfy one arena's worth of bodies while underestimating demand for any second concurrent real-player arena.
+
+At the same time, replay viewers still present as spectator-shell battleground residents. Without an explicit spectator filter in playerbot battleground/arena accounting, replay-owned shell state could count as real arena activity and keep helper-retire conditions noisy.
+
+### Repair applied
+This pass tightens the arena lane in two places:
+
+1. **Replay spectator isolation in playerbot accounting**
+   - real-player battleground/arena accounting now ignores spectator-state players
+   - this prevents replay viewers from contributing to arena queue/instance demand surfaces inside `RandomPlayerbotMgr`
+
+2. **Multi-match arena demand scaffolding**
+   - arena scaffolding no longer assumes one-match total demand
+   - match demand now scales from the largest of:
+     - queued + active arena matches
+     - real-player occupancy converted into whole-match demand
+     - a minimum single-match floor whenever real arena demand exists
+   - arena phase/demand logs now expose:
+     - `matchesNeeded`
+     - `targetTotal`
+     - `matchSize`
+     - current queue/instance counts
+
+### Why this matters
+This restores the intended RTG doctrine for arena as a first-class queue lane:
+
+- one active arena no longer suppresses helper demand for a second simultaneous arena
+- replay spectator shells stop contaminating live queue math
+- stale post-match helpers have a cleaner path to retire because false arena demand is less likely to remain active
+
+### Verification targets
+- queue one arena, enter it, then queue a second arena on another account and confirm a second helper wave is planned
+- confirm replay viewing alone does not create arena helper demand
+- confirm post-arena helper linger count drops once replay shell activity is excluded from live queue accounting

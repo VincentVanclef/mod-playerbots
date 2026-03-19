@@ -522,6 +522,11 @@ namespace
                queueType == uint32(BATTLEGROUND_QUEUE_5v5);
     }
 
+    static bool RTG_ShouldIgnoreReplaySpectator(Player const* player)
+    {
+        return player && player->IsSpectator();
+    }
+
     static uint32 RTG_NormalizeArenaSize(uint32 arenaType, uint32 queueType = 0)
     {
         if (arenaType == 4u)
@@ -664,15 +669,21 @@ namespace
                 uint32 activeQueues = arenaInfo.activeSkirmishArenaQueue + arenaInfo.activeRatedArenaQueue;
                 uint32 activeInstances = arenaInfo.skirmishArenaInstanceCount + arenaInfo.ratedArenaInstanceCount;
                 uint32 normalizedArenaSize = RTG_NormalizeArenaSize(uint32(arenaType), uint32(queueTypeId));
-                uint32 targetTotal = normalizedArenaSize * 2u;
+                uint32 matchSize = normalizedArenaSize * 2u;
 
                 bool hasRealDemand = realPlayers > 0 || activeQueues > 0 || activeInstances > 0;
                 uint32 phase = 0;
                 uint32 need = 0;
+                uint32 matchesNeeded = 0;
+                uint32 targetTotal = 0;
 
                 if (hasRealDemand)
                 {
                     anyRealArenaDemand = true;
+                    uint32 queuedAndActiveMatches = activeQueues + activeInstances;
+                    uint32 playerDrivenMatches = matchSize ? ((realPlayers + matchSize - 1u) / matchSize) : 0u;
+                    matchesNeeded = std::max(1u, std::max(queuedAndActiveMatches, playerDrivenMatches));
+                    targetTotal = matchesNeeded * matchSize;
                     need = targetTotal > currentTotal ? (targetTotal - currentTotal) : 0u;
 
                     if (need)
@@ -687,10 +698,10 @@ namespace
 
                 if (RTG_QueueDebugEnabled() && hasRealDemand)
                 {
-                    LOG_INFO("playerbots", "[RTG][ARENA][PHASE] queue={} bracket={} phase={} targetTotal={} currentTotal={} activeQueues={} activeInstances={}",
-                             uint32(queueTypeId), uint32(bracketId), phase ? phase : 0u, targetTotal, currentTotal, activeQueues, activeInstances);
-                    LOG_INFO("playerbots", "[RTG][ARENA][DEMAND] queue={} bracket={} need={} realPlayers={} botPlayers={} arenaType={} normalizedSize={}",
-                             uint32(queueTypeId), uint32(bracketId), need, realPlayers, botPlayers, uint32(arenaType), normalizedArenaSize);
+                    LOG_INFO("playerbots", "[RTG][ARENA][PHASE] queue={} bracket={} phase={} matchesNeeded={} targetTotal={} currentTotal={} activeQueues={} activeInstances={}",
+                             uint32(queueTypeId), uint32(bracketId), phase ? phase : 0u, matchesNeeded, targetTotal, currentTotal, activeQueues, activeInstances);
+                    LOG_INFO("playerbots", "[RTG][ARENA][DEMAND] queue={} bracket={} need={} realPlayers={} botPlayers={} arenaType={} normalizedSize={} matchSize={}",
+                             uint32(queueTypeId), uint32(bracketId), need, realPlayers, botPlayers, uint32(arenaType), normalizedArenaSize, matchSize);
                 }
             }
         }
@@ -4499,7 +4510,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
     for (Player* player : players)
     {
-        if (!player || IsRandomBot(player))
+        if (!player || IsRandomBot(player) || RTG_ShouldIgnoreReplaySpectator(player))
             continue;
 
         bool inQueue = player->InBattlegroundQueue();
