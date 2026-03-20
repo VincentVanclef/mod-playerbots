@@ -3690,12 +3690,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 auto choosePrimaryFaction = [&](uint32 shellIndex) -> uint32
                 {
-                    if (remainingAlliance && remainingHorde)
-                        return remainingAlliance >= remainingHorde ? uint32(TEAM_ALLIANCE) : uint32(TEAM_HORDE);
-                    if (remainingAlliance)
-                        return uint32(TEAM_ALLIANCE);
-                    if (remainingHorde)
-                        return uint32(TEAM_HORDE);
+                    if (remainingRealAlliance && remainingRealHorde)
+						return remainingRealAlliance >= remainingRealHorde ? uint32(TEAM_ALLIANCE) : uint32(TEAM_HORDE);
+					if (remainingRealAlliance)
+						return uint32(TEAM_ALLIANCE);
+					if (remainingRealHorde)
+						return uint32(TEAM_HORDE);
                     return (shellIndex % 2u == 0u) ? uint32(TEAM_ALLIANCE) : uint32(TEAM_HORDE);
                 };
 
@@ -4183,8 +4183,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} shellSide {} preferredFaction {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, preferredFaction, bucket.level);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} arena_queue={} shellSide={} preferredFaction={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, preferredFaction, bucket.level));
+                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} shellSide {} preferredFaction {} level {}",
+						charInfo.guid, bucket.queueTypeId, bucket.team, bucket.preferredFaction, bucket.level);
+
+					RTG_RuntimeBreadcrumb(fmt::format(
+						"[RTG][ACQUIRE] helper={} arena_queue={} shellSide={} preferredFaction={} level={}",
+						charInfo.guid, bucket.queueTypeId, bucket.team, bucket.preferredFaction, bucket.level));
                     ++rtgBgLogged;
                     --capacity;
                     --remainingCapacity;
