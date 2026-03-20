@@ -8,6 +8,7 @@
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "SpellMgr.h"
+#include "SharedDefines.h"
 
 #include <map>
 

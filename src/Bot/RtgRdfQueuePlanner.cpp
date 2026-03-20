@@ -26,10 +26,10 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
     for (auto const& kv : requests)
     {
         RtgLfgQueueOwnerSnapshot const& req = kv.second;
-        uint32 existingStart = mgr.GetEventValue(req.owner, "rtg_lfg_start");
+        uint32 existingStart = mgr.RTG_GetBotEventValue(req.owner, "rtg_lfg_start");
         uint32 startTs = req.activeDungeon ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (existingStart ? existingStart : now);
-        mgr.SetEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
-        mgr.SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
+        mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
+        mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
 
         uint32 needTank = req.realTank >= 1 ? 0u : 1u;
         uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
@@ -55,13 +55,13 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgLfgMaxBots);
         LOG_INFO("playerbots", "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
             static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
-        mgr.SetEventValue(0, "rtg_lfg_start", globalStart, globalTtl);
-        mgr.SetEventValue(0, "rtg_lfg_need_total", cappedNeed, globalTtl);
+        mgr.RTG_SetBotEventValue(0, "rtg_lfg_start", globalStart, globalTtl);
+        mgr.RTG_SetBotEventValue(0, "rtg_lfg_need_total", cappedNeed, globalTtl);
     }
     else
     {
-        mgr.SetEventValue(0, "rtg_lfg_start", 0, 0);
-        mgr.SetEventValue(0, "rtg_lfg_need_total", 0, 0);
+        mgr.RTG_SetBotEventValue(0, "rtg_lfg_start", 0, 0);
+        mgr.RTG_SetBotEventValue(0, "rtg_lfg_need_total", 0, 0);
     }
 }
 }
