@@ -121,3 +121,28 @@ This follows RTG brain doctrine:
 
 ### Historical accounting
 This was a **declaration/definition drift** failure, not a queue-planner logic failure. Future passes that expose new public manager hooks must confirm the `.cpp` implementation exists before packaging.
+
+
+## 2026-03-20 — Phase 3 acquire-side role enforcement packaging recovery
+
+### Intake reason
+A partial helper-only replacement of `RandomPlayerbotMgr.cpp` was packaged during Phase 3 follow-up work. That replacement began at helper function content instead of preserving the full translation unit, which produced immediate compile failures at file scope (`uint32`, `Player`, `sRandomPlayerbotMgr`, and `lfg::*` all appeared undeclared because the normal includes and surrounding context were missing).
+
+### Root cause
+This was not a logic regression in the RDF role-enforcement work itself. It was a **delivery-shape regression**:
+- a fragment patch was handed back where the user needed a full drop-in source file
+- the fragment started before the manager includes / namespace context
+- subsequent local merges created misleading compile symptoms that looked larger than the underlying issue
+
+### Recovery rule
+For `RandomPlayerbotMgr.cpp`, RTG packaging must return the **full updated file** whenever the modified region sits inside shared helper scope or near high-risk manager glue. Do not return a headerless fragment and expect manual grafting when the active phase is already in compile recovery.
+
+### Stable Phase 3 state being preserved
+The drop-in manager file preserved here keeps the safer, already-integrated RDF acquisition shape:
+- RDF owner buckets compute explicit tank/heal/dps demand
+- role-demand events are emitted with `lfg::PLAYER_ROLE_*`
+- acquisition only logs helpers whose offline spec role matches the requested RDF role
+- assigned / queued counters are incremented role-faithfully so overfill pressure is reduced before queue join
+
+### Historical accounting
+This incident is recorded as a **packaging-form regression**, not a planner-doctrine regression. Future GPT passes should verify that any file handed back for `RandomPlayerbotMgr.cpp` begins with the original copyright block and include list before shipping it.
