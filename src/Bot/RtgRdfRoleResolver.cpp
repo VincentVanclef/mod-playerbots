@@ -38,16 +38,23 @@ uint32 DefaultRoleForClass(uint8 cls)
     return lfg::PLAYER_ROLE_DAMAGE;
 }
 
+// Spec tab indices only:
+// 0 = first tab, 1 = second tab, 2 = third tab
 uint8 DefaultSpecTabForClass(uint8 cls)
 {
     switch (cls)
     {
-        case CLASS_MAGE: return MAGE_TAB_FROST;
-        case CLASS_PALADIN: return PALADIN_TAB_RETRIBUTION;
-        case CLASS_PRIEST: return PRIEST_TAB_HOLY;
-        case CLASS_WARLOCK: return WARLOCK_TAB_DEMONOLOGY;
-        case CLASS_SHAMAN: return SHAMAN_TAB_ELEMENTAL;
-        default: return 0;
+        case CLASS_WARRIOR:      return 0; // Arms
+        case CLASS_PALADIN:      return 2; // Retribution
+        case CLASS_HUNTER:       return 0; // Beast Mastery
+        case CLASS_ROGUE:        return 1; // Combat
+        case CLASS_PRIEST:       return 0; // Discipline
+        case CLASS_DEATH_KNIGHT: return 2; // Unholy
+        case CLASS_SHAMAN:       return 0; // Elemental
+        case CLASS_MAGE:         return 2; // Frost
+        case CLASS_WARLOCK:      return 2; // Destruction
+        case CLASS_DRUID:        return 0; // Balance
+        default:                 return 0;
     }
 }
 
@@ -56,25 +63,37 @@ uint32 RoleForClassSpecTab(uint8 cls, uint8 specTab)
     switch (cls)
     {
         case CLASS_DRUID:
-            if (specTab == DRUID_TAB_RESTORATION)
+            // 0 Balance, 1 Feral, 2 Restoration
+            if (specTab == 2)
                 return lfg::PLAYER_ROLE_HEALER;
-            if (specTab == DRUID_TAB_FERAL)
+            if (specTab == 1)
                 return lfg::PLAYER_ROLE_TANK;
             return lfg::PLAYER_ROLE_DAMAGE;
+
         case CLASS_PALADIN:
-            if (specTab == PALADIN_TAB_HOLY)
+            // 0 Holy, 1 Protection, 2 Retribution
+            if (specTab == 0)
                 return lfg::PLAYER_ROLE_HEALER;
-            if (specTab == PALADIN_TAB_PROTECTION)
+            if (specTab == 1)
                 return lfg::PLAYER_ROLE_TANK;
             return lfg::PLAYER_ROLE_DAMAGE;
+
         case CLASS_PRIEST:
-            return specTab == PRIEST_TAB_SHADOW ? lfg::PLAYER_ROLE_DAMAGE : lfg::PLAYER_ROLE_HEALER;
+            // 0 Discipline, 1 Holy, 2 Shadow
+            return (specTab == 2) ? lfg::PLAYER_ROLE_DAMAGE : lfg::PLAYER_ROLE_HEALER;
+
         case CLASS_SHAMAN:
-            return specTab == SHAMAN_TAB_RESTORATION ? lfg::PLAYER_ROLE_HEALER : lfg::PLAYER_ROLE_DAMAGE;
+            // 0 Elemental, 1 Enhancement, 2 Restoration
+            return (specTab == 2) ? lfg::PLAYER_ROLE_HEALER : lfg::PLAYER_ROLE_DAMAGE;
+
         case CLASS_WARRIOR:
-            return specTab == WARRIOR_TAB_PROTECTION ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+            // 0 Arms, 1 Fury, 2 Protection
+            return (specTab == 2) ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+
         case CLASS_DEATH_KNIGHT:
-            return specTab == DEATH_KNIGHT_TAB_BLOOD ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+            // 0 Blood, 1 Frost, 2 Unholy
+            return (specTab == 0) ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+
         default:
             return lfg::PLAYER_ROLE_DAMAGE;
     }
@@ -94,7 +113,8 @@ bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
     if (!talentTabIds)
         return true;
 
-    std::map<uint8, uint32> tabs = {{0, 0}, {1, 0}, {2, 0}};
+    std::map<uint8, uint32> tabs = { {0, 0}, {1, 0}, {2, 0} };
+
     QueryResult talentResult = CharacterDatabase.Query("SELECT spell, specMask FROM character_talent WHERE guid = {}", guid);
     if (!talentResult)
         return true;
@@ -104,18 +124,21 @@ bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
         Field* fields = talentResult->Fetch();
         uint32 spellId = fields[0].Get<uint32>();
         uint8 specMask = fields[1].Get<uint8>();
+
         if ((activeMask & specMask) == 0)
             continue;
 
         TalentSpellPos const* talentPos = GetTalentSpellPos(spellId);
         if (!talentPos)
             continue;
+
         TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentPos->talent_id);
         if (!talentInfo)
             continue;
 
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
         uint32 rank = spellInfo ? spellInfo->GetRank() : 1u;
+
         if (talentInfo->TalentTab == talentTabIds[0])
             tabs[0] += rank;
         else if (talentInfo->TalentTab == talentTabIds[1])
@@ -129,6 +152,7 @@ bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
 
     specTab = 0;
     uint32 maxPoints = tabs[0];
+
     for (uint8 i = 1; i < 3; ++i)
     {
         if (tabs[i] > maxPoints)
@@ -153,7 +177,7 @@ uint32 GetActualSpecRole(Player* bot)
     if (!bot)
         return lfg::PLAYER_ROLE_DAMAGE;
 
-    return RoleForClassSpecTab(bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+    return RoleForClassSpecTab(bot->getClass(), static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot)));
 }
 
 uint32 NormalizeQueuedRoleMask(uint32 roleMask)
@@ -171,10 +195,10 @@ uint32 TargetLfgRoleCount(uint32 role)
 {
     switch (role)
     {
-        case lfg::PLAYER_ROLE_TANK: return 1u;
+        case lfg::PLAYER_ROLE_TANK:   return 1u;
         case lfg::PLAYER_ROLE_HEALER: return 1u;
         case lfg::PLAYER_ROLE_DAMAGE: return 3u;
-        default: return 0u;
+        default:                      return 0u;
     }
 }
 
