@@ -226,6 +226,8 @@ public:
     {
         SetEventValue(bot, key, value, ttlSeconds, data);
     }
+    void RTG_ClearQueueHelperState(uint32 bot, bool clearLogout = false);
+    bool RTG_RequestQueueHelperLogout(ObjectGuid guid, char const* reason = nullptr, bool clearQueueState = true);
 
 protected:
     void OnBotLoginInternal(Player* const bot) override;

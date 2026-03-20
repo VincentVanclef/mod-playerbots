@@ -296,3 +296,38 @@ The arena scaffolding was still permissive enough to treat non-owner arena activ
 - arena helpers should retire more reliably once the lane becomes bot-only residue
 - simultaneous arena demand should size more clearly through `matchesNeeded` / `targetTotal`
 - team-side cleanup should no longer silently ignore alliance-side mismatches
+
+
+## 2026-03-20 — Queue stabilization checklist pass: explicit helper-state clearing + fast orphan retirement
+
+### Intent
+Tighten the queue-system checklist into direct implementation surfaces so the control plane stops carrying stale helpers after arena/BG/RDF tests.
+
+### Manual checklist executed
+1. **Single helper-state clearing surface**
+   - add a shared `RTG_ClearQueueHelperState` / managed-event clearing path
+   - use it for logout-adjacent queue cleanup instead of scattered partial clears
+
+2. **Safe logout while session is already closing**
+   - if a helper is already in logout/remove state, still clear RTG queue ownership state and remove it from current helper accounting
+   - this prevents controller/account pressure from being held alive by helpers that are technically on the way out
+
+3. **World-idle orphan retirement**
+   - if a BG/arena helper is no longer lifecycle-owned, not in queue, and no longer backed by real demand, mark it for fast safe retirement
+   - emit explicit arena orphan breadcrumbs for that condition
+
+4. **LFG mismatch-join cleanup**
+   - role-mismatch-on-join now uses the shared RTG queue-helper logout path instead of partial local event clearing
+   - this keeps mismatch helpers from lingering online as half-owned queue residue
+
+### Why this matters
+Recent live tests showed three repeated failure signatures:
+- a few helpers could remain online after all queues ended
+- helpers already mid-logout could still hold queue state/account pressure longer than needed
+- RDF role-mismatch joins could clear some state locally but still leave a helper in an unhealthy partial lifecycle
+
+### Expected result
+- fewer lingering helpers after arena/BG/RDF testing
+- more reliable account unbusy behavior during queue collapse
+- faster retirement of world-idle orphan arena/BG helpers
+- cleaner RDF mismatch replacement without online residue

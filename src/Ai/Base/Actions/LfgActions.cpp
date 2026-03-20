@@ -318,12 +318,9 @@ bool LfgJoinAction::JoinLFG()
                 if (actualRole != desiredRole)
                 {
                     LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=logout_mismatch_join", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
-                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "add", 0, 0);
-                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_add_requested", 0, 0);
-                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
-                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_role_ready", 0, 0);
+                    sRandomPlayerbotMgr.RTG_ClearQueueHelperState(botId);
                     rtgNextJoinAttempt.erase(botId);
-                    sRandomPlayerbotMgr.LogoutPlayerBot(bot->GetGUID());
+                    sRandomPlayerbotMgr.RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_role_mismatch_join");
                     return false;
                 }
 

@@ -602,6 +602,24 @@ namespace
         return false;
     }
 
+
+    static void RTG_ClearManagedQueueEvents(RandomPlayerbotMgr& mgr, uint32 botId, bool clearLogoutEvent = false)
+    {
+        mgr.RTG_SetBotEventValue(botId, "add", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_add_requested", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_lfg_role_ready", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_bg_pending", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_bg_queue_grace", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_bg_queue_retry", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_bg_was_in_instance", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_bg_completed_instance", 0, 0);
+        mgr.RTG_SetBotEventValue(botId, "rtg_dungeon_active", 0, 0);
+        if (clearLogoutEvent)
+            mgr.RTG_SetBotEventValue(botId, "logout", 0, 0);
+    }
+
     static uint32 RTG_CountPendingHelpersForLane(char const* laneName)
     {
         uint32 count = 0;
@@ -1122,6 +1140,16 @@ uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
     return count;
 }
 
+void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 botId, bool clearLogout)
+{
+    RTG_ClearManagedQueueEvents(*this, botId, clearLogout);
+}
+
+bool RandomPlayerbotMgr::RTG_RequestQueueHelperLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
+{
+    return RTG_RequestSafeBotLogout(guid, reason, clearQueueState);
+}
+
 bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
 {
     Player* bot = GetPlayerBot(guid);
@@ -1138,6 +1166,14 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
 
     if (session->isLogingOut() || bot->IsDuringRemoveFromWorld())
     {
+        if (clearQueueState)
+        {
+            RTG_ClearManagedQueueEvents(*this, botId);
+            currentBots.remove(botId);
+            if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                RTG::RtgQueueLedger::Instance().Remove(botId);
+        }
+
         SetEventValue(botId, "logout", 1, 60);
         return false;
     }
@@ -1161,18 +1197,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     }
 
     if (clearQueueState)
-    {
-        SetEventValue(botId, "add", 0, 0);
-        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-        SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
-        SetEventValue(botId, "rtg_bg_pending", 0, 0);
-        SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-        SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-        SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-        SetEventValue(botId, "rtg_bg_was_in_instance", 0, 0);
-        SetEventValue(botId, "rtg_bg_completed_instance", 0, 0);
-        SetEventValue(botId, "rtg_add_requested", 0, 0);
-    }
+        RTG_ClearManagedQueueEvents(*this, botId);
 
     currentBots.remove(botId);
     RTG_PrepareBotForLogout(bot);
@@ -2210,6 +2235,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                         SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                         SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                     }
+                    else if (queueHasRealDemand)
+                    {
+                        SetEventValue(botId, "rtg_bg_retire_when_safe", 1, RTG_GetQueueRetryWindowSeconds() + 15, addData);
+                    }
                 }
             }
 
@@ -2254,6 +2283,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             bool retireWhenSafe = GetEventValue(botId, "rtg_bg_retire_when_safe") != 0;
             bool outOfBgState = !RTG_IsBgLifecycleOwned(bot, desiredQueueType);
+            bool orphanedWorldHelper = outOfBgState && !inQueueState && !lifecycleOwned && !queueHasRealDemand;
+            if (orphanedWorldHelper)
+            {
+                SetEventValue(botId, "rtg_bg_retire_when_safe", 1, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 10), addData);
+                retireWhenSafe = true;
+                if (RTG_IsArenaQueueType(desiredQueueType))
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ORPHAN] helper={} queue={} bracket={} desiredTeam={} actualTeam={} reason=world_idle_without_owner", botId, desiredQueueType, queueBracketId, desiredTeam, bot->GetTeamId()));
+            }
 
             if (outOfBgState && (retireWhenSafe || noLongerNeeded))
             {
@@ -5092,10 +5129,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner) && RTG_IsOwnerInBattlegroundMap(desiredOwner))
         {
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_map", bot, desiredOwner));
-            SetEventValue(bot, "add", 0, 0);
-            SetEventValue(bot, "logout", 0, 0);
-            SetEventValue(bot, "rtg_add_requested", 0, 0);
-            SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+            RTG_ClearManagedQueueEvents(*this, bot, true);
             currentBots.remove(bot);
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                 RTG::RtgQueueLedger::Instance().Remove(bot);
@@ -5108,13 +5142,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
             if (RTG_ShouldCancelPendingQueueAdd(addData, cancelReason))
             {
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][CANCEL] helper={} reason={} add='{}'", bot, cancelReason, addData));
-                SetEventValue(bot, "add", 0, 0);
-                SetEventValue(bot, "logout", 0, 0);
-                SetEventValue(bot, "rtg_add_requested", 0, 0);
-                SetEventValue(bot, "rtg_lfg_pending", 0, 0);
-                SetEventValue(bot, "rtg_bg_pending", 0, 0);
-                SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
-                SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
+                RTG_ClearManagedQueueEvents(*this, bot, true);
                 currentBots.remove(bot);
                 if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                     RTG::RtgQueueLedger::Instance().Remove(bot);
@@ -5127,13 +5155,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
             if (requestTs && nowTs > requestTs && (nowTs - requestTs) >= stallThreshold)
             {
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][STALL] helper={} waited={} add='{}'", bot, (nowTs - requestTs), addData));
-                SetEventValue(bot, "add", 0, 0);
-                SetEventValue(bot, "logout", 0, 0);
-                SetEventValue(bot, "rtg_add_requested", 0, 0);
-                SetEventValue(bot, "rtg_lfg_pending", 0, 0);
-                SetEventValue(bot, "rtg_bg_pending", 0, 0);
-                SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
-                SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
+                RTG_ClearManagedQueueEvents(*this, bot, true);
                 currentBots.remove(bot);
                 if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                     RTG::RtgQueueLedger::Instance().Remove(bot);
