@@ -2169,7 +2169,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             uint32 desiredTeam = 0;
             uint32 desiredLevel = 0;
             uint32 desiredQueueType = 0;
-            if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
+            uint32 arenaFactionHint = 0;
+            if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType, &arenaFactionHint))
                 continue;
 
             uint32 queueNeed = 0;
@@ -2179,14 +2180,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             char const* laneName = "bg";
             bool queueHasRealDemand = RTG_GetQueueRequestDemandState(addData, resolvedQueueType, queueBracketId, queueNeed, queuePhase, laneName) && (queueNeed != 0 || queuePhase != 0);
 
-            bool wrongTeam = bot->GetTeamId() != desiredTeam;
+            uint32 expectedArenaFaction = arenaFactionHint ? arenaFactionHint : desiredTeam;
+            bool wrongTeam = bot->GetTeamId() != (RTG_IsArenaQueueType(desiredQueueType) ? expectedArenaFaction : desiredTeam);
             bool noLongerNeeded = !queueHasRealDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
             if (RTG_QueueDebugEnabled() && RTG_IsArenaQueueType(desiredQueueType))
             {
-                LOG_INFO("playerbots", "[RTG][ARENA][OWNER] helper={} queue={} bracket={} desiredTeam={} actualTeam={} queueHasRealDemand={} lifecycleOwned={} inQueue={} inWorld={} ",
-                         botId, desiredQueueType, queueBracketId, desiredTeam, bot->GetTeamId(), queueHasRealDemand ? 1u : 0u, lifecycleOwned ? 1u : 0u,
+                LOG_INFO("playerbots", "[RTG][ARENA][OWNER] helper={} queue={} bracket={} desiredSide={} preferredFaction={} actualTeam={} queueHasRealDemand={} lifecycleOwned={} inQueue={} inWorld={} ",
+                         botId, desiredQueueType, queueBracketId, desiredTeam, expectedArenaFaction, bot->GetTeamId(), queueHasRealDemand ? 1u : 0u, lifecycleOwned ? 1u : 0u,
                          (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) || bot->IsInvitedForBattlegroundInstance()) ? 1u : 0u,
                          bot->IsInWorld() ? 1u : 0u);
             }
@@ -3348,7 +3350,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             struct RtgArenaBucket
             {
                 uint32 queueTypeId = 0;
-                uint32 team = 0;
+                uint32 team = 0;              // logical shell side (0/1)
+                uint32 preferredFaction = 0;  // actual faction to log in for this shell side
                 uint32 level = 0;
                 uint32 bracketId = 0;
                 uint32 arenaSize = 0;
@@ -3365,9 +3368,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             std::map<std::pair<uint32, uint32>, BattlegroundBracketId> bgBrackets;
             std::map<std::pair<uint32, uint32>, uint32> bgTeamSizes;
             std::map<std::pair<uint32, uint32>, std::vector<uint32>> bgAdaptiveLevels;
-            std::map<std::tuple<uint32, uint32, uint32>, RtgArenaBucket> arenaBuckets;
+            std::map<std::tuple<uint32, uint32, uint32, uint32>, RtgArenaBucket> arenaBuckets;
             std::map<std::pair<uint32, uint32>, uint32> arenaSizes;
-            std::map<std::tuple<uint32, uint32, uint32>, uint32> arenaCurrentTeamCounts;
+            std::map<std::tuple<uint32, uint32, uint32>, uint32> arenaCurrentFactionCounts;
+            std::map<std::tuple<uint32, uint32, uint32>, uint32> arenaRealFactionCounts;
             std::map<std::pair<uint32, uint32>, std::vector<uint32>> arenaAdaptiveLevels;
 
             for (Player* player : players)
@@ -3450,8 +3454,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bool activeState = player->InArena() || (player->GetMap() && player->GetMap()->IsBattleArena());
                         if (queueState || activeState)
                         {
-                            auto arenaTeamKey = std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()), static_cast<uint32>(player->GetTeamId()));
-                            ++arenaCurrentTeamCounts[arenaTeamKey];
+                            auto arenaFactionKey = std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()), static_cast<uint32>(player->GetTeamId()));
+                            ++arenaCurrentFactionCounts[arenaFactionKey];
+                            if (!IsRandomBot(player))
+                                ++arenaRealFactionCounts[arenaFactionKey];
                         }
                     }
                     else
@@ -3541,19 +3547,23 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     if (isArenaQueue)
                     {
-                        auto key = std::make_tuple(desiredQueueType, dataTeam, dataLevel);
+                        uint32 arenaFactionHint = 0;
+                        RTG::ParseBgAddData(addData, dataTeam, dataLevel, desiredQueueType, &arenaFactionHint);
+                        uint32 preferredFaction = arenaFactionHint ? arenaFactionHint : dataTeam;
+                        auto key = std::make_tuple(desiredQueueType, dataTeam, preferredFaction, dataLevel);
                         auto it = arenaBuckets.find(key);
                         if (it == arenaBuckets.end())
                         {
                             RtgArenaBucket bucket;
                             bucket.queueTypeId = desiredQueueType;
                             bucket.team = dataTeam;
+                            bucket.preferredFaction = preferredFaction;
                             bucket.level = dataLevel;
                             bucket.bracketId = bracketId;
                             bucket.arenaSize = RTG_NormalizeArenaSize(uint32(BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(desiredQueueType))), desiredQueueType);
-                            bucket.realQueued = arenaCurrentTeamCounts[std::make_tuple(desiredQueueType, uint32(bracketId), dataTeam)];
+                            bucket.realQueued = arenaRealFactionCounts[std::make_tuple(desiredQueueType, uint32(bracketId), preferredFaction)];
                             bucket.phase = GetEventValue(0, RTG_MakeArenaPhaseKey(desiredQueueType, uint32(bracketId)));
-                            bucket.currentTeamCount = arenaCurrentTeamCounts[std::make_tuple(desiredQueueType, uint32(bracketId), dataTeam)];
+                            bucket.currentTeamCount = arenaCurrentFactionCounts[std::make_tuple(desiredQueueType, uint32(bracketId), preferredFaction)];
                             bucket.need = 0;
                             it = arenaBuckets.emplace(key, bucket).first;
                         }
@@ -3650,7 +3660,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
-            std::map<std::tuple<uint32, uint32, uint32>, RtgArenaBucket> adaptiveArenaBuckets;
+            std::map<std::tuple<uint32, uint32, uint32, uint32>, RtgArenaBucket> adaptiveArenaBuckets;
             for (auto const& queuePair : arenaAdaptiveLevels)
             {
                 uint32 queueTypeId = queuePair.first.first;
@@ -3662,73 +3672,138 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
 
                 RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(queuePair.second, sPlayerbotAIConfig.rtgQueueBotLevel);
+                uint32 realAlliance = arenaRealFactionCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_ALLIANCE))];
+                uint32 realHorde = arenaRealFactionCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_HORDE))];
+                uint32 currentAlliance = arenaCurrentFactionCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_ALLIANCE))];
+                uint32 currentHorde = arenaCurrentFactionCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_HORDE))];
+                uint32 totalCurrent = currentAlliance + currentHorde;
+                uint32 playersPerMatch = arenaSize * 2u;
+                uint32 targetTotal = totalCurrent + plannerNeed;
+                uint32 matchesNeeded = playersPerMatch ? ((targetTotal + playersPerMatch - 1u) / playersPerMatch) : 0u;
+                if (!matchesNeeded)
+                    matchesNeeded = 1u;
 
-                uint32 currentAlliance = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_ALLIANCE))];
-                uint32 currentHorde = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_HORDE))];
-                uint32 needAlliance = arenaSize > currentAlliance ? (arenaSize - currentAlliance) : 0u;
-                uint32 needHorde = arenaSize > currentHorde ? (arenaSize - currentHorde) : 0u;
-                uint32 desiredTotal = needAlliance + needHorde;
+                uint32 remainingRealAlliance = realAlliance;
+                uint32 remainingRealHorde = realHorde;
+                uint32 availableAlliance = currentAlliance;
+                uint32 availableHorde = currentHorde;
 
-                if (desiredTotal < plannerNeed)
+                auto choosePrimaryFaction = [&](uint32 shellIndex) -> uint32
                 {
-                    uint32 extra = plannerNeed - desiredTotal;
-                    while (extra--)
+                    if (remainingAlliance && remainingHorde)
+                        return remainingAlliance >= remainingHorde ? uint32(TEAM_ALLIANCE) : uint32(TEAM_HORDE);
+                    if (remainingAlliance)
+                        return uint32(TEAM_ALLIANCE);
+                    if (remainingHorde)
+                        return uint32(TEAM_HORDE);
+                    return (shellIndex % 2u == 0u) ? uint32(TEAM_ALLIANCE) : uint32(TEAM_HORDE);
+                };
+
+                auto chooseOpponentFaction = [&](uint32 primaryFaction) -> uint32
+                {
+                    uint32 oppositeFaction = primaryFaction == uint32(TEAM_ALLIANCE) ? uint32(TEAM_HORDE) : uint32(TEAM_ALLIANCE);
+                    uint32& remainingOpposite = oppositeFaction == uint32(TEAM_ALLIANCE) ? remainingRealAlliance : remainingRealHorde;
+                    if (remainingOpposite)
+                        return oppositeFaction;
+                    return primaryFaction;
+                };
+
+                for (uint32 shellIndex = 0; shellIndex < matchesNeeded; ++shellIndex)
+                {
+                    uint32 side0Faction = choosePrimaryFaction(shellIndex);
+                    uint32 side1Faction = chooseOpponentFaction(side0Faction);
+
+                    uint32 consume0 = 0;
+                    uint32 consume1 = 0;
+                    if (side0Faction == uint32(TEAM_ALLIANCE))
                     {
-                        if (currentAlliance <= currentHorde)
-                        {
-                            ++needAlliance;
-                            ++currentAlliance;
-                        }
-                        else
-                        {
-                            ++needHorde;
-                            ++currentHorde;
-                        }
+                        consume0 = std::min<uint32>(arenaSize, remainingRealAlliance);
+                        remainingRealAlliance -= consume0;
                     }
-                }
-                else if (desiredTotal > plannerNeed)
-                {
-                    while (desiredTotal > plannerNeed)
+                    else
                     {
-                        if (needAlliance && currentAlliance >= currentHorde)
-                        {
-                            --needAlliance;
-                            --desiredTotal;
-                            continue;
-                        }
-                        if (needHorde)
-                        {
-                            --needHorde;
-                            --desiredTotal;
-                            continue;
-                        }
-                        break;
+                        consume0 = std::min<uint32>(arenaSize, remainingRealHorde);
+                        remainingRealHorde -= consume0;
                     }
-                }
 
-                for (uint32 teamId : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
-                {
-                    uint32 teamNeed = teamId == uint32(TEAM_ALLIANCE) ? needAlliance : needHorde;
-                    if (!teamNeed)
-                        continue;
-
-                    std::unordered_map<uint32, uint32> levelCounts;
-                    for (uint32 i = 0; i < teamNeed; ++i)
-                        ++levelCounts[RTG_ChooseAdaptiveQueueBotLevel(window, sPlayerbotAIConfig.rtgQueueBotLevel)];
-
-                    for (auto const& lc : levelCounts)
+                    if (side1Faction == uint32(TEAM_ALLIANCE))
                     {
-                        RtgArenaBucket bucket;
-                        bucket.queueTypeId = queueTypeId;
-                        bucket.team = teamId;
-                        bucket.level = lc.first;
-                        bucket.bracketId = bracketId;
-                        bucket.arenaSize = arenaSize;
-                        bucket.realQueued = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, teamId)];
-                        bucket.currentTeamCount = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, teamId)];
-                        bucket.phase = phase;
-                        bucket.need = lc.second;
-                        adaptiveArenaBuckets[std::make_tuple(queueTypeId, teamId, lc.first)] = bucket;
+                        consume1 = std::min<uint32>(arenaSize, remainingRealAlliance);
+                        remainingRealAlliance -= consume1;
+                    }
+                    else
+                    {
+                        consume1 = std::min<uint32>(arenaSize, remainingRealHorde);
+                        remainingRealHorde -= consume1;
+                    }
+
+                    uint32 supply0 = 0;
+                    uint32 supply1 = 0;
+                    if (side0Faction == uint32(TEAM_ALLIANCE))
+                    {
+                        supply0 = std::min<uint32>(arenaSize, availableAlliance);
+                        availableAlliance -= supply0;
+                    }
+                    else
+                    {
+                        supply0 = std::min<uint32>(arenaSize, availableHorde);
+                        availableHorde -= supply0;
+                    }
+
+                    if (side1Faction == uint32(TEAM_ALLIANCE))
+                    {
+                        supply1 = std::min<uint32>(arenaSize, availableAlliance);
+                        availableAlliance -= supply1;
+                    }
+                    else
+                    {
+                        supply1 = std::min<uint32>(arenaSize, availableHorde);
+                        availableHorde -= supply1;
+                    }
+
+                    uint32 need0 = arenaSize > supply0 ? (arenaSize - supply0) : 0u;
+                    uint32 need1 = arenaSize > supply1 ? (arenaSize - supply1) : 0u;
+
+                    if (RTG_QueueDebugEnabled())
+                    {
+                        LOG_INFO("playerbots", "[RTG][ARENA][PLAN] queue={} bracket={} shell={} side=0 preferredFaction={} realAnchors={} currentSupply={} need={} arenaSize={} matchesNeeded={}",
+                                 queueTypeId, bracketId, shellIndex, side0Faction, consume0, supply0, need0, arenaSize, matchesNeeded);
+                        LOG_INFO("playerbots", "[RTG][ARENA][PLAN] queue={} bracket={} shell={} side=1 preferredFaction={} realAnchors={} currentSupply={} need={} arenaSize={} matchesNeeded={}",
+                                 queueTypeId, bracketId, shellIndex, side1Faction, consume1, supply1, need1, arenaSize, matchesNeeded);
+                    }
+
+                    for (auto const& sideEntry : {std::make_pair(uint32(0), std::make_pair(side0Faction, need0)), std::make_pair(uint32(1), std::make_pair(side1Faction, need1))})
+                    {
+                        uint32 desiredSide = sideEntry.first;
+                        uint32 preferredFaction = sideEntry.second.first;
+                        uint32 teamNeed = sideEntry.second.second;
+                        if (!teamNeed)
+                            continue;
+
+                        std::unordered_map<uint32, uint32> levelCounts;
+                        for (uint32 i = 0; i < teamNeed; ++i)
+                            ++levelCounts[RTG_ChooseAdaptiveQueueBotLevel(window, sPlayerbotAIConfig.rtgQueueBotLevel)];
+
+                        for (auto const& lc : levelCounts)
+                        {
+                            RtgArenaBucket bucket;
+                            bucket.queueTypeId = queueTypeId;
+                            bucket.team = desiredSide;
+                            bucket.preferredFaction = preferredFaction;
+                            bucket.level = lc.first;
+                            bucket.bracketId = bracketId;
+                            bucket.arenaSize = arenaSize;
+                            bucket.realQueued = preferredFaction == uint32(TEAM_ALLIANCE) ? realAlliance : realHorde;
+                            bucket.currentTeamCount = preferredFaction == uint32(TEAM_ALLIANCE) ? currentAlliance : currentHorde;
+                            bucket.phase = phase;
+                            bucket.need = lc.second;
+                            auto key = std::make_tuple(queueTypeId, desiredSide, preferredFaction, lc.first);
+                            auto it = adaptiveArenaBuckets.find(key);
+                            if (it == adaptiveArenaBuckets.end())
+                                adaptiveArenaBuckets.emplace(key, bucket);
+                            else
+                                it->second.need += bucket.need;
+                        }
                     }
                 }
             }
@@ -3749,6 +3824,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         it->second.realQueued = kv.second.realQueued;
                     if (!it->second.phase)
                         it->second.phase = kv.second.phase;
+                    if (!it->second.preferredFaction)
+                        it->second.preferredFaction = kv.second.preferredFaction;
                 }
             }
 
@@ -4106,8 +4183,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
+                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} shellSide {} preferredFaction {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, preferredFaction, bucket.level);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} arena_queue={} shellSide={} preferredFaction={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, preferredFaction, bucket.level));
                     ++rtgBgLogged;
                     --capacity;
                     --remainingCapacity;
@@ -4158,20 +4235,21 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!capacity)
                     return false;
 
-                std::string addData = RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
+                uint32 preferredFaction = bucket.preferredFaction ? bucket.preferredFaction : bucket.team;
+                std::string addData = RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId, preferredFaction);
                 for (auto const& charInfo : allCharacters)
                 {
                     if (!capacity)
                         return false;
 
                     uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
-                    if (charTeam != bucket.team)
+                    if (charTeam != preferredFaction)
                         continue;
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} arena_queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
+                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} shellSide {} preferredFaction {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, preferredFaction, bucket.level);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} arena_queue={} shellSide={} preferredFaction={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, preferredFaction, bucket.level));
                     ++rtgArenaLogged;
                     --capacity;
                     --remainingCapacity;
@@ -6897,8 +6975,12 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_was_in_instance", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_completed_instance", 0, 0);
         }
-        else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
+        else
         {
+            uint32 arenaFactionHint = 0;
+            if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType, &arenaFactionHint))
+                return;
+
             RTG_ApplyQueueHelperLoginProfile(bot, desiredLevel, RTG_IsArenaQueueType(desiredQueueType) ? "arena" : "bg");
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
@@ -6920,21 +7002,24 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                     RTG::RecordHelperReservation(bot, BattlegroundQueueTypeId(desiredQueueType), bracketId, TeamId(desiredTeam),
                                                  "event-driven battleground helper login", RTG::RtgHelperPurpose::StarterFill);
                     if (RTG_QueueOwnershipDebugEnabled())
-                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} reserved queue={} bracket={} desiredTeam={} actualTeam={}", bot->GetGUID().GetCounter(), desiredQueueType, uint32(bracketId), desiredTeam, bot->GetTeamId());
+                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} reserved queue={} bracket={} desiredSide={} preferredFaction={} actualTeam={}",
+                                 bot->GetGUID().GetCounter(), desiredQueueType, uint32(bracketId), desiredTeam,
+                                 arenaFactionHint ? arenaFactionHint : desiredTeam, bot->GetTeamId());
                 }
             }
 
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN] helper={} queue={} desiredTeam={} actualTeam={} level={}",
-                bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, bot->GetTeamId(), bot->GetLevel()));
+            uint32 expectedArenaFaction = arenaFactionHint ? arenaFactionHint : desiredTeam;
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN] helper={} queue={} desiredSide={} preferredFaction={} actualTeam={} level={}",
+                bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, expectedArenaFaction, bot->GetTeamId(), bot->GetLevel()));
 
-            if (RTG_IsArenaQueueType(desiredQueueType) && RTG_IsCoreArenaQueueType(desiredQueueType) && uint32(bot->GetTeamId()) != desiredTeam)
+            if (RTG_IsArenaQueueType(desiredQueueType) && RTG_IsCoreArenaQueueType(desiredQueueType) && uint32(bot->GetTeamId()) != expectedArenaFaction)
             {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ABANDON] helper={} queue={} reason=team_mismatch desiredTeam={} actualTeam={}",
-                    bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, bot->GetTeamId()));
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ABANDON] helper={} queue={} reason=faction_mismatch desiredSide={} preferredFaction={} actualTeam={}",
+                    bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, expectedArenaFaction, bot->GetTeamId()));
                 SetEventValue(bot->GetGUID().GetCounter(), "add", 0, 0);
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_grace", 0, 0);
-                RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_arena_team_mismatch");
+                RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_arena_faction_mismatch");
             }
             else
             {

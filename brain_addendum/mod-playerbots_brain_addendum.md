@@ -331,3 +331,48 @@ Recent live tests showed three repeated failure signatures:
 - more reliable account unbusy behavior during queue collapse
 - faster retirement of world-idle orphan arena/BG helpers
 - cleaner RDF mismatch replacement without online residue
+
+## 2026-03-20 — Arena shell planner phase 2: shell-side vs faction-side normalization
+
+### Summary
+Implemented the next arena planner pass so arena helper acquisition no longer treats shell side and character faction as the same concept.
+
+### Problem surface
+Live arena testing showed three recurring issues:
+- multi-arena pressure could still collapse into one muddy lane because helper planning only reasoned in raw faction totals
+- same-faction/skirmish compatibility could not be expressed cleanly because `desiredTeam` was doubling as both queue shell side and actual bot faction
+- helper logs told us queue side, but not the faction the helper was intentionally selected to represent
+
+### Root cause
+Arena queue metadata only had one practical team field in use at runtime. That made the lane blur together:
+- **queue shell side** (logical 0/1 side for the arena fill contract)
+- **actual bot faction** (Alliance/Horde character needed to keep real-player compatibility intact)
+
+As long as those two concepts were fused, multi-arena behavior and same-faction shell construction stayed brittle.
+
+### Repair
+This pass separates those concepts in the planner and in arena helper login metadata:
+- arena acquisition buckets now track both:
+  - `team` = logical shell side
+  - `preferredFaction` = actual faction to log in for that shell side
+- arena add-data now uses the 4th `rtg_bg` field as an arena-only faction hint for helper login / cleanup
+- arena cleanup-side validation now checks the helper against `preferredFaction` instead of blindly comparing actual faction to shell side
+- adaptive arena planning now emits shell-oriented `[RTG][ARENA][PLAN]` logs so each shell shows:
+  - queue
+  - bracket
+  - shell index
+  - side
+  - preferred faction
+  - real anchors
+  - current supply
+  - computed need
+- arena acquisition logs now expose both shell side and preferred faction so future evidence reads can tell whether the planner chose the correct kind of helper
+
+### Intended benefit
+- make arena planning easier to reason about when more than one arena should form at once
+- stop shell-side and faction-side from poisoning each other in logs and helper admission
+- keep real-player-compatible faction helpers on the owner's side while preserving room for same-faction shell construction on the opposing side
+
+### Files modified in this revision
+- `src/Bot/RandomPlayerbotMgr.cpp`
+- `brain_addendum/mod-playerbots_brain_addendum.md`
