@@ -4183,12 +4183,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} shellSide {} preferredFaction {} level {}",
-						charInfo.guid, bucket.queueTypeId, bucket.team, bucket.preferredFaction, bucket.level);
+                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} shellSide {} level {}",
+						charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
 
 					RTG_RuntimeBreadcrumb(fmt::format(
-						"[RTG][ACQUIRE] helper={} arena_queue={} shellSide={} preferredFaction={} level={}",
-						charInfo.guid, bucket.queueTypeId, bucket.team, bucket.preferredFaction, bucket.level));
+						"[RTG][ACQUIRE] helper={} arena_queue={} shellSide={} level={}",
+						charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
                     ++rtgBgLogged;
                     --capacity;
                     --remainingCapacity;
