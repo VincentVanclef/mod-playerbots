@@ -298,11 +298,11 @@ namespace
     {
         switch (role)
         {
-            case lfg::PLAYER_ROLE_TANK:
+            case PLAYER_ROLE_TANK:
                 return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_DEATH_KNIGHT;
-            case lfg::PLAYER_ROLE_HEALER:
+            case PLAYER_ROLE_HEALER:
                 return cls == CLASS_PRIEST || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_SHAMAN;
-            case lfg::PLAYER_ROLE_DAMAGE:
+            case PLAYER_ROLE_DAMAGE:
                 return true;
             default:
                 return false;
@@ -352,11 +352,11 @@ namespace
     static uint32 RTG_GetNextRdfDesiredRole(RandomPlayerbotMgr& mgr, uint32 ownerGuid)
     {
         if (mgr.RTG_GetBotEventValue(ownerGuid, "rtg_lfg_need_tank") > 0)
-            return lfg::PLAYER_ROLE_TANK;
+            return PLAYER_ROLE_TANK;
         if (mgr.RTG_GetBotEventValue(ownerGuid, "rtg_lfg_need_heal") > 0)
-            return lfg::PLAYER_ROLE_HEALER;
+            return PLAYER_ROLE_HEALER;
         if (mgr.RTG_GetBotEventValue(ownerGuid, "rtg_lfg_need_dps") > 0)
-            return lfg::PLAYER_ROLE_DAMAGE;
+            return PLAYER_ROLE_DAMAGE;
         return 0u;
     }
 
@@ -365,9 +365,9 @@ namespace
         char const* key = nullptr;
         switch (desiredRole)
         {
-            case lfg::PLAYER_ROLE_TANK:   key = "rtg_lfg_need_tank"; break;
-            case lfg::PLAYER_ROLE_HEALER: key = "rtg_lfg_need_heal"; break;
-            case lfg::PLAYER_ROLE_DAMAGE: key = "rtg_lfg_need_dps"; break;
+            case PLAYER_ROLE_TANK:   key = "rtg_lfg_need_tank"; break;
+            case PLAYER_ROLE_HEALER: key = "rtg_lfg_need_heal"; break;
+            case PLAYER_ROLE_DAMAGE: key = "rtg_lfg_need_dps"; break;
             default: return;
         }
 
@@ -385,32 +385,32 @@ namespace
         mgr.RTG_SetBotEventValue(ownerGuid, "rtg_lfg_need_dps", 0, 0, "");
     }
 
-    static uint32 RTG_GetBucketNeedForRole(RtgLfgBucket const& bucket, uint32 role)
-    {
-        switch (role)
-        {
-            case lfg::PLAYER_ROLE_TANK:
-            {
-                uint32 have = bucket.realTank + bucket.queuedTank + bucket.assignedTank;
-                uint32 want = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
-                return want > have ? (want - have) : 0u;
-            }
-            case lfg::PLAYER_ROLE_HEALER:
-            {
-                uint32 have = bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal;
-                uint32 want = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
-                return want > have ? (want - have) : 0u;
-            }
-            case lfg::PLAYER_ROLE_DAMAGE:
-            {
-                uint32 have = bucket.realDps + bucket.queuedDps + bucket.assignedDps;
-                uint32 want = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
-                return want > have ? (want - have) : 0u;
-            }
-            default:
-                return 0u;
-        }
-    }
+    auto getBucketNeedForRole = [&](RtgLfgBucket const& bucket, uint32 role) -> uint32
+	{
+		switch (role)
+		{
+			case PLAYER_ROLE_TANK:
+			{
+				uint32 have = bucket.realTank + bucket.queuedTank + bucket.assignedTank;
+				uint32 want = RTG_TargetLfgRoleCount(PLAYER_ROLE_TANK);
+				return want > have ? (want - have) : 0u;
+			}
+			case PLAYER_ROLE_HEALER:
+			{
+				uint32 have = bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal;
+				uint32 want = RTG_TargetLfgRoleCount(PLAYER_ROLE_HEALER);
+				return want > have ? (want - have) : 0u;
+			}
+			case PLAYER_ROLE_DAMAGE:
+			{
+				uint32 have = bucket.realDps + bucket.queuedDps + bucket.assignedDps;
+				uint32 want = RTG_TargetLfgRoleCount(PLAYER_ROLE_DAMAGE);
+				return want > have ? (want - have) : 0u;
+			}
+			default:
+				return 0u;
+		}
+	};
 
     static uint32 RTG_ActualRoleForBot(Player* bot)
     {
@@ -3367,9 +3367,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!role)
                         role = RTG_DefaultRoleForClass(player->getClass());
 
-                    if (role == lfg::PLAYER_ROLE_TANK)
+                    if (role == PLAYER_ROLE_TANK)
                         ++bucket.realTank;
-                    else if (role == lfg::PLAYER_ROLE_HEALER)
+                    else if (role == PLAYER_ROLE_HEALER)
                         ++bucket.realHeal;
                     else
                         ++bucket.realDps;
@@ -3454,7 +3454,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (it == lfgBuckets.end())
                         continue;
 
-                    uint32 roleToCount = desiredRole ? desiredRole : lfg::PLAYER_ROLE_DAMAGE;
+                    uint32 roleToCount = desiredRole ? desiredRole : PLAYER_ROLE_DAMAGE;
                     bool countsInLfgState = false;
                     if (managedBot && managedBot->IsInWorld())
                     {
@@ -3464,18 +3464,18 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     if (countsInLfgState)
                     {
-                        if (roleToCount == lfg::PLAYER_ROLE_TANK)
+                        if (roleToCount == PLAYER_ROLE_TANK)
                             ++it->second.queuedTank;
-                        else if (roleToCount == lfg::PLAYER_ROLE_HEALER)
+                        else if (roleToCount == PLAYER_ROLE_HEALER)
                             ++it->second.queuedHeal;
                         else
                             ++it->second.queuedDps;
                     }
                     else
                     {
-                        if (roleToCount == lfg::PLAYER_ROLE_TANK)
+                        if (roleToCount == PLAYER_ROLE_TANK)
                             ++it->second.assignedTank;
-                        else if (roleToCount == lfg::PLAYER_ROLE_HEALER)
+                        else if (roleToCount == PLAYER_ROLE_HEALER)
                             ++it->second.assignedHeal;
                         else
                             ++it->second.assignedDps;
@@ -3730,11 +3730,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
                 }
 
-                uint32 needTank = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
+                uint32 needTank = RTG_TargetLfgRoleCount(PLAYER_ROLE_TANK);
                 needTank = needTank > (bucket.realTank + bucket.queuedTank + bucket.assignedTank) ? (needTank - (bucket.realTank + bucket.queuedTank + bucket.assignedTank)) : 0u;
-                uint32 needHeal = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
+                uint32 needHeal = RTG_TargetLfgRoleCount(PLAYER_ROLE_HEALER);
                 needHeal = needHeal > (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal) ? (needHeal - (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal)) : 0u;
-                uint32 needDps = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
+                uint32 needDps = RTG_TargetLfgRoleCount(PLAYER_ROLE_DAMAGE);
                 needDps = needDps > (bucket.realDps + bucket.queuedDps + bucket.assignedDps) ? (needDps - (bucket.realDps + bucket.queuedDps + bucket.assignedDps)) : 0u;
                 bucket.need = needTank + needHeal + needDps;
             }
@@ -4000,9 +4000,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     ++rtgLfgLogged;
                     --capacity;
                     --remainingCapacity;
-                    if (desiredRole == lfg::PLAYER_ROLE_TANK)
+                    if (desiredRole == PLAYER_ROLE_TANK)
                         ++bucket.assignedTank;
-                    else if (desiredRole == lfg::PLAYER_ROLE_HEALER)
+                    else if (desiredRole == PLAYER_ROLE_HEALER)
                         ++bucket.assignedHeal;
                     else
                         ++bucket.assignedDps;
@@ -4018,9 +4018,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (bucket.startTs && static_cast<uint32>(time(nullptr)) < bucket.startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
                     return false;
 
-                uint32 needTank = RTG_GetBucketNeedForRole(bucket, lfg::PLAYER_ROLE_TANK);
-                uint32 needHeal = RTG_GetBucketNeedForRole(bucket, lfg::PLAYER_ROLE_HEALER);
-                uint32 needDps = RTG_GetBucketNeedForRole(bucket, lfg::PLAYER_ROLE_DAMAGE);
+                uint32 needTank = RTG_GetBucketNeedForRole(bucket, PLAYER_ROLE_TANK);
+                uint32 needHeal = RTG_GetBucketNeedForRole(bucket, PLAYER_ROLE_HEALER);
+                uint32 needDps = RTG_GetBucketNeedForRole(bucket, PLAYER_ROLE_DAMAGE);
                 if (!needTank && !needHeal && !needDps)
                 {
                     RTG_ClearRdfDesiredRoles(*this, bucket.owner);
@@ -4029,19 +4029,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 bool added = false;
                 uint32 desiredRole = RTG_GetNextRdfDesiredRole(*this, bucket.owner);
-                if (desiredRole == lfg::PLAYER_ROLE_TANK && needTank)
-                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_TANK, capacity);
-                else if (desiredRole == lfg::PLAYER_ROLE_HEALER && needHeal)
-                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_HEALER, capacity);
-                else if (desiredRole == lfg::PLAYER_ROLE_DAMAGE && needDps)
-                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_DAMAGE, capacity);
+                if (desiredRole == PLAYER_ROLE_TANK && needTank)
+                    added = tryFillLfgRole(bucket, PLAYER_ROLE_TANK, capacity);
+                else if (desiredRole == PLAYER_ROLE_HEALER && needHeal)
+                    added = tryFillLfgRole(bucket, PLAYER_ROLE_HEALER, capacity);
+                else if (desiredRole == PLAYER_ROLE_DAMAGE && needDps)
+                    added = tryFillLfgRole(bucket, PLAYER_ROLE_DAMAGE, capacity);
 
                 if (!added && needTank)
-                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_TANK, capacity);
+                    added = tryFillLfgRole(bucket, PLAYER_ROLE_TANK, capacity);
                 if (!added && needHeal)
-                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_HEALER, capacity);
+                    added = tryFillLfgRole(bucket, PLAYER_ROLE_HEALER, capacity);
                 if (!added && needDps)
-                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_DAMAGE, capacity);
+                    added = tryFillLfgRole(bucket, PLAYER_ROLE_DAMAGE, capacity);
                 return added;
             };
 
@@ -4921,9 +4921,9 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (!role)
             role = RTG_DefaultRoleForClass(player->getClass());
 
-        if (role == lfg::PLAYER_ROLE_TANK)
+        if (role == PLAYER_ROLE_TANK)
             ++req.realTank;
-        else if (role == lfg::PLAYER_ROLE_HEALER)
+        else if (role == PLAYER_ROLE_HEALER)
             ++req.realHeal;
         else
             ++req.realDps;
