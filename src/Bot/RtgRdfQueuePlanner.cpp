@@ -1,6 +1,7 @@
 #include "RtgRdfQueuePlanner.h"
 
 #include "PlayerbotAIConfig.h"
+#include "LFG.h"
 #include "RandomPlayerbotMgr.h"
 #include "RtgQueueMetadata.h"
 

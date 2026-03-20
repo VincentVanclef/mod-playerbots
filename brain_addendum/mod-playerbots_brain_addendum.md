@@ -90,3 +90,10 @@ This follows the RTG brain guidance to prefer narrow, local, compile-safe change
 
 ### Durable lesson
 For RTG queue work, compile recovery should first collapse logic back into the proven manager path, then only extract helpers after behavior is stable and naming/include ownership is fully normalized.
+
+
+## 2026-03-20 — Phase 3 compile recovery note: RDF role constants visibility
+- Compile failure surfaced in `src/Bot/RtgRdfQueuePlanner.cpp` where `lfg::PLAYER_ROLE_TANK`, `lfg::PLAYER_ROLE_HEALER`, and `lfg::PLAYER_ROLE_DAMAGE` were not visible in that translation unit.
+- Root cause: the Phase 3 RDF demand-emission file relied on role constants without directly including the LFG role definitions header.
+- Recovery rule: when emitting RDF role payloads outside of existing queue action files, include the header that defines LFG role constants explicitly instead of assuming transitive visibility through manager headers.
+- Narrow fix applied: add `#include "LFG.h"` to `RtgRdfQueuePlanner.cpp`; keep the existing `lfg::PLAYER_ROLE_*` usage unchanged.
