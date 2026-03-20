@@ -332,47 +332,41 @@ Recent live tests showed three repeated failure signatures:
 - faster retirement of world-idle orphan arena/BG helpers
 - cleaner RDF mismatch replacement without online residue
 
-## 2026-03-20 — Arena shell planner phase 2: shell-side vs faction-side normalization
+## 2026-03-20 — Phase 3 pass: RDF planner extraction + shared role resolver
 
 ### Summary
-Implemented the next arena planner pass so arena helper acquisition no longer treats shell side and character faction as the same concept.
+This pass begins the Phase 3 checklist by moving RDF helper-demand policy and talent/spec role interpretation out of the main stock-heavy files and into dedicated RTG overlay surfaces.
 
-### Problem surface
-Live arena testing showed three recurring issues:
-- multi-arena pressure could still collapse into one muddy lane because helper planning only reasoned in raw faction totals
-- same-faction/skirmish compatibility could not be expressed cleanly because `desiredTeam` was doubling as both queue shell side and actual bot faction
-- helper logs told us queue side, but not the faction the helper was intentionally selected to represent
+### What was changed
+- added `src/Bot/RtgRdfQueuePlanner.h/.cpp`
+  - moves RDF owner-demand timing, helper-need calculation, and global `rtg_lfg_*` event publication into a dedicated planner surface
+  - keeps raw LFG observation in `RandomPlayerbotMgr::CheckLfgQueue()`
+- added `src/Bot/RtgRdfRoleResolver.h/.cpp`
+  - centralizes spec-tab to role resolution
+  - centralizes offline spec-role inspection used during helper acquisition / role matching
+  - centralizes queued-role normalization and role-target counts
+- updated `src/Bot/RandomPlayerbotMgr.cpp`
+  - `CheckLfgQueue()` now performs raw queue observation and then hands demand publishing to `RtgRdfQueuePlanner`
+  - legacy inline RDF role helpers now route through the shared resolver surface instead of remaining duplicated in the stock-heavy file
+- updated `src/Ai/Base/Actions/LfgActions.cpp`
+  - LFG action role verification now uses the shared RDF role resolver instead of its own duplicated spec-role mapping logic
 
-### Root cause
-Arena queue metadata only had one practical team field in use at runtime. That made the lane blur together:
-- **queue shell side** (logical 0/1 side for the arena fill contract)
-- **actual bot faction** (Alliance/Horde character needed to keep real-player compatibility intact)
+### Why this matters
+Recent RDF queue investigations showed that queue behavior had become difficult to reason about because:
+- role truth lived in more than one file
+- RDF helper demand publication lived inline inside `RandomPlayerbotMgr.cpp`
+- live fixes were increasingly mixing observation, policy, and lifecycle handling together
 
-As long as those two concepts were fused, multi-arena behavior and same-faction shell construction stayed brittle.
+This extraction reduces that entanglement and makes future RDF timing/role fixes less likely to regress unrelated queue surfaces.
 
-### Repair
-This pass separates those concepts in the planner and in arena helper login metadata:
-- arena acquisition buckets now track both:
-  - `team` = logical shell side
-  - `preferredFaction` = actual faction to log in for that shell side
-- arena add-data now uses the 4th `rtg_bg` field as an arena-only faction hint for helper login / cleanup
-- arena cleanup-side validation now checks the helper against `preferredFaction` instead of blindly comparing actual faction to shell side
-- adaptive arena planning now emits shell-oriented `[RTG][ARENA][PLAN]` logs so each shell shows:
-  - queue
-  - bracket
-  - shell index
-  - side
-  - preferred faction
-  - real anchors
-  - current supply
-  - computed need
-- arena acquisition logs now expose both shell side and preferred faction so future evidence reads can tell whether the planner chose the correct kind of helper
+### Scope guard
+This is a structural extraction pass, not a claim that RDF acceptance/materialization is fully solved.
+It intentionally preserves:
+- stock/raw LFG observation in `CheckLfgQueue()`
+- existing RTG ownership/event semantics
+- existing helper login / lifecycle machinery outside the planner boundary
 
-### Intended benefit
-- make arena planning easier to reason about when more than one arena should form at once
-- stop shell-side and faction-side from poisoning each other in logs and helper admission
-- keep real-player-compatible faction helpers on the owner's side while preserving room for same-faction shell construction on the opposing side
-
-### Files modified in this revision
-- `src/Bot/RandomPlayerbotMgr.cpp`
-- `brain_addendum/mod-playerbots_brain_addendum.md`
+### Expected result
+- easier future debugging of RDF helper-demand publication
+- one authoritative spec/role interpretation surface for RDF helper decisions
+- less drift between helper acquisition role checks and in-action LFG role checks

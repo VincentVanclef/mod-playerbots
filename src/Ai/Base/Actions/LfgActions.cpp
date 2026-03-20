@@ -12,6 +12,7 @@
 #include "Opcodes.h"
 #include "Playerbots.h"
 #include "PlayerbotAI.h"
+#include "RtgRdfRoleResolver.h"
 #include "World.h"
 #include "WorldPacket.h"
 
@@ -70,58 +71,9 @@ namespace
         return RTG_ParseLfgAssignment(data, team, level, role, owner);
     }
 
-    static bool RTG_ClassCanRole(uint8 cls, uint32 role)
-    {
-        switch (role)
-        {
-            case lfg::PLAYER_ROLE_TANK:
-                return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_DEATH_KNIGHT;
-            case lfg::PLAYER_ROLE_HEALER:
-                return cls == CLASS_PRIEST || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_SHAMAN;
-            case lfg::PLAYER_ROLE_DAMAGE:
-                return true;
-            default:
-                return false;
-        }
-    }
-	
-
     static uint32 RTG_ActualRoleForBot(Player* bot)
     {
-        uint8 spec = AiFactory::GetPlayerSpecTab(bot);
-        switch (bot->getClass())
-        {
-            case CLASS_DRUID:
-                if (spec == DRUID_TAB_RESTORATION)
-                    return lfg::PLAYER_ROLE_HEALER;
-                if (spec == DRUID_TAB_FERAL)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_PALADIN:
-                if (spec == PALADIN_TAB_HOLY)
-                    return lfg::PLAYER_ROLE_HEALER;
-                if (spec == PALADIN_TAB_PROTECTION)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_PRIEST:
-                if (spec == PRIEST_TAB_SHADOW)
-                    return lfg::PLAYER_ROLE_DAMAGE;
-                return lfg::PLAYER_ROLE_HEALER;
-            case CLASS_SHAMAN:
-                if (spec == SHAMAN_TAB_RESTORATION)
-                    return lfg::PLAYER_ROLE_HEALER;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_WARRIOR:
-                if (spec == WARRIOR_TAB_PROTECTION)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_DEATH_KNIGHT:
-                if (spec == DEATH_KNIGHT_TAB_BLOOD)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            default:
-                return lfg::PLAYER_ROLE_DAMAGE;
-        }
+        return RTG::ActualRoleForBot(bot);
     }
 
     static bool RTG_GroupHasRealPlayerMember(Player* bot)
