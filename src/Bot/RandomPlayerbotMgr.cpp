@@ -59,8 +59,6 @@
 #include "RandomPlayerbotFactory.h"
 #include "RtgQueueMetadata.h"
 #include "RtgBgQueuePlanner.h"
-#include "RtgRdfQueuePlanner.h"
-#include "RtgRdfRoleResolver.h"
 #include "RtgQueueLedger.h"
 #include "RtgQueueLifecycle.h"
 #include "ServerFacade.h"
@@ -72,8 +70,6 @@
 
 namespace
 {
-    static bool RTG_IsArenaQueueType(uint32 queueType);
-
     static bool RTG_QueueDebugEnabled()
     {
         return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug;
@@ -122,20 +118,10 @@ namespace
         return std::max<uint32>(8u, std::min<uint32>(16u, std::max<uint32>(8u, ceiling / 4u)));
     }
 
-    static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 queueType, uint32 phase)
+    static uint32 RTG_GetPendingHelperLoginLaneCap(uint32 phase)
     {
-        bool isArenaLane = RTG_IsArenaQueueType(queueType);
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
-            if (isArenaLane)
-            {
-                if (phase >= 4u)
-                    return 4u;
-                if (phase == 3u)
-                    return 3u;
-                return 4u;
-            }
-
             if (phase >= 4u)
                 return 12u;
             if (phase == 3u)
@@ -143,8 +129,6 @@ namespace
             return std::max<uint32>(10u, std::min<uint32>(16u, RTG_GetPendingHelperLoginGlobalCap()));
         }
 
-        if (isArenaLane)
-            return phase >= 3u ? 2u : 3u;
         if (phase >= 4u)
             return 4u;
         if (phase == 3u)
@@ -298,11 +282,11 @@ namespace
     {
         switch (role)
         {
-            case PLAYER_ROLE_TANK:
+            case lfg::PLAYER_ROLE_TANK:
                 return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_DEATH_KNIGHT;
-            case PLAYER_ROLE_HEALER:
+            case lfg::PLAYER_ROLE_HEALER:
                 return cls == CLASS_PRIEST || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_SHAMAN;
-            case PLAYER_ROLE_DAMAGE:
+            case lfg::PLAYER_ROLE_DAMAGE:
                 return true;
             default:
                 return false;
@@ -311,111 +295,155 @@ namespace
 
     static uint32 RTG_DefaultRoleForClass(uint8 cls)
     {
-        return RTG::DefaultRoleForClass(cls);
+        if (RTG_ClassCanRole(cls, lfg::PLAYER_ROLE_HEALER))
+            return lfg::PLAYER_ROLE_HEALER;
+        if (RTG_ClassCanRole(cls, lfg::PLAYER_ROLE_TANK))
+            return lfg::PLAYER_ROLE_TANK;
+        return lfg::PLAYER_ROLE_DAMAGE;
     }
 
     static uint8 RTG_DefaultSpecTabForClass(uint8 cls)
     {
-        return RTG::DefaultSpecTabForClass(cls);
+        switch (cls)
+        {
+            case CLASS_MAGE: return MAGE_TAB_FROST;
+            case CLASS_PALADIN: return PALADIN_TAB_RETRIBUTION;
+            case CLASS_PRIEST: return PRIEST_TAB_HOLY;
+            case CLASS_WARLOCK: return WARLOCK_TAB_DEMONOLOGY;
+            case CLASS_SHAMAN: return SHAMAN_TAB_ELEMENTAL;
+            default: return 0;
+        }
     }
 
     static uint32 RTG_RoleForClassSpecTab(uint8 cls, uint8 specTab)
     {
-        return RTG::RoleForClassSpecTab(cls, specTab);
+        switch (cls)
+        {
+            case CLASS_DRUID:
+                if (specTab == DRUID_TAB_RESTORATION)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (specTab == DRUID_TAB_FERAL)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PALADIN:
+                if (specTab == PALADIN_TAB_HOLY)
+                    return lfg::PLAYER_ROLE_HEALER;
+                if (specTab == PALADIN_TAB_PROTECTION)
+                    return lfg::PLAYER_ROLE_TANK;
+                return lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_PRIEST:
+                return specTab == PRIEST_TAB_SHADOW ? lfg::PLAYER_ROLE_DAMAGE : lfg::PLAYER_ROLE_HEALER;
+            case CLASS_SHAMAN:
+                return specTab == SHAMAN_TAB_RESTORATION ? lfg::PLAYER_ROLE_HEALER : lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_WARRIOR:
+                return specTab == WARRIOR_TAB_PROTECTION ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+            case CLASS_DEATH_KNIGHT:
+                return specTab == DEATH_KNIGHT_TAB_BLOOD ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+            default:
+                return lfg::PLAYER_ROLE_DAMAGE;
+        }
     }
 
     static bool RTG_GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
     {
-        return RTG::GetOfflineSpecTab(guid, cls, specTab);
+        specTab = RTG_DefaultSpecTabForClass(cls);
+
+        QueryResult specResult = CharacterDatabase.Query("SELECT activeTalentGroup FROM characters WHERE guid = {}", guid);
+        uint8 activeSpec = 0;
+        if (specResult)
+            activeSpec = specResult->Fetch()[0].Get<uint8>();
+
+        uint32 activeMask = (1u << activeSpec);
+        uint32 const* talentTabIds = GetTalentTabPages(cls);
+        if (!talentTabIds)
+            return true;
+
+        std::map<uint8, uint32> tabs = {{0, 0}, {1, 0}, {2, 0}};
+        QueryResult talentResult = CharacterDatabase.Query("SELECT spell, specMask FROM character_talent WHERE guid = {}", guid);
+        if (!talentResult)
+            return true;
+
+        do
+        {
+            Field* fields = talentResult->Fetch();
+            uint32 spellId = fields[0].Get<uint32>();
+            uint8 specMask = fields[1].Get<uint8>();
+            if ((activeMask & specMask) == 0)
+                continue;
+
+            TalentSpellPos const* talentPos = GetTalentSpellPos(spellId);
+            if (!talentPos)
+                continue;
+            TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentPos->talent_id);
+            if (!talentInfo)
+                continue;
+
+            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            uint32 rank = spellInfo ? spellInfo->GetRank() : 1u;
+            if (talentInfo->TalentTab == talentTabIds[0])
+                tabs[0] += rank;
+            else if (talentInfo->TalentTab == talentTabIds[1])
+                tabs[1] += rank;
+            else if (talentInfo->TalentTab == talentTabIds[2])
+                tabs[2] += rank;
+        } while (talentResult->NextRow());
+
+        if ((tabs[0] + tabs[1] + tabs[2]) == 0)
+            return true;
+
+        specTab = 0;
+        uint32 maxPoints = tabs[0];
+        for (uint8 i = 1; i < 3; ++i)
+        {
+            if (tabs[i] > maxPoints)
+            {
+                maxPoints = tabs[i];
+                specTab = i;
+            }
+        }
+        return true;
     }
 
     static uint32 RTG_GetOfflineSpecRole(ObjectGuid::LowType guid, uint8 cls)
     {
-        return RTG::GetOfflineSpecRole(guid, cls);
+        uint8 specTab = 0;
+        RTG_GetOfflineSpecTab(guid, cls, specTab);
+        return RTG_RoleForClassSpecTab(cls, specTab);
     }
 
     static uint32 RTG_GetActualSpecRole(Player* bot)
     {
-        return RTG::GetActualSpecRole(bot);
-    }
+        if (!bot)
+            return lfg::PLAYER_ROLE_DAMAGE;
 
+        return RTG_RoleForClassSpecTab(bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+    }
     static uint32 RTG_NormalizeQueuedRoleMask(uint32 roleMask)
-    {
-        return RTG::NormalizeQueuedRoleMask(roleMask);
-    }
+	{
+		if (roleMask & lfg::PLAYER_ROLE_TANK)
+			return lfg::PLAYER_ROLE_TANK;
+		if (roleMask & lfg::PLAYER_ROLE_HEALER)
+			return lfg::PLAYER_ROLE_HEALER;
+		if (roleMask & lfg::PLAYER_ROLE_DAMAGE)
+			return lfg::PLAYER_ROLE_DAMAGE;
+		return 0u;
+	}
 
-    static uint32 RTG_TargetLfgRoleCount(uint32 role)
-    {
-        return RTG::TargetLfgRoleCount(role);
-    }
-
-    static uint32 RTG_GetNextRdfDesiredRole(RandomPlayerbotMgr& mgr, uint32 ownerGuid)
-    {
-        if (mgr.RTG_GetBotEventValue(ownerGuid, "rtg_lfg_need_tank") > 0)
-            return PLAYER_ROLE_TANK;
-        if (mgr.RTG_GetBotEventValue(ownerGuid, "rtg_lfg_need_heal") > 0)
-            return PLAYER_ROLE_HEALER;
-        if (mgr.RTG_GetBotEventValue(ownerGuid, "rtg_lfg_need_dps") > 0)
-            return PLAYER_ROLE_DAMAGE;
-        return 0u;
-    }
-
-    static void RTG_ConsumeRdfDesiredRole(RandomPlayerbotMgr& mgr, uint32 ownerGuid, uint32 desiredRole, uint32 ttlSeconds, std::string const& addData)
-    {
-        char const* key = nullptr;
-        switch (desiredRole)
-        {
-            case PLAYER_ROLE_TANK:   key = "rtg_lfg_need_tank"; break;
-            case PLAYER_ROLE_HEALER: key = "rtg_lfg_need_heal"; break;
-            case PLAYER_ROLE_DAMAGE: key = "rtg_lfg_need_dps"; break;
-            default: return;
-        }
-
-        uint32 remaining = mgr.RTG_GetBotEventValue(ownerGuid, key);
-        if (remaining > 1)
-            mgr.RTG_SetBotEventValue(ownerGuid, key, remaining - 1, ttlSeconds, addData);
-        else
-            mgr.RTG_SetBotEventValue(ownerGuid, key, 0, 0, "");
-    }
-
-    static void RTG_ClearRdfDesiredRoles(RandomPlayerbotMgr& mgr, uint32 ownerGuid)
-    {
-        mgr.RTG_SetBotEventValue(ownerGuid, "rtg_lfg_need_tank", 0, 0, "");
-        mgr.RTG_SetBotEventValue(ownerGuid, "rtg_lfg_need_heal", 0, 0, "");
-        mgr.RTG_SetBotEventValue(ownerGuid, "rtg_lfg_need_dps", 0, 0, "");
-    }
-
-    auto getBucketNeedForRole = [&](RtgLfgBucket const& bucket, uint32 role) -> uint32
+	static uint32 RTG_TargetLfgRoleCount(uint32 role)
 	{
 		switch (role)
 		{
-			case PLAYER_ROLE_TANK:
-			{
-				uint32 have = bucket.realTank + bucket.queuedTank + bucket.assignedTank;
-				uint32 want = RTG_TargetLfgRoleCount(PLAYER_ROLE_TANK);
-				return want > have ? (want - have) : 0u;
-			}
-			case PLAYER_ROLE_HEALER:
-			{
-				uint32 have = bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal;
-				uint32 want = RTG_TargetLfgRoleCount(PLAYER_ROLE_HEALER);
-				return want > have ? (want - have) : 0u;
-			}
-			case PLAYER_ROLE_DAMAGE:
-			{
-				uint32 have = bucket.realDps + bucket.queuedDps + bucket.assignedDps;
-				uint32 want = RTG_TargetLfgRoleCount(PLAYER_ROLE_DAMAGE);
-				return want > have ? (want - have) : 0u;
-			}
-			default:
-				return 0u;
+			case lfg::PLAYER_ROLE_TANK: return 1u;
+			case lfg::PLAYER_ROLE_HEALER: return 1u;
+			case lfg::PLAYER_ROLE_DAMAGE: return 3u;
+			default: return 0u;
 		}
-	};
+	}
 
-    static uint32 RTG_ActualRoleForBot(Player* bot)
-    {
-        return RTG::ActualRoleForBot(bot);
-    }
+	static uint32 RTG_ActualRoleForBot(Player* bot)
+	{
+		return RTG_GetActualSpecRole(bot);
+	}
 
     static bool RTG_IsRealPlayer(Player* player)
     {
@@ -437,11 +465,6 @@ namespace
         return false;
     }
 
-    static bool RTG_GetBgQueueContext(BattlegroundQueueTypeId queueTypeId, uint32 level, BattlegroundBracketId& bracketId,
-                                      uint32& minLevel, uint32& maxLevel);
-
-    static bool RTG_IsTrackedPendingHelperState(RTG::RtgHelperLedgerEntry const& entry);
-
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
@@ -457,245 +480,6 @@ namespace
         return "rtg_bg_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
-    static std::string RTG_MakeArenaNeedKey(uint32 queueType, uint32 bracketId)
-    {
-        return "rtg_arena_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
-    }
-
-    static std::string RTG_MakeArenaPhaseKey(uint32 queueType, uint32 bracketId)
-    {
-        return "rtg_arena_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
-    }
-
-    static bool RTG_IsArenaQueueType(uint32 queueType)
-    {
-        return queueType > BATTLEGROUND_QUEUE_NONE && queueType < MAX_BATTLEGROUND_QUEUE_TYPES &&
-               BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueType)) != 0;
-    }
-
-    static bool RTG_IsCoreArenaQueueType(uint32 queueType)
-    {
-        return queueType == uint32(BATTLEGROUND_QUEUE_2v2) ||
-               queueType == uint32(BATTLEGROUND_QUEUE_3v3) ||
-               queueType == uint32(BATTLEGROUND_QUEUE_5v5);
-    }
-
-    static uint32 RTG_NormalizeArenaSize(uint32 arenaType, uint32 queueType = 0)
-    {
-        if (arenaType == 4u)
-            return 3u; // solo-3v3 backend uses 4 internally on this stack
-        if (arenaType == 1u)
-            return 1u; // custom 1v1 queue
-        if (queueType == uint32(BATTLEGROUND_QUEUE_2v2))
-            return 2u;
-        if (queueType == uint32(BATTLEGROUND_QUEUE_3v3))
-            return 3u;
-        if (queueType == uint32(BATTLEGROUND_QUEUE_5v5))
-            return 5u;
-        return arenaType;
-    }
-
-    static char const* RTG_GetQueueLaneName(uint32 queueType)
-    {
-        return RTG_IsArenaQueueType(queueType) ? "arena" : "bg";
-    }
-
-    static bool RTG_GetQueueRequestDemandState(std::string const& addData, uint32& queueType, uint32& bracketId, uint32& teamNeed, uint32& phase, char const*& laneName)
-    {
-        uint32 desiredTeam = 0;
-        uint32 desiredLevel = 0;
-        queueType = 0;
-        bracketId = 0;
-        teamNeed = 0;
-        phase = 0;
-        laneName = "queue";
-
-        if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, queueType))
-            return false;
-
-        laneName = RTG_GetQueueLaneName(queueType);
-
-        BattlegroundBracketId queueBracket = BG_BRACKET_ID_FIRST;
-        uint32 minLevel = 0;
-        uint32 maxLevel = 0;
-        if (!RTG_GetBgQueueContext(BattlegroundQueueTypeId(queueType), desiredLevel, queueBracket, minLevel, maxLevel))
-            return false;
-
-        bracketId = uint32(queueBracket);
-
-        if (RTG_IsArenaQueueType(queueType))
-        {
-            phase = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeArenaPhaseKey(queueType, bracketId));
-            teamNeed = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeArenaNeedKey(queueType, bracketId));
-            return true;
-        }
-
-        phase = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeBgPhaseKey(queueType, bracketId));
-        teamNeed = sRandomPlayerbotMgr.RTG_GetBotEventValue(0, RTG_MakeBgTeamNeedKey(queueType, bracketId, desiredTeam));
-        return true;
-    }
-
-    static bool RTG_ShouldCancelPendingQueueAdd(std::string const& addData, std::string& reason)
-    {
-        uint32 queueType = 0;
-        uint32 bracketId = 0;
-        uint32 teamNeed = 0;
-        uint32 phase = 0;
-        char const* laneName = "queue";
-        if (!RTG_GetQueueRequestDemandState(addData, queueType, bracketId, teamNeed, phase, laneName))
-            return false;
-
-        if (!phase && !teamNeed)
-        {
-            reason = std::string(laneName) + "_demand_cleared";
-            return true;
-        }
-
-        if (!teamNeed)
-        {
-            reason = std::string(laneName) + "_team_satisfied";
-            return true;
-        }
-
-        return false;
-    }
-
-
-    static void RTG_ClearManagedQueueEvents(RandomPlayerbotMgr& mgr, uint32 botId, bool clearLogoutEvent = false)
-    {
-        mgr.RTG_SetBotEventValue(botId, "add", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_add_requested", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_lfg_role_ready", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_bg_pending", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_bg_was_in_instance", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_bg_completed_instance", 0, 0);
-        mgr.RTG_SetBotEventValue(botId, "rtg_dungeon_active", 0, 0);
-        if (clearLogoutEvent)
-            mgr.RTG_SetBotEventValue(botId, "logout", 0, 0);
-    }
-
-    static uint32 RTG_CountPendingHelpersForLane(char const* laneName)
-    {
-        uint32 count = 0;
-        RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
-        for (uint32 botId : ledger.GetTrackedBotIds())
-        {
-            RTG::RtgHelperLedgerEntry const* entry = ledger.Get(botId);
-            if (!entry || !RTG_IsTrackedPendingHelperState(*entry))
-                continue;
-
-            if (std::string(laneName) == "lfg")
-            {
-                if (entry->target.queueTypeId == BATTLEGROUND_QUEUE_NONE)
-                    ++count;
-                continue;
-            }
-
-            if (std::string(laneName) == "arena")
-            {
-                if (RTG_IsArenaQueueType(uint32(entry->target.queueTypeId)))
-                    ++count;
-                continue;
-            }
-
-            if (std::string(laneName) == "bg")
-            {
-                if (entry->target.queueTypeId != BATTLEGROUND_QUEUE_NONE && !RTG_IsArenaQueueType(uint32(entry->target.queueTypeId)))
-                    ++count;
-            }
-        }
-        return count;
-    }
-
-    static void RTG_ApplyArenaLaneScaffolding(RandomPlayerbotMgr& mgr)
-    {
-        if (!sPlayerbotAIConfig.rtgEventDriven)
-            return;
-
-        uint32 ttl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
-        uint32 arenaNeedTotal = 0;
-        bool anyRealArenaDemand = false;
-
-        for (auto const& queueTypePair : mgr.BattlegroundData)
-        {
-            BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueTypePair.first);
-            uint8 arenaType = BattlegroundMgr::BGArenaType(queueTypeId);
-            if (!arenaType)
-                continue;
-
-            for (auto const& bracketIdPair : queueTypePair.second)
-            {
-                BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketIdPair.first);
-                BattlegroundInfo const& arenaInfo = bracketIdPair.second;
-                if (!arenaInfo.minLevel)
-                    continue;
-
-                uint32 realPlayers = arenaInfo.skirmishArenaPlayerCount + arenaInfo.ratedArenaPlayerCount;
-                uint32 botPlayers = arenaInfo.skirmishArenaBotCount + arenaInfo.ratedArenaBotCount;
-                uint32 currentTotal = realPlayers + botPlayers;
-                uint32 activeQueues = arenaInfo.activeSkirmishArenaQueue + arenaInfo.activeRatedArenaQueue;
-                uint32 activeInstances = arenaInfo.skirmishArenaInstanceCount + arenaInfo.ratedArenaInstanceCount;
-                uint32 matchSize = RTG_NormalizeArenaSize(uint32(arenaType), uint32(queueTypeId));
-                uint32 playersPerMatch = matchSize * 2u;
-
-                // Arena demand must stay tied to real-player-owned pressure. Raw queue flags are too
-                // noisy here because replay shells, stale arena queue objects, or bot-only residue can
-                // keep an arena lane looking alive long after the real owner is gone.
-                bool hasRealDemand = realPlayers > 0 || activeInstances > 0;
-                uint32 matchesNeeded = 0;
-                uint32 targetTotal = 0;
-                uint32 phase = 0;
-                uint32 need = 0;
-
-                if (hasRealDemand)
-                {
-                    anyRealArenaDemand = true;
-                    if (playersPerMatch)
-                    {
-                        matchesNeeded = (realPlayers + (playersPerMatch - 1u)) / playersPerMatch;
-                        if (activeInstances > matchesNeeded)
-                            matchesNeeded = activeInstances;
-                    }
-
-                    if (!matchesNeeded)
-                        matchesNeeded = 1u;
-
-                    targetTotal = playersPerMatch * matchesNeeded;
-                    need = targetTotal > currentTotal ? (targetTotal - currentTotal) : 0u;
-
-                    if (need)
-                        phase = activeInstances ? 3u : 2u; // live_refill or pop_or_invite scaffolding
-                    else if (activeInstances)
-                        phase = 4u; // finish_fill / steady-state scaffolding
-                }
-
-                mgr.RTG_SetGlobalEvent(RTG_MakeArenaNeedKey(uint32(queueTypeId), uint32(bracketId)), need, ttl);
-                mgr.RTG_SetGlobalEvent(RTG_MakeArenaPhaseKey(uint32(queueTypeId), uint32(bracketId)), phase, ttl);
-                arenaNeedTotal += need;
-
-                if (RTG_QueueDebugEnabled() && hasRealDemand)
-                {
-                    LOG_INFO("playerbots", "[RTG][ARENA][PHASE] queue={} bracket={} phase={} matchesNeeded={} matchSize={} targetTotal={} currentTotal={} activeQueues={} activeInstances={}",
-                             uint32(queueTypeId), uint32(bracketId), phase ? phase : 0u, matchesNeeded, matchSize, targetTotal, currentTotal, activeQueues, activeInstances);
-                    LOG_INFO("playerbots", "[RTG][ARENA][DEMAND] queue={} bracket={} need={} realPlayers={} botPlayers={} matchSize={} playersPerMatch={} targetTotal={}",
-                             uint32(queueTypeId), uint32(bracketId), need, realPlayers, botPlayers, matchSize, playersPerMatch, targetTotal);
-                }
-                else if (RTG_QueueDebugEnabled() && botPlayers)
-                {
-                    LOG_INFO("playerbots", "[RTG][ARENA][ORPHAN] queue={} bracket={} realPlayers={} botPlayers={} activeQueues={} activeInstances={} reason=no_real_owner",
-                             uint32(queueTypeId), uint32(bracketId), realPlayers, botPlayers, activeQueues, activeInstances);
-                }
-            }
-        }
-
-        mgr.RTG_SetGlobalEvent("rtg_arena_need_total", arenaNeedTotal, ttl);
-        mgr.RTG_SetGlobalEvent("rtg_arena_any_real_demand", anyRealArenaDemand ? 1u : 0u, ttl);
-    }
-
     static void RTG_ClearQueueDebuffs(Player* bot)
     {
         if (!bot)
@@ -703,7 +487,6 @@ namespace
 
         bot->RemoveAura(26013); // Deserter
         bot->RemoveAura(71041); // Dungeon Deserter
-        bot->RemoveAura(71328); // Dungeon cooldown / random dungeon deserter variants
     }
 
     static void RTG_PrepareBotForLogout(Player* bot)
@@ -718,40 +501,6 @@ namespace
             bot->ResurrectPlayer(1.0f, false);
             bot->SpawnCorpseBones();
             bot->SetFullHealth();
-        }
-    }
-
-    static void RTG_ApplyQueueHelperLoginProfile(Player* bot, uint32 desiredLevel, char const* laneTag)
-    {
-        if (!bot)
-            return;
-
-        uint32 targetLevel = desiredLevel ? desiredLevel : bot->GetLevel();
-        bool levelChanged = targetLevel && bot->GetLevel() != targetLevel;
-
-        if (levelChanged)
-        {
-            bot->GiveLevel(targetLevel);
-            bot->InitStatsForLevel(true);
-            bot->SetUInt32Value(PLAYER_XP, 0);
-        }
-
-        PlayerbotFactory factory(bot, targetLevel);
-        factory.InitEquipment(true, true);
-        factory.Refresh();
-
-        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-            botAI->ResetStrategies(false);
-
-        RTG_ClearQueueDebuffs(bot);
-
-        if (RTG_QueueDebugEnabled())
-        {
-            LOG_INFO("playerbots", "[RTG][LOGIN][PROFILE] helper={} lane={} level={} changed={}",
-                     bot->GetGUID().GetCounter(),
-                     laneTag ? laneTag : "queue",
-                     bot->GetLevel(),
-                     levelChanged ? 1u : 0u);
         }
     }
 
@@ -1098,16 +847,6 @@ uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
     return count;
 }
 
-void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 botId, bool clearLogout)
-{
-    RTG_ClearManagedQueueEvents(*this, botId, clearLogout);
-}
-
-bool RandomPlayerbotMgr::RTG_RequestQueueHelperLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
-{
-    return RTG_RequestSafeBotLogout(guid, reason, clearQueueState);
-}
-
 bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
 {
     Player* bot = GetPlayerBot(guid);
@@ -1124,14 +863,6 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
 
     if (session->isLogingOut() || bot->IsDuringRemoveFromWorld())
     {
-        if (clearQueueState)
-        {
-            RTG_ClearManagedQueueEvents(*this, botId);
-            currentBots.remove(botId);
-            if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
-                RTG::RtgQueueLedger::Instance().Remove(botId);
-        }
-
         SetEventValue(botId, "logout", 1, 60);
         return false;
     }
@@ -1155,7 +886,13 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     }
 
     if (clearQueueState)
-        RTG_ClearManagedQueueEvents(*this, botId);
+    {
+        SetEventValue(botId, "add", 0, 0);
+        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+        SetEventValue(botId, "rtg_add_requested", 0, 0);
+    }
 
     currentBots.remove(botId);
     RTG_PrepareBotForLogout(bot);
@@ -1615,12 +1352,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         uint32 lfgNeed = GetEventValue(0, "rtg_lfg_need_total");
         uint32 bgStart = GetEventValue(0, "rtg_bg_start");
         uint32 bgNeed = GetEventValue(0, "rtg_bg_need_total");
-        uint32 arenaNeed = GetEventValue(0, "rtg_arena_need_total");
-        uint32 arenaDemand = GetEventValue(0, "rtg_arena_any_real_demand");
 
         rtgLfgDemand = (lfgStart != 0) && (lfgNeed != 0);
         rtgBgDemand = (bgStart != 0) && (bgNeed != 0);
-        bool rtgArenaDemand = arenaDemand != 0 && arenaNeed != 0;
 
         uint32 trackedManaged = 0;
         for (uint32 botId : currentBots)
@@ -1637,20 +1371,19 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
         uint32 cappedLfgNeed = std::min<uint32>(lfgNeed, sPlayerbotAIConfig.rtgLfgMaxBots);
         uint32 cappedBgNeed = std::min<uint32>(bgNeed, sPlayerbotAIConfig.rtgBgMaxBots);
-        uint32 cappedArenaNeed = std::min<uint32>(arenaNeed, sPlayerbotAIConfig.rtgBgMaxBots);
-        uint32 unresolvedNeed = std::min<uint32>(cappedLfgNeed + cappedBgNeed + cappedArenaNeed, sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 unresolvedNeed = std::min<uint32>(cappedLfgNeed + cappedBgNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         uint32 eventTarget = std::min<uint32>(trackedManaged + unresolvedNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         maxAllowedBotCount = baseWorld + eventTarget;
 
-        if (!rtgLfgDemand && !rtgBgDemand && !rtgArenaDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
+        if (!rtgLfgDemand && !rtgBgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
             maxAllowedBotCount = 0;
 
         SetEventValue(0, "rtg_target", maxAllowedBotCount, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} arenaNeed={} cappedLfgNeed={} cappedBgNeed={} cappedArenaNeed={} eventTarget={} baseWorld={} maxAllowed={}",
-                trackedManaged, unresolvedNeed, lfgNeed, bgNeed, arenaNeed, cappedLfgNeed, cappedBgNeed, cappedArenaNeed, eventTarget, baseWorld, maxAllowedBotCount);
+            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} cappedLfgNeed={} cappedBgNeed={} eventTarget={} baseWorld={} maxAllowed={}",
+                trackedManaged, unresolvedNeed, lfgNeed, bgNeed, cappedLfgNeed, cappedBgNeed, eventTarget, baseWorld, maxAllowedBotCount);
         }
 
         static bool rtgStandaloneLogged = false;
@@ -1914,15 +1647,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				uint32 actualRole = RTG_ActualRoleForBot(bot);
 				if (actualRole != desiredRole)
 				{
-					SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
-					RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ROLE] helper={} owner={} desiredRole={} actualRole={} class={} specTab={} verdict=logout_mismatch", botId, desiredOwner, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
 					rtgStaleQueueBots.push_back(botGuid);
 					continue;
 				}
-
-				if (!GetEventValue(botId, "rtg_lfg_role_ready"))
-					RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ROLE] helper={} owner={} desiredRole={} actualRole={} class={} specTab={} verdict=ready", botId, desiredOwner, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
-				SetEventValue(botId, "rtg_lfg_role_ready", 1, 45, addData);
 			}
 
 			lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
@@ -2005,7 +1732,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 SetEventValue(botId, "add", 0, 0);
                 SetEventValue(botId, "rtg_add_requested", 0, 0);
                 SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
                 currentBots.remove(botId);
                 rtgStaleQueueBots.push_back(botGuid);
                 continue;
@@ -2027,7 +1753,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			{
 				SetEventValue(botId, "add", 0, 0);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-				SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
 				currentBots.remove(botId);
 				rtgStaleQueueBots.push_back(botGuid);
 				continue;
@@ -2043,8 +1768,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					uint32 actualRoles = sLFGMgr->GetRoles(bot->GetGUID());
 					if ((actualRoles & desiredRole) == 0)
 					{
-					SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
-					RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ROLE] helper={} owner={} desiredRole={} queuedRoles={} verdict=queued_mask_mismatch", botId, desiredOwner, desiredRole, actualRoles));
 						SetEventValue(botId, "add", 0, 0);
 						SetEventValue(botId, "rtg_lfg_pending", 0, 0);
 						currentBots.remove(botId);
@@ -2053,35 +1776,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					}
 				}
 
-				SetEventValue(botId, "rtg_lfg_role_ready", 1, 45, addData);
 				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
 				continue;
 			}
 
-			uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
-			uint32 pendingAge = 0;
-			if (requestTs)
-			{
-				uint32 nowTs = NowSeconds();
-				if (nowTs > requestTs)
-					pendingAge = nowTs - requestTs;
-			}
-
-			// Pending bots get more patience, but not forever.
-			// Exact-role RDF helpers that never fully enter queue/group state can otherwise
-			// sit online indefinitely and keep their random-bot account busy.
+			// Pending bots get more patience
 			if (GetEventValue(botId, "rtg_lfg_pending"))
 			{
-				bool pendingTimedOut = pendingAge >= 20;
-				if (!ownerHasRealDemand || pendingTimedOut)
-				{
-					SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-					SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
-					currentBots.remove(botId);
-					rtgStaleQueueBots.push_back(botGuid);
-					continue;
-				}
-
 				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
 				continue;
 			}
@@ -2130,24 +1831,20 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
                 continue;
 
-            uint32 queueNeed = 0;
-            uint32 queuePhase = 0;
-            uint32 queueBracketId = 0;
-            uint32 resolvedQueueType = 0;
-            char const* laneName = "bg";
-            bool queueHasRealDemand = RTG_GetQueueRequestDemandState(addData, resolvedQueueType, queueBracketId, queueNeed, queuePhase, laneName) && (queueNeed != 0 || queuePhase != 0);
-
-            bool wrongTeam = bot->GetTeamId() != desiredTeam;
-            bool noLongerNeeded = !queueHasRealDemand || wrongTeam;
-            bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
-
-            if (RTG_QueueDebugEnabled() && RTG_IsArenaQueueType(desiredQueueType))
+            bool bgHasRealDemand = false;
+            BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
+            if (desiredBgType != BATTLEGROUND_TYPE_NONE)
             {
-                LOG_INFO("playerbots", "[RTG][ARENA][OWNER] helper={} queue={} bracket={} desiredTeam={} actualTeam={} queueHasRealDemand={} lifecycleOwned={} inQueue={} inWorld={} ",
-                         botId, desiredQueueType, queueBracketId, desiredTeam, bot->GetTeamId(), queueHasRealDemand ? 1u : 0u, lifecycleOwned ? 1u : 0u,
-                         (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) || bot->IsInvitedForBattlegroundInstance()) ? 1u : 0u,
-                         bot->IsInWorld() ? 1u : 0u);
+                if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
+                {
+                    if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
+                        bgHasRealDemand = GetEventValue(0, RTG_MakeBgDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
+                }
             }
+
+            bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
+            bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || wrongTeam;
+            bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {
@@ -2155,31 +1852,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 RTG::RtgQueueLedger::Instance().ClearRetireRequest(botId);
             }
 
-            Map* currentMap = bot->GetMap();
-            bool inInstanceMap = currentMap && currentMap->IsBattlegroundOrArena();
             bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
 
-            if (bot->InBattleground() || bot->InArena() || inInstanceMap)
-            {
-                SetEventValue(botId, "rtg_bg_was_in_instance", 1, 7200, addData);
-                SetEventValue(botId, "rtg_bg_completed_instance", 0, 0);
-            }
-            else if (GetEventValue(botId, "rtg_bg_was_in_instance") != 0 && !inQueueState)
-            {
-                SetEventValue(botId, "rtg_bg_completed_instance", 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, addData);
-                SetEventValue(botId, "rtg_bg_retire_when_safe", 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, addData);
-                SetEventValue(botId, "rtg_bg_pending", 0, 0);
-                SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-                SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-            }
-
-            bool completedInstance = GetEventValue(botId, "rtg_bg_completed_instance") != 0;
-            if (completedInstance)
-                noLongerNeeded = true;
-
-            if (!noLongerNeeded && !inQueueState && !completedInstance)
+            if (!noLongerNeeded && !inQueueState)
             {
                 SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
@@ -2192,10 +1869,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         SetEventValue(botId, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                         SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
-                    }
-                    else if (queueHasRealDemand)
-                    {
-                        SetEventValue(botId, "rtg_bg_retire_when_safe", 1, RTG_GetQueueRetryWindowSeconds() + 15, addData);
                     }
                 }
             }
@@ -2241,14 +1914,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             bool retireWhenSafe = GetEventValue(botId, "rtg_bg_retire_when_safe") != 0;
             bool outOfBgState = !RTG_IsBgLifecycleOwned(bot, desiredQueueType);
-            bool orphanedWorldHelper = outOfBgState && !inQueueState && !lifecycleOwned && !queueHasRealDemand;
-            if (orphanedWorldHelper)
-            {
-                SetEventValue(botId, "rtg_bg_retire_when_safe", 1, std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 10), addData);
-                retireWhenSafe = true;
-                if (RTG_IsArenaQueueType(desiredQueueType))
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ORPHAN] helper={} queue={} bracket={} desiredTeam={} actualTeam={} reason=world_idle_without_owner", botId, desiredQueueType, queueBracketId, desiredTeam, bot->GetTeamId()));
-            }
 
             if (outOfBgState && (retireWhenSafe || noLongerNeeded))
             {
@@ -2511,32 +2176,6 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
         }
     }
 
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        availableBots = currentBots;
-        availableBotCount = availableBots.size();
-        onlineBotCount = playerBots.size();
-
-        if (RTG_QueueDebugEnabled())
-        {
-            uint32 pendingQueuedLoginsRefresh = 0;
-            for (uint32 botId : currentBots)
-            {
-                if (!GetEventValue(botId, "add"))
-                    continue;
-                if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
-                    continue;
-                std::string addData = GetEventData(botId, "add");
-                if (!RTG::IsQueueManagedAddData(addData))
-                    continue;
-                ++pendingQueuedLoginsRefresh;
-            }
-
-            LOG_INFO("playerbots", "[RTG][DISPATCH][REFRESH] availableBots={} onlineBotCount={} pendingQueuedLogins={}",
-                     availableBotCount, onlineBotCount, pendingQueuedLoginsRefresh);
-        }
-    }
-
     if (sPlayerbotAIConfig.randomBotAutologin && time(nullptr) > (printStatsTimer + 300))
     {
         if (!printStatsTimer)
@@ -2702,24 +2341,8 @@ for (auto const& c : candidates)
 
         if (RTG_QueueDebugEnabled())
         {
-            uint32 pendingLfg = RTG_CountPendingHelpersForLane("lfg");
-            uint32 pendingBg = RTG_CountPendingHelpersForLane("bg");
-            uint32 pendingArena = RTG_CountPendingHelpersForLane("arena");
-            LOG_INFO("playerbots", "[RTG][DISPATCH][BUDGET] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} maxAllowed={} pendingLfg={} pendingBg={} pendingArena={}",
-                     pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, maxAllowedBotCount,
-                     pendingLfg, pendingBg, pendingArena);
-            LOG_INFO("playerbots", "[RTG][DISPATCH][AUDIT] lfgNeed={} bgNeed={} arenaNeed={} bgTurn={} pendingGlobal={} laneCaps(bgStartup={},bgLive={},bgFinish={},arenaStartup={},arenaLive={},arenaFinish={})",
-                     GetEventValue(0, "rtg_lfg_need_total"),
-                     GetEventValue(0, "rtg_bg_need_total"),
-                     GetEventValue(0, "rtg_arena_need_total"),
-                     GetEventValue(0, "rtg_queue_turn_bg"),
-                     RTG_CountPendingHelpers(),
-                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_WS, 2u),
-                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_WS, 3u),
-                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_WS, 4u),
-                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_2v2, 2u),
-                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_2v2, 3u),
-                     RTG_GetPendingHelperLoginLaneCap(BATTLEGROUND_QUEUE_2v2, 4u));
+            LOG_INFO("playerbots", "[RTG][DISPATCH][BUDGET] pendingQueuedLogins={} intervalCap={} updateBots={} loginBots={} maxNewBots={} onlineBotCount={} maxAllowed={}",
+                     pendingQueuedLogins, intervalCap, updateBots, loginBots, maxNewBots, onlineBotCount, maxAllowedBotCount);
         }
     }
 
@@ -2909,28 +2532,7 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
     // Calculate needed RNDbot accounts
     uint32 neededRndBotAccounts = 0;
     uint32 standaloneCeiling = RTG_GetStandaloneHelperCeiling();
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        // RTG standalone queue-helper mode must be able to draw from the full configured
-        // randombot account pool, not just the tiny subset required to satisfy the current
-        // MaxRandomBots ceiling. Otherwise multi-lane demand (multiple BGs, RDF, future arena
-        // lanes) looks artificially account-starved even when RandomBotAccountCount is large.
-        //
-        // Example failure pattern:
-        // - RandomBotAccountCount = 1200
-        // - RTG.EventDriven.MaxBots = 300
-        // - only ~30 accounts get type=1 assigned (300 / 10 chars-per-account)
-        // - simultaneous WSG + AB + EOTS demand exhausts those 30 accounts and starts
-        //   spamming "increase RandomBotAccountCount" even though 1170 accounts already exist.
-        //
-        // In RTG event-driven mode, treat the configured randombot account pool as available
-        // queue-helper capacity and assign all non-AddClass accounts into the RNDbot pool.
-        uint32 reservedAddClassAccounts = sPlayerbotAIConfig.addClassAccountPoolSize;
-        neededRndBotAccounts = desiredTotalAccounts > reservedAddClassAccounts
-            ? (desiredTotalAccounts - reservedAddClassAccounts)
-            : 0u;
-    }
-    else if (standaloneCeiling > 0)
+    if (standaloneCeiling > 0)
     {
         int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
         int maxBots = static_cast<int>(standaloneCeiling);
@@ -3013,16 +2615,6 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
     LOG_INFO("playerbots", "Account type assignment complete: {} RNDbot accounts, {} AddClass accounts, {} unassigned",
              rndBotTypeAccounts.size(), addClassTypeAccounts.size(),
              currentAssignments.size() - rndBotTypeAccounts.size() - addClassTypeAccounts.size());
-
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        LOG_INFO("playerbots", "[RTG][CONTROL][ACCOUNTS] configuredTotal={} desiredRnd={} assignedRnd={} addClass={} availableRandombotAccounts={}",
-                 desiredTotalAccounts,
-                 neededRndBotAccounts,
-                 rndBotTypeAccounts.size(),
-                 addClassTypeAccounts.size(),
-                 allRandomBotAccounts.size());
-    }
 }
 
 bool RandomPlayerbotMgr::IsAccountType(uint32 accountId, uint8 accountType)
@@ -3047,7 +2639,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         uint32 rtgTarget = GetEventValue(0, "rtg_target");
         uint32 lfgNeed = GetEventValue(0, "rtg_lfg_need_total");
         uint32 bgNeed = GetEventValue(0, "rtg_bg_need_total");
-        uint32 arenaNeed = GetEventValue(0, "rtg_arena_need_total");
 
         uint32 trackedManaged = 0;
         for (uint32 botId : currentBots)
@@ -3064,8 +2655,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         uint32 cappedLfgNeed = std::min<uint32>(lfgNeed, sPlayerbotAIConfig.rtgLfgMaxBots);
         uint32 cappedBgNeed = std::min<uint32>(bgNeed, sPlayerbotAIConfig.rtgBgMaxBots);
-        uint32 cappedArenaNeed = std::min<uint32>(arenaNeed, sPlayerbotAIConfig.rtgBgMaxBots);
-        uint32 unresolvedNeed = std::min<uint32>(cappedLfgNeed + cappedBgNeed + cappedArenaNeed, sPlayerbotAIConfig.rtgEventMaxBots);
+        uint32 unresolvedNeed = std::min<uint32>(cappedLfgNeed + cappedBgNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         uint32 reconstructedTarget = std::min<uint32>(trackedManaged + unresolvedNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         rtgTarget = reconstructedTarget;
 
@@ -3075,8 +2665,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} arenaNeed={} cappedLfgNeed={} cappedBgNeed={} cappedArenaNeed={}",
-                     GetMaxAllowedBotCount(), rtgTarget, trackedManaged, unresolvedNeed, lfgNeed, bgNeed, arenaNeed, cappedLfgNeed, cappedBgNeed, cappedArenaNeed);
+            LOG_INFO("playerbots", "[RTG][ACQUIRE][TARGET] legacyTarget={} rtgTarget={} trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} cappedLfgNeed={} cappedBgNeed={}",
+                     GetMaxAllowedBotCount(), rtgTarget, trackedManaged, unresolvedNeed, lfgNeed, bgNeed, cappedLfgNeed, cappedBgNeed);
             LOG_INFO("playerbots", "[RTG][ACQUIRE][HEADROOM] need={} trackedManaged={} maxAllowed={} headroom={} addInterval={}",
                      unresolvedNeed, trackedManaged, maxAllowedBotCount, onlineHeadroom, botsToAddThisInterval);
         }
@@ -3257,9 +2847,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             busyAccountIds.insert(charInfo.accountId);
 
-            if (std::find(currentBots.begin(), currentBots.end(), charInfo.guid) == currentBots.end())
-                currentBots.push_back(charInfo.guid);
-
             return true;
         };
 
@@ -3303,30 +2890,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 phase = 0;
             };
 
-            struct RtgArenaBucket
-            {
-                uint32 queueTypeId = 0;
-                uint32 team = 0;
-                uint32 level = 0;
-                uint32 bracketId = 0;
-                uint32 arenaSize = 0;
-                uint32 realQueued = 0;
-                uint32 assignedExtra = 0;
-                uint32 currentTeamCount = 0;
-                uint32 need = 0;
-                uint32 phase = 0;
-            };
-
             std::map<std::pair<uint32, uint32>, RtgLfgBucket> lfgBuckets;
             std::map<std::pair<uint32, uint32>, uint32> bgQueueTotals;
             std::map<std::tuple<uint32, uint32, uint32>, RtgBgBucket> bgBuckets;
             std::map<std::pair<uint32, uint32>, BattlegroundBracketId> bgBrackets;
             std::map<std::pair<uint32, uint32>, uint32> bgTeamSizes;
             std::map<std::pair<uint32, uint32>, std::vector<uint32>> bgAdaptiveLevels;
-            std::map<std::tuple<uint32, uint32, uint32>, RtgArenaBucket> arenaBuckets;
-            std::map<std::pair<uint32, uint32>, uint32> arenaSizes;
-            std::map<std::tuple<uint32, uint32, uint32>, uint32> arenaCurrentTeamCounts;
-            std::map<std::pair<uint32, uint32>, std::vector<uint32>> arenaAdaptiveLevels;
 
             for (Player* player : players)
             {
@@ -3367,9 +2936,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!role)
                         role = RTG_DefaultRoleForClass(player->getClass());
 
-                    if (role == PLAYER_ROLE_TANK)
+                    if (role == lfg::PLAYER_ROLE_TANK)
                         ++bucket.realTank;
-                    else if (role == PLAYER_ROLE_HEALER)
+                    else if (role == lfg::PLAYER_ROLE_HEALER)
                         ++bucket.realHeal;
                     else
                         ++bucket.realDps;
@@ -3383,7 +2952,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     BattlegroundQueueTypeId queueTypeId = player->GetBattlegroundQueueTypeId(queueType);
                     if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
                         continue;
-                    bool isArenaQueue = BattlegroundMgr::BGArenaType(queueTypeId) != 0;
+                    if (BattlegroundMgr::BGArenaType(queueTypeId))
+                        continue;
 
                     BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
                     if (bgTypeId == BATTLEGROUND_TYPE_NONE)
@@ -3397,29 +2967,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!pvpDiff)
                         continue;
 
-                    if (isArenaQueue)
-                    {
-                        uint32 arenaSize = RTG_NormalizeArenaSize(uint32(BattlegroundMgr::BGArenaType(queueTypeId)), uint32(queueTypeId));
-                        auto arenaBracketKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()));
-                        arenaSizes[arenaBracketKey] = arenaSize;
-                        arenaAdaptiveLevels[arenaBracketKey].push_back(static_cast<uint32>(player->GetLevel()));
-
-                        bool queueState = player->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || player->IsInvitedForBattlegroundInstance();
-                        bool activeState = player->InArena() || (player->GetMap() && player->GetMap()->IsBattleArena());
-                        if (queueState || activeState)
-                        {
-                            auto arenaTeamKey = std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()), static_cast<uint32>(player->GetTeamId()));
-                            ++arenaCurrentTeamCounts[arenaTeamKey];
-                        }
-                    }
-                    else
-                    {
-                        auto bgKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetLevel()));
-                        ++bgQueueTotals[bgKey];
-                        bgBrackets[bgKey] = pvpDiff->GetBracketId();
-                        bgTeamSizes[bgKey] = bgTemplate->GetMaxPlayersPerTeam();
-                        bgAdaptiveLevels[std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()))].push_back(static_cast<uint32>(player->GetLevel()));
-                    }
+                    auto bgKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetLevel()));
+                    ++bgQueueTotals[bgKey];
+                    bgBrackets[bgKey] = pvpDiff->GetBracketId();
+                    bgTeamSizes[bgKey] = bgTemplate->GetMaxPlayersPerTeam();
+                    bgAdaptiveLevels[std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()))].push_back(static_cast<uint32>(player->GetLevel()));
                 }
             }
 
@@ -3454,7 +3006,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (it == lfgBuckets.end())
                         continue;
 
-                    uint32 roleToCount = desiredRole ? desiredRole : PLAYER_ROLE_DAMAGE;
+                    uint32 roleToCount = desiredRole ? desiredRole : lfg::PLAYER_ROLE_DAMAGE;
                     bool countsInLfgState = false;
                     if (managedBot && managedBot->IsInWorld())
                     {
@@ -3464,18 +3016,18 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     if (countsInLfgState)
                     {
-                        if (roleToCount == PLAYER_ROLE_TANK)
+                        if (roleToCount == lfg::PLAYER_ROLE_TANK)
                             ++it->second.queuedTank;
-                        else if (roleToCount == PLAYER_ROLE_HEALER)
+                        else if (roleToCount == lfg::PLAYER_ROLE_HEALER)
                             ++it->second.queuedHeal;
                         else
                             ++it->second.queuedDps;
                     }
                     else
                     {
-                        if (roleToCount == PLAYER_ROLE_TANK)
+                        if (roleToCount == lfg::PLAYER_ROLE_TANK)
                             ++it->second.assignedTank;
-                        else if (roleToCount == PLAYER_ROLE_HEALER)
+                        else if (roleToCount == lfg::PLAYER_ROLE_HEALER)
                             ++it->second.assignedHeal;
                         else
                             ++it->second.assignedDps;
@@ -3489,63 +3041,37 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType), dataLevel, bracketId, minLevel, maxLevel))
                         continue;
 
-                    bool isArenaQueue = RTG_IsArenaQueueType(desiredQueueType);
+                    auto key = std::make_tuple(desiredQueueType, dataTeam, dataLevel);
+                    auto it = bgBuckets.find(key);
+                    if (it == bgBuckets.end())
+                    {
+                        RtgBgBucket bucket;
+                        bucket.queueTypeId = desiredQueueType;
+                        bucket.team = dataTeam;
+                        bucket.level = dataLevel;
+                        bucket.bracketId = bracketId;
+                        bucket.teamSize = bgTeamSizes[std::make_pair(desiredQueueType, dataLevel)];
+                        bucket.realQueued = bgQueueTotals[std::make_pair(desiredQueueType, dataLevel)];
+                        bucket.phase = GetEventValue(0, RTG_MakeBgPhaseKey(desiredQueueType, uint32(bracketId)));
+
+                        BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
+                        bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
+                            ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
+                            : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+                        bucket.need = 0;
+
+                        it = bgBuckets.emplace(key, bucket).first;
+                    }
+
                     bool countsInBgState = false;
                     if (managedBot && managedBot->IsInWorld())
                     {
                         countsInBgState = managedBot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
-                                          ((managedBot->InBattleground() || managedBot->InArena()) && managedBot->GetBattlegroundTypeId() == BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType)));
+                                          (managedBot->InBattleground() && managedBot->GetBattlegroundTypeId() == BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType)));
                     }
 
-                    if (isArenaQueue)
-                    {
-                        auto key = std::make_tuple(desiredQueueType, dataTeam, dataLevel);
-                        auto it = arenaBuckets.find(key);
-                        if (it == arenaBuckets.end())
-                        {
-                            RtgArenaBucket bucket;
-                            bucket.queueTypeId = desiredQueueType;
-                            bucket.team = dataTeam;
-                            bucket.level = dataLevel;
-                            bucket.bracketId = bracketId;
-                            bucket.arenaSize = RTG_NormalizeArenaSize(uint32(BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(desiredQueueType))), desiredQueueType);
-                            bucket.realQueued = arenaCurrentTeamCounts[std::make_tuple(desiredQueueType, uint32(bracketId), dataTeam)];
-                            bucket.phase = GetEventValue(0, RTG_MakeArenaPhaseKey(desiredQueueType, uint32(bracketId)));
-                            bucket.currentTeamCount = arenaCurrentTeamCounts[std::make_tuple(desiredQueueType, uint32(bracketId), dataTeam)];
-                            bucket.need = 0;
-                            it = arenaBuckets.emplace(key, bucket).first;
-                        }
-
-                        if (!countsInBgState)
-                            ++it->second.assignedExtra;
-                    }
-                    else
-                    {
-                        auto key = std::make_tuple(desiredQueueType, dataTeam, dataLevel);
-                        auto it = bgBuckets.find(key);
-                        if (it == bgBuckets.end())
-                        {
-                            RtgBgBucket bucket;
-                            bucket.queueTypeId = desiredQueueType;
-                            bucket.team = dataTeam;
-                            bucket.level = dataLevel;
-                            bucket.bracketId = bracketId;
-                            bucket.teamSize = bgTeamSizes[std::make_pair(desiredQueueType, dataLevel)];
-                            bucket.realQueued = bgQueueTotals[std::make_pair(desiredQueueType, dataLevel)];
-                            bucket.phase = GetEventValue(0, RTG_MakeBgPhaseKey(desiredQueueType, uint32(bracketId)));
-
-                            BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
-                            bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
-                            bucket.need = 0;
-
-                            it = bgBuckets.emplace(key, bucket).first;
-                        }
-
-                        if (!countsInBgState)
-                            ++it->second.assignedExtra;
-                    }
+                    if (!countsInBgState)
+                        ++it->second.assignedExtra;
                 }
             }
 
@@ -3608,116 +3134,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
 
-            std::map<std::tuple<uint32, uint32, uint32>, RtgArenaBucket> adaptiveArenaBuckets;
-            for (auto const& queuePair : arenaAdaptiveLevels)
-            {
-                uint32 queueTypeId = queuePair.first.first;
-                uint32 bracketId = queuePair.first.second;
-                uint32 plannerNeed = GetEventValue(0, RTG_MakeArenaNeedKey(queueTypeId, bracketId));
-                uint32 phase = GetEventValue(0, RTG_MakeArenaPhaseKey(queueTypeId, bracketId));
-                uint32 arenaSize = arenaSizes[queuePair.first] ? arenaSizes[queuePair.first] : RTG_NormalizeArenaSize(uint32(BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueTypeId))), queueTypeId);
-                if (!plannerNeed || !arenaSize)
-                    continue;
-
-                RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(queuePair.second, sPlayerbotAIConfig.rtgQueueBotLevel);
-
-                uint32 currentAlliance = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_ALLIANCE))];
-                uint32 currentHorde = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, uint32(TEAM_HORDE))];
-                uint32 needAlliance = arenaSize > currentAlliance ? (arenaSize - currentAlliance) : 0u;
-                uint32 needHorde = arenaSize > currentHorde ? (arenaSize - currentHorde) : 0u;
-                uint32 desiredTotal = needAlliance + needHorde;
-
-                if (desiredTotal < plannerNeed)
-                {
-                    uint32 extra = plannerNeed - desiredTotal;
-                    while (extra--)
-                    {
-                        if (currentAlliance <= currentHorde)
-                        {
-                            ++needAlliance;
-                            ++currentAlliance;
-                        }
-                        else
-                        {
-                            ++needHorde;
-                            ++currentHorde;
-                        }
-                    }
-                }
-                else if (desiredTotal > plannerNeed)
-                {
-                    while (desiredTotal > plannerNeed)
-                    {
-                        if (needAlliance && currentAlliance >= currentHorde)
-                        {
-                            --needAlliance;
-                            --desiredTotal;
-                            continue;
-                        }
-                        if (needHorde)
-                        {
-                            --needHorde;
-                            --desiredTotal;
-                            continue;
-                        }
-                        break;
-                    }
-                }
-
-                for (uint32 teamId : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
-                {
-                    uint32 teamNeed = teamId == uint32(TEAM_ALLIANCE) ? needAlliance : needHorde;
-                    if (!teamNeed)
-                        continue;
-
-                    std::unordered_map<uint32, uint32> levelCounts;
-                    for (uint32 i = 0; i < teamNeed; ++i)
-                        ++levelCounts[RTG_ChooseAdaptiveQueueBotLevel(window, sPlayerbotAIConfig.rtgQueueBotLevel)];
-
-                    for (auto const& lc : levelCounts)
-                    {
-                        RtgArenaBucket bucket;
-                        bucket.queueTypeId = queueTypeId;
-                        bucket.team = teamId;
-                        bucket.level = lc.first;
-                        bucket.bracketId = bracketId;
-                        bucket.arenaSize = arenaSize;
-                        bucket.realQueued = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, teamId)];
-                        bucket.currentTeamCount = arenaCurrentTeamCounts[std::make_tuple(queueTypeId, bracketId, teamId)];
-                        bucket.phase = phase;
-                        bucket.need = lc.second;
-                        adaptiveArenaBuckets[std::make_tuple(queueTypeId, teamId, lc.first)] = bucket;
-                    }
-                }
-            }
-
-            for (auto const& kv : adaptiveArenaBuckets)
-            {
-                auto it = arenaBuckets.find(kv.first);
-                if (it == arenaBuckets.end())
-                    arenaBuckets.emplace(kv.first, kv.second);
-                else
-                {
-                    it->second.need = std::max(it->second.need, kv.second.need);
-                    if (!it->second.bracketId)
-                        it->second.bracketId = kv.second.bracketId;
-                    if (!it->second.arenaSize)
-                        it->second.arenaSize = kv.second.arenaSize;
-                    if (!it->second.realQueued)
-                        it->second.realQueued = kv.second.realQueued;
-                    if (!it->second.phase)
-                        it->second.phase = kv.second.phase;
-                }
-            }
-
             uint32 rtgNow = static_cast<uint32>(time(nullptr));
             if (RTG_QueueDebugEnabled())
             {
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} arenaBuckets={} currentBots={} targetBots={}",
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][PLAN] chars={} lfgBuckets={} bgBuckets={} currentBots={} targetBots={}",
                          static_cast<uint32>(allCharacters.size()),
                          static_cast<uint32>(lfgBuckets.size()),
                          static_cast<uint32>(bgBuckets.size()),
-                         static_cast<uint32>(arenaBuckets.size()),
                          static_cast<uint32>(currentBots.size()),
                          maxAllowedBotCount);
             }
@@ -3730,11 +3153,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
                 }
 
-                uint32 needTank = RTG_TargetLfgRoleCount(PLAYER_ROLE_TANK);
+                uint32 needTank = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
                 needTank = needTank > (bucket.realTank + bucket.queuedTank + bucket.assignedTank) ? (needTank - (bucket.realTank + bucket.queuedTank + bucket.assignedTank)) : 0u;
-                uint32 needHeal = RTG_TargetLfgRoleCount(PLAYER_ROLE_HEALER);
+                uint32 needHeal = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
                 needHeal = needHeal > (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal) ? (needHeal - (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal)) : 0u;
-                uint32 needDps = RTG_TargetLfgRoleCount(PLAYER_ROLE_DAMAGE);
+                uint32 needDps = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
                 needDps = needDps > (bucket.realDps + bucket.queuedDps + bucket.assignedDps) ? (needDps - (bucket.realDps + bucket.queuedDps + bucket.assignedDps)) : 0u;
                 bucket.need = needTank + needHeal + needDps;
             }
@@ -3798,10 +3221,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             std::vector<RtgLfgBucket> orderedLfgBuckets;
             std::vector<RtgBgBucket> orderedBgBuckets;
-            std::vector<RtgArenaBucket> orderedArenaBuckets;
             uint32 totalLfgNeed = 0;
             uint32 totalBgNeed = 0;
-            uint32 totalArenaNeed = 0;
 
             for (auto const& kv : lfgBuckets)
             {
@@ -3818,15 +3239,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 {
                     orderedBgBuckets.push_back(kv.second);
                     totalBgNeed += kv.second.need;
-                }
-            }
-
-            for (auto const& kv : arenaBuckets)
-            {
-                if (kv.second.need)
-                {
-                    orderedArenaBuckets.push_back(kv.second);
-                    totalArenaNeed += kv.second.need;
                 }
             }
 
@@ -3847,32 +3259,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 switch (phase)
                 {
-                    case 2: return 0; // pop_or_invite
+                    case 0: return 0; // pop_or_invite
                     case 1: return 1; // starter_fill
-                    case 3: return 2; // live_refill
-                    case 4: return 3; // finish_fill
+                    case 2: return 2; // live_refill
+                    case 3: return 3; // finish_fill
                     default: return 4;
                 }
             };
 
             std::sort(orderedBgBuckets.begin(), orderedBgBuckets.end(), [&](RtgBgBucket const& a, RtgBgBucket const& b)
-            {
-                uint32 aPriority = rtgBgPhasePriority(a.phase);
-                uint32 bPriority = rtgBgPhasePriority(b.phase);
-                if (aPriority != bPriority)
-                    return aPriority < bPriority;
-                if (a.need != b.need)
-                    return a.need > b.need;
-                if (a.realQueued != b.realQueued)
-                    return a.realQueued > b.realQueued;
-                if (a.queueTypeId != b.queueTypeId)
-                    return a.queueTypeId < b.queueTypeId;
-                if (a.team != b.team)
-                    return a.team < b.team;
-                return a.level > b.level;
-            });
-
-            std::sort(orderedArenaBuckets.begin(), orderedArenaBuckets.end(), [&](RtgArenaBucket const& a, RtgArenaBucket const& b)
             {
                 uint32 aPriority = rtgBgPhasePriority(a.phase);
                 uint32 bPriority = rtgBgPhasePriority(b.phase);
@@ -3895,7 +3290,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 if (!bucket.need)
                     continue;
-                if (bucket.phase == 2)
+                if (bucket.phase == 0)
                     bgHasStartupNeed = true;
                 else if (bucket.phase == 1)
                     bgHasStarterNeed = true;
@@ -3912,65 +3307,49 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
 
             uint32 remainingCapacity = maxAllowedBotCount;
-            uint32 totalRequested = totalLfgNeed + totalBgNeed + totalArenaNeed;
+            uint32 totalRequested = totalLfgNeed + totalBgNeed;
             uint32 lfgCapacity = 0;
             uint32 bgCapacity = 0;
-            uint32 arenaCapacity = 0;
             if (totalRequested)
             {
-                lfgCapacity = totalLfgNeed ? ((remainingCapacity * totalLfgNeed + totalRequested - 1) / totalRequested) : 0u;
-                bgCapacity = totalBgNeed ? ((remainingCapacity * totalBgNeed + totalRequested - 1) / totalRequested) : 0u;
+                lfgCapacity = (remainingCapacity * totalLfgNeed + totalRequested - 1) / totalRequested;
                 if (lfgCapacity > remainingCapacity)
                     lfgCapacity = remainingCapacity;
-                if (bgCapacity > remainingCapacity - lfgCapacity)
-                    bgCapacity = remainingCapacity - lfgCapacity;
-                arenaCapacity = remainingCapacity - lfgCapacity - bgCapacity;
-
-                if (!totalLfgNeed && !totalBgNeed)
-                    arenaCapacity = remainingCapacity;
-                else if (!totalLfgNeed && !totalArenaNeed)
+                bgCapacity = remainingCapacity - lfgCapacity;
+                if (!totalLfgNeed)
                     bgCapacity = remainingCapacity;
-                else if (!totalBgNeed && !totalArenaNeed)
+                if (!totalBgNeed)
                     lfgCapacity = remainingCapacity;
 
-                if (remainingCapacity >= 2)
+                // Groundwork for the RTG role/context framework:
+                // when both RDF and BG need support, do not allow one queue type to starve the other.
+                if (totalLfgNeed && totalBgNeed)
                 {
-                    auto giveOne = [&](uint32& target, uint32& donor)
+                    if (remainingCapacity == 1)
                     {
-                        if (!target && donor)
+                        bool bgTurn = GetEventValue(0, "rtg_queue_turn_bg") != 0;
+                        lfgCapacity = bgTurn ? 0u : 1u;
+                        bgCapacity = bgTurn ? 1u : 0u;
+                        SetEventValue(0, "rtg_queue_turn_bg", bgTurn ? 0u : 1u, 30);
+                    }
+                    else if (remainingCapacity >= 2)
+                    {
+                        if (!lfgCapacity && bgCapacity)
                         {
-                            target = 1u;
-                            --donor;
+                            lfgCapacity = 1;
+                            --bgCapacity;
                         }
-                    };
-
-                    if (totalLfgNeed && !lfgCapacity)
-                    {
-                        if (bgCapacity > arenaCapacity)
-                            giveOne(lfgCapacity, bgCapacity);
-                        else
-                            giveOne(lfgCapacity, arenaCapacity);
-                    }
-                    if (totalBgNeed && !bgCapacity)
-                    {
-                        if (lfgCapacity > arenaCapacity)
-                            giveOne(bgCapacity, lfgCapacity);
-                        else
-                            giveOne(bgCapacity, arenaCapacity);
-                    }
-                    if (totalArenaNeed && !arenaCapacity)
-                    {
-                        if (bgCapacity > lfgCapacity)
-                            giveOne(arenaCapacity, bgCapacity);
-                        else
-                            giveOne(arenaCapacity, lfgCapacity);
+                        if (!bgCapacity && lfgCapacity)
+                        {
+                            bgCapacity = 1;
+                            --lfgCapacity;
+                        }
                     }
                 }
             }
 
             uint32 rtgLfgLogged = 0;
             uint32 rtgBgLogged = 0;
-            uint32 rtgArenaLogged = 0;
 
             auto tryFillLfgRole = [&](RtgLfgBucket& bucket, uint32 desiredRole, uint32& capacity) -> bool
             {
@@ -3994,15 +3373,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
 
-                    RTG_ConsumeRdfDesiredRole(*this, bucket.owner, desiredRole,
-                        sPlayerbotAIConfig.rtgQueueGraceSeconds + 20, addData);
-
                     ++rtgLfgLogged;
                     --capacity;
                     --remainingCapacity;
-                    if (desiredRole == PLAYER_ROLE_TANK)
+                    if (desiredRole == lfg::PLAYER_ROLE_TANK)
                         ++bucket.assignedTank;
-                    else if (desiredRole == PLAYER_ROLE_HEALER)
+                    else if (desiredRole == lfg::PLAYER_ROLE_HEALER)
                         ++bucket.assignedHeal;
                     else
                         ++bucket.assignedDps;
@@ -4018,30 +3394,22 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (bucket.startTs && static_cast<uint32>(time(nullptr)) < bucket.startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
                     return false;
 
-                uint32 needTank = RTG_GetBucketNeedForRole(bucket, PLAYER_ROLE_TANK);
-                uint32 needHeal = RTG_GetBucketNeedForRole(bucket, PLAYER_ROLE_HEALER);
-                uint32 needDps = RTG_GetBucketNeedForRole(bucket, PLAYER_ROLE_DAMAGE);
+                uint32 needTank = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
+                needTank = needTank > (bucket.realTank + bucket.queuedTank + bucket.assignedTank) ? (needTank - (bucket.realTank + bucket.queuedTank + bucket.assignedTank)) : 0u;
+                uint32 needHeal = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
+                needHeal = needHeal > (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal) ? (needHeal - (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal)) : 0u;
+                uint32 needDps = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
+                needDps = needDps > (bucket.realDps + bucket.queuedDps + bucket.assignedDps) ? (needDps - (bucket.realDps + bucket.queuedDps + bucket.assignedDps)) : 0u;
                 if (!needTank && !needHeal && !needDps)
-                {
-                    RTG_ClearRdfDesiredRoles(*this, bucket.owner);
                     return false;
-                }
 
                 bool added = false;
-                uint32 desiredRole = RTG_GetNextRdfDesiredRole(*this, bucket.owner);
-                if (desiredRole == PLAYER_ROLE_TANK && needTank)
-                    added = tryFillLfgRole(bucket, PLAYER_ROLE_TANK, capacity);
-                else if (desiredRole == PLAYER_ROLE_HEALER && needHeal)
-                    added = tryFillLfgRole(bucket, PLAYER_ROLE_HEALER, capacity);
-                else if (desiredRole == PLAYER_ROLE_DAMAGE && needDps)
-                    added = tryFillLfgRole(bucket, PLAYER_ROLE_DAMAGE, capacity);
-
-                if (!added && needTank)
-                    added = tryFillLfgRole(bucket, PLAYER_ROLE_TANK, capacity);
+                if (needTank)
+                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_TANK, capacity);
                 if (!added && needHeal)
-                    added = tryFillLfgRole(bucket, PLAYER_ROLE_HEALER, capacity);
+                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_HEALER, capacity);
                 if (!added && needDps)
-                    added = tryFillLfgRole(bucket, PLAYER_ROLE_DAMAGE, capacity);
+                    added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_DAMAGE, capacity);
                 return added;
             };
 
@@ -4098,7 +3466,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 uint32 pendingLane = RTG_CountPendingHelpers(bucket.queueTypeId, uint32(bucket.bracketId), bucket.team);
-                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.queueTypeId, bucket.phase))
+                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.phase))
                     return false;
 
                 return tryFillBgBucket(bucket, capacity);
@@ -4114,7 +3482,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     {
                         if (!capacity || !remainingCapacity)
                             break;
-                        if (suppressBgFinishFill && bucket.phase == 4)
+                        if (suppressBgFinishFill && bucket.phase == 3)
                             continue;
                         if (tryFillBgBucketOnce(bucket, capacity))
                             added = true;
@@ -4122,156 +3490,91 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             };
 
-            auto tryFillArenaBucket = [&](RtgArenaBucket& bucket, uint32& capacity) -> bool
-            {
-                if (!capacity)
-                    return false;
-
-                std::string addData = RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
-                for (auto const& charInfo : allCharacters)
-                {
-                    if (!capacity)
-                        return false;
-
-                    uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
-                    if (charTeam != bucket.team)
-                        continue;
-                    if (!tryLoginBot(charInfo, addData))
-                        continue;
-
-                    LOG_INFO("playerbots", "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} arena_queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
-                    ++rtgArenaLogged;
-                    --capacity;
-                    --remainingCapacity;
-                    ++bucket.assignedExtra;
-                    return true;
-                }
-                return false;
-            };
-
-            auto tryFillArenaBucketOnce = [&](RtgArenaBucket& bucket, uint32& capacity) -> bool
-            {
-                if (!capacity || !remainingCapacity)
-                    return false;
-                if (bucket.assignedExtra >= bucket.need)
-                    return false;
-
-                uint32 pendingGlobal = RTG_CountPendingHelpers();
-                if (pendingGlobal >= RTG_GetPendingHelperLoginGlobalCap())
-                    return false;
-
-                uint32 pendingLane = RTG_CountPendingHelpers(bucket.queueTypeId, uint32(bucket.bracketId), bucket.team);
-                if (pendingLane >= RTG_GetPendingHelperLoginLaneCap(bucket.queueTypeId, bucket.phase))
-                    return false;
-
-                return tryFillArenaBucket(bucket, capacity);
-            };
-
-            auto fillReservedArenaLane = [&](uint32& capacity)
-            {
-                bool added = true;
-                while (capacity && remainingCapacity && added)
-                {
-                    added = false;
-                    for (RtgArenaBucket& bucket : orderedArenaBuckets)
-                    {
-                        if (!capacity || !remainingCapacity)
-                            break;
-                        if (tryFillArenaBucketOnce(bucket, capacity))
-                            added = true;
-                    }
-                }
-            };
-
             uint32 reservedLfgCapacity = lfgCapacity;
             uint32 reservedBgCapacity = bgCapacity;
-            uint32 reservedArenaCapacity = arenaCapacity;
             uint32 laneDebugInitialLfg = reservedLfgCapacity;
             uint32 laneDebugInitialBg = reservedBgCapacity;
-            uint32 laneDebugInitialArena = reservedArenaCapacity;
             bool bgDemandActive = totalBgNeed > 0;
 
             fillReservedLfgLane(reservedLfgCapacity, bgDemandActive);
             fillReservedBgLane(reservedBgCapacity);
-            fillReservedArenaLane(reservedArenaCapacity);
 
-            uint32 sharedSurplus = reservedLfgCapacity + reservedBgCapacity + reservedArenaCapacity;
+            uint32 sharedSurplus = reservedLfgCapacity + reservedBgCapacity;
             lfgCapacity = 0;
             bgCapacity = 0;
-            arenaCapacity = 0;
 
             if (sharedSurplus && remainingCapacity)
             {
-                uint32 laneTurn = GetEventValue(0, "rtg_queue_turn_lane") % 3u;
+                bool bgTurn = GetEventValue(0, "rtg_queue_turn_bg") != 0;
                 bool added = true;
 
                 while (sharedSurplus && remainingCapacity && added)
                 {
                     added = false;
 
-                    auto tryLaneByIndex = [&](uint32 laneIndex) -> bool
+                    auto tryLane = [&](bool preferBg) -> bool
                     {
-                        switch (laneIndex % 3u)
+                        if (preferBg)
                         {
-                            case 0:
-                                for (RtgLfgBucket& bucket : orderedLfgBuckets)
-                                {
-                                    if (bgDemandActive && !bucket.activeDungeon)
-                                        continue;
-                                    if (tryFillLfgBucketOnce(bucket, sharedSurplus))
-                                        return true;
-                                }
-                                return false;
-                            case 1:
-                                for (RtgBgBucket& bucket : orderedBgBuckets)
-                                {
-                                    if (suppressBgFinishFill && bucket.phase == 4)
-                                        continue;
-                                    if (tryFillBgBucketOnce(bucket, sharedSurplus))
-                                        return true;
-                                }
-                                return false;
-                            default:
-                                for (RtgArenaBucket& bucket : orderedArenaBuckets)
-                                {
-                                    if (tryFillArenaBucketOnce(bucket, sharedSurplus))
-                                        return true;
-                                }
-                                return false;
+                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            {
+                                if (suppressBgFinishFill && bucket.phase == 3)
+                                    continue;
+                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                            for (RtgLfgBucket& bucket : orderedLfgBuckets)
+                            {
+                                if (bgDemandActive && !bucket.activeDungeon)
+                                    continue;
+                                if (tryFillLfgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
                         }
+                        else
+                        {
+                            for (RtgLfgBucket& bucket : orderedLfgBuckets)
+                            {
+                                if (bgDemandActive && !bucket.activeDungeon)
+                                    continue;
+                                if (tryFillLfgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            {
+                                if (suppressBgFinishFill && bucket.phase == 3)
+                                    continue;
+                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                        }
+                        return false;
                     };
 
-                    for (uint32 offset = 0; offset < 3u && !added; ++offset)
+                    if (tryLane(bgTurn))
                     {
-                        uint32 laneIndex = (laneTurn + offset) % 3u;
-                        if (tryLaneByIndex(laneIndex))
-                        {
-                            added = true;
-                            laneTurn = (laneIndex + 1u) % 3u;
-                        }
+                        added = true;
+                        bgTurn = !bgTurn;
                     }
                 }
 
-                SetEventValue(0, "rtg_queue_turn_lane", laneTurn, 30);
+                SetEventValue(0, "rtg_queue_turn_bg", bgTurn ? 1u : 0u, 30);
             }
 
             if (RTG_QueueDebugEnabled())
             {
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][LANES] lfgReserved={} bgReserved={} arenaReserved={} lfgUnused={} bgUnused={} arenaUnused={} sharedSurplus={} remainingCapacity={} bgDemandActive={}",
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][LANES] lfgReserved={} bgReserved={} lfgUnused={} bgUnused={} sharedSurplus={} remainingCapacity={} bgDemandActive={}",
                          laneDebugInitialLfg,
                          laneDebugInitialBg,
-                         laneDebugInitialArena,
                          reservedLfgCapacity,
                          reservedBgCapacity,
-                         reservedArenaCapacity,
                          sharedSurplus,
                          remainingCapacity,
                          bgDemandActive ? 1u : 0u);
             }
 
             if (RTG_QueueDebugEnabled())
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} loggedArena={} remainingCapacity={} totalLfgNeed={} totalBgNeed={} totalArenaNeed={}", rtgLfgLogged, rtgBgLogged, rtgArenaLogged, remainingCapacity, totalLfgNeed, totalBgNeed, totalArenaNeed);
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][RESULT] loggedLfg={} loggedBg={} remainingCapacity={} totalLfgNeed={} totalBgNeed={}", rtgLfgLogged, rtgBgLogged, remainingCapacity, totalLfgNeed, totalBgNeed);
 
             if (remainingCapacity)
             {
@@ -4284,16 +3587,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                              remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()));
                 }
 
-                if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed || totalArenaNeed))
+                if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
                 {
                     int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
                     uint32 moreAccountsNeeded = (remainingCapacity + divisor - 1) / divisor;
                     LOG_ERROR("playerbots",
-                              "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file. {} more accounts needed. [RTG diag: configuredAccounts={}, assignedRndAccounts={}, busyAccounts={}]",
-                              moreAccountsNeeded,
-                              sPlayerbotAIConfig.randomBotAccountCount,
-                              static_cast<uint32>(rndBotTypeAccounts.size()),
-                              static_cast<uint32>(busyAccountIds.size()));
+                              "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
+                              "{} more accounts needed.", moreAccountsNeeded);
                     missingBotsTimer = 0;
                 }
             }
@@ -4838,15 +4138,13 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
     {
         RTG::RtgBgQueuePlanner bgPlanner;
         bgPlanner.ApplyDemandEvents(*this);
-        RTG_ApplyArenaLaneScaffolding(*this);
     }
 
     if (RTG_QueueDebugEnabled())
         LOG_INFO("playerbots",
-    "[RTGDBG][BG] check end anyRealDemand={} needTotal={} arenaNeedTotal={} start={} turnBg={}",
+    "[RTGDBG][BG] check end anyRealDemand={} needTotal={} start={} turnBg={}",
     GetEventValue(0, "rtg_bg_any_real_demand"),
     GetEventValue(0, "rtg_bg_need_total"),
-    GetEventValue(0, "rtg_arena_need_total"),
     GetEventValue(0, "rtg_bg_start"),
     GetEventValue(0, "rtg_queue_turn_bg"));
     LOG_DEBUG("playerbots", "BG Queue check finished");
@@ -4871,7 +4169,20 @@ void RandomPlayerbotMgr::CheckLfgQueue()
     if (RTG_QueueDebugEnabled())
         LOG_INFO("playerbots", "[RTGDBG][LFG] check begin trackedPlayers={} trackedBots={}", static_cast<uint32>(players.size()), static_cast<uint32>(playerBots.size()));
 
-    std::map<uint32, RTG::RtgLfgQueueOwnerSnapshot> requests;
+    struct QueueRequest
+    {
+        uint32 owner = 0;
+        uint32 team = 0;
+        uint32 level = 0;
+        uint32 realTank = 0;
+        uint32 realHeal = 0;
+        uint32 realDps = 0;
+        uint32 realQueued = 0;
+        uint32 realActive = 0;
+        bool activeDungeon = false;
+    };
+
+    std::map<uint32, QueueRequest> requests;
     bool anyRealLfgDemand = false;
 
     LfgDungeons[TEAM_ALLIANCE].clear();
@@ -4892,9 +4203,6 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 				queueGuid = group->GetGUID();
 		}
 
-        if (player->InBattleground() || player->InArena() || player->InBattlegroundQueue())
-            continue;
-
         lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
         Map* map = player->GetMap();
         bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
@@ -4907,7 +4215,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         anyRealLfgDemand = true;
 
         uint32 owner = queueGuid.GetCounter();
-        RTG::RtgLfgQueueOwnerSnapshot& req = requests[owner];
+        QueueRequest& req = requests[owner];
         req.owner = owner;
         req.team = player->GetTeamId();
         req.level = player->GetLevel();
@@ -4921,9 +4229,9 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (!role)
             role = RTG_DefaultRoleForClass(player->getClass());
 
-        if (role == PLAYER_ROLE_TANK)
+        if (role == lfg::PLAYER_ROLE_TANK)
             ++req.realTank;
-        else if (role == PLAYER_ROLE_HEALER)
+        else if (role == lfg::PLAYER_ROLE_HEALER)
             ++req.realHeal;
         else
             ++req.realDps;
@@ -4947,8 +4255,60 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 	// Global LFG demand can live longer to avoid thrashing between scans.
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        RTG::RtgRdfQueuePlanner rdfPlanner;
-        rdfPlanner.ApplyDemandEvents(*this, requests, anyRealLfgDemand);
+        uint32 now = static_cast<uint32>(time(nullptr));
+		uint32 ownerTtl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 20;
+		uint32 globalTtl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
+		uint32 desiredHelperTotal = 0;
+		bool anyReady = false;
+		uint32 oldestPendingStart = 0;
+
+        for (auto const& kv : requests)
+        {
+            QueueRequest const& req = kv.second;
+            uint32 existingStart = GetEventValue(req.owner, "rtg_lfg_start");
+            uint32 startTs = req.activeDungeon ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (existingStart ? existingStart : now);
+            SetEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
+			SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
+            
+			uint32 needTank = req.realTank >= 1 ? 0u : 1u;
+            uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
+            uint32 needDps = req.realDps >= 3 ? 0u : (3u - req.realDps);
+            uint32 helperNeed = needTank + needHeal + needDps;
+            desiredHelperTotal += helperNeed;
+
+            SetEventValue(req.owner, "rtg_lfg_need_tank", needTank, needTank ? ownerTtl : 0u,
+                          needTank ? RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_TANK, req.owner) : "");
+            SetEventValue(req.owner, "rtg_lfg_need_heal", needHeal, needHeal ? ownerTtl : 0u,
+                          needHeal ? RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_HEALER, req.owner) : "");
+            SetEventValue(req.owner, "rtg_lfg_need_dps", needDps, needDps ? ownerTtl : 0u,
+                          needDps ? RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_DAMAGE, req.owner) : "");
+
+            if (RTG_QueueDebugEnabled() || helperNeed)
+            {
+                LOG_INFO("playerbots", "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} needTank={} needHeal={} needDps={} startTs={}",
+                         req.owner, req.team, req.level, req.realQueued, req.realActive, needTank, needHeal, needDps, startTs);
+            }
+
+            if (req.activeDungeon || now >= startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
+                anyReady = true;
+            else if (!oldestPendingStart || startTs < oldestPendingStart)
+                oldestPendingStart = startTs;
+        }
+
+        if (anyRealLfgDemand && desiredHelperTotal)
+        {
+            uint32 globalStart = anyReady ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (oldestPendingStart ? oldestPendingStart : now);
+            uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgLfgMaxBots);
+            LOG_INFO("playerbots", "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
+                     static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
+            SetEventValue(0, "rtg_lfg_start", globalStart, globalTtl);
+			SetEventValue(0, "rtg_lfg_need_total", cappedNeed, globalTtl);
+        }
+        else
+        {
+            SetEventValue(0, "rtg_lfg_start", 0, 0);
+            SetEventValue(0, "rtg_lfg_need_total", 0, 0);
+        }
     }
 
     if (RTG_QueueDebugEnabled())
@@ -5040,7 +4400,10 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner) && RTG_IsOwnerInBattlegroundMap(desiredOwner))
         {
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_map", bot, desiredOwner));
-            RTG_ClearManagedQueueEvents(*this, bot, true);
+            SetEventValue(bot, "add", 0, 0);
+            SetEventValue(bot, "logout", 0, 0);
+            SetEventValue(bot, "rtg_add_requested", 0, 0);
+            SetEventValue(bot, "rtg_lfg_pending", 0, 0);
             currentBots.remove(bot);
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                 RTG::RtgQueueLedger::Instance().Remove(bot);
@@ -5049,24 +4412,19 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
 
         if (RTG::IsQueueManagedAddData(addData))
         {
-            std::string cancelReason;
-            if (RTG_ShouldCancelPendingQueueAdd(addData, cancelReason))
-            {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][CANCEL] helper={} reason={} add='{}'", bot, cancelReason, addData));
-                RTG_ClearManagedQueueEvents(*this, bot, true);
-                currentBots.remove(bot);
-                if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
-                    RTG::RtgQueueLedger::Instance().Remove(bot);
-                return false;
-            }
-
             uint32 requestTs = GetEventValue(bot, "rtg_add_requested");
             uint32 nowTs = NowSeconds();
             uint32 stallThreshold = RTG_GetDispatchStallThresholdSeconds();
             if (requestTs && nowTs > requestTs && (nowTs - requestTs) >= stallThreshold)
             {
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][STALL] helper={} waited={} add='{}'", bot, (nowTs - requestTs), addData));
-                RTG_ClearManagedQueueEvents(*this, bot, true);
+                SetEventValue(bot, "add", 0, 0);
+                SetEventValue(bot, "logout", 0, 0);
+                SetEventValue(bot, "rtg_add_requested", 0, 0);
+                SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+                SetEventValue(bot, "rtg_bg_pending", 0, 0);
+                SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
+                SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
                 currentBots.remove(bot);
                 if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                     RTG::RtgQueueLedger::Instance().Remove(bot);
@@ -6320,7 +5678,6 @@ uint32 RandomPlayerbotMgr::GetTuningOrDefault(std::string const& key, uint32 def
 void RandomPlayerbotMgr::GetBots()
 {
     uint32 target = sPlayerbotAIConfig.rtgEventDriven ? GetEventValue(0, "rtg_target") : GetMaxAllowedBotCount();
-    bool includeAllQueueManagedAdds = sPlayerbotAIConfig.rtgEventDriven;
 
     for (auto it = currentBots.begin(); it != currentBots.end();)
     {
@@ -6343,7 +5700,7 @@ void RandomPlayerbotMgr::GetBots()
         ++it;
     }
 
-    if (!includeAllQueueManagedAdds && currentBots.size() >= target)
+    if (currentBots.size() >= target)
         return;
 
     PlayerbotsDatabasePreparedStatement* stmt =
@@ -6373,7 +5730,7 @@ void RandomPlayerbotMgr::GetBots()
             if (already.insert(bot).second)
                 currentBots.push_back(bot);
 
-            if (!includeAllQueueManagedAdds && currentBots.size() >= target)
+            if (currentBots.size() >= target)
                 break;
 
         } while (result->NextRow());
@@ -6741,21 +6098,8 @@ void RandomPlayerbotMgr::HandleCommand(uint32 type, std::string const text, Play
 
 void RandomPlayerbotMgr::OnPlayerLogout(Player* player)
 {
-    if (player && IsRandomBot(player))
-    {
-        uint32 botId = player->GetGUID().GetCounter();
-        SetEventValue(botId, "rtg_bg_pending", 0, 0);
-        SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-        SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-        SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-        SetEventValue(botId, "rtg_bg_was_in_instance", 0, 0);
-        SetEventValue(botId, "rtg_bg_completed_instance", 0, 0);
-        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-        SetEventValue(botId, "rtg_lfg_role_ready", 0, 0);
-        SetEventValue(botId, "rtg_add_requested", 0, 0);
-        if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
-            RTG::RtgQueueLedger::Instance().Remove(botId);
-    }
+    if (player && IsRandomBot(player) && sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+        RTG::RtgQueueLedger::Instance().Remove(player->GetGUID().GetCounter());
 
     DisablePlayerBot(player->GetGUID());
 
@@ -6800,25 +6144,37 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
         if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel))
         {
-            RTG_ApplyQueueHelperLoginProfile(bot, desiredLevel, "lfg");
+            if (desiredLevel && bot->GetLevel() != desiredLevel)
+            {
+                bot->GiveLevel(desiredLevel);
+                bot->InitStatsForLevel(true);
+                bot->SetUInt32Value(PLAYER_XP, 0);
+
+                PlayerbotFactory factory(bot, desiredLevel);
+                factory.InitEquipment(true, true);
+                factory.Refresh();
+            }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_role_ready", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_was_in_instance", 0, 0);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_completed_instance", 0, 0);
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
-            RTG_ApplyQueueHelperLoginProfile(bot, desiredLevel, RTG_IsArenaQueueType(desiredQueueType) ? "arena" : "bg");
+            if (desiredLevel && bot->GetLevel() != desiredLevel)
+            {
+                bot->GiveLevel(desiredLevel);
+                bot->InitStatsForLevel(true);
+                bot->SetUInt32Value(PLAYER_XP, 0);
+
+                PlayerbotFactory factory(bot, desiredLevel);
+                factory.InitEquipment(true, true);
+                factory.Refresh();
+            }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_retry", 0, 0);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_was_in_instance", 0, 0);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_completed_instance", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_role_ready", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
@@ -6828,29 +6184,16 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 uint32 maxLevel = desiredLevel;
                 if (RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType), desiredLevel ? desiredLevel : bot->GetLevel(), bracketId, minLevel, maxLevel))
                 {
-                    RTG::RecordHelperReservation(bot, BattlegroundQueueTypeId(desiredQueueType), bracketId, TeamId(desiredTeam),
+                    RTG::RecordHelperReservation(bot, BattlegroundQueueTypeId(desiredQueueType), bracketId, TeamId(bot->GetTeamId()),
                                                  "event-driven battleground helper login", RTG::RtgHelperPurpose::StarterFill);
                     if (RTG_QueueOwnershipDebugEnabled())
-                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} reserved queue={} bracket={} desiredTeam={} actualTeam={}", bot->GetGUID().GetCounter(), desiredQueueType, uint32(bracketId), desiredTeam, bot->GetTeamId());
+                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} reserved queue={} bracket={} team={}", bot->GetGUID().GetCounter(), desiredQueueType, uint32(bracketId), bot->GetTeamId());
                 }
             }
 
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN] helper={} queue={} desiredTeam={} actualTeam={} level={}",
-                bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, bot->GetTeamId(), bot->GetLevel()));
-
-            if (RTG_IsArenaQueueType(desiredQueueType) && RTG_IsCoreArenaQueueType(desiredQueueType) && uint32(bot->GetTeamId()) != desiredTeam)
-            {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ABANDON] helper={} queue={} reason=team_mismatch desiredTeam={} actualTeam={}",
-                    bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, bot->GetTeamId()));
-                SetEventValue(bot->GetGUID().GetCounter(), "add", 0, 0);
-                SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
-                SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_grace", 0, 0);
-                RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_arena_team_mismatch");
-            }
-            else
-            {
-                RTG_DispatchImmediateBgQueueJoin(bot, desiredQueueType, "login_success");
-            }
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN] helper={} queue={} team={} level={}",
+                bot->GetGUID().GetCounter(), desiredQueueType, bot->GetTeamId(), bot->GetLevel()));
+            RTG_DispatchImmediateBgQueueJoin(bot, desiredQueueType, "login_success");
         }
     }
 
@@ -6964,10 +6307,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
     SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
-    SetEventValue(bot, "rtg_bg_was_in_instance", 0, 0);
-    SetEventValue(bot, "rtg_bg_completed_instance", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
-    SetEventValue(bot, "rtg_lfg_role_ready", 0, 0);
     currentBots.remove(bot);
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
         RTG::RtgQueueLedger::Instance().Remove(bot);
