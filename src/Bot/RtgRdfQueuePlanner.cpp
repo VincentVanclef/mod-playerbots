@@ -51,7 +51,7 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
                 "rtg_lfg_need_tank",
                 needTank,
                 ownerTtl,
-                RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_TANK, req.owner));
+                RTG::MakeLfgAddData(req.team, req.level, PLAYER_ROLE_TANK, req.owner));
         }
         else
         {
@@ -65,7 +65,7 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
                 "rtg_lfg_need_heal",
                 needHeal,
                 ownerTtl,
-                RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_HEALER, req.owner));
+                RTG::MakeLfgAddData(req.team, req.level, PLAYER_ROLE_HEALER, req.owner));
         }
         else
         {
@@ -79,7 +79,7 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
                 "rtg_lfg_need_dps",
                 needDps,
                 ownerTtl,
-                RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_DAMAGE, req.owner));
+                RTG::MakeLfgAddData(req.team, req.level, PLAYER_ROLE_DAMAGE, req.owner));
         }
         else
         {
