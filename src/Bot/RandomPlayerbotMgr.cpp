@@ -907,6 +907,27 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
 }
 
 
+void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
+{
+    SetEventValue(bot, "add", 0, 0);
+    SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+    SetEventValue(bot, "rtg_bg_pending", 0, 0);
+    SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_add_requested", 0, 0);
+
+    if (clearLogout)
+        SetEventValue(bot, "logout", 0, 0);
+}
+
+bool RandomPlayerbotMgr::RTG_RequestQueueHelperLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
+{
+    if (clearQueueState)
+        RTG_ClearQueueHelperState(guid.GetCounter(), false);
+
+    return RTG_RequestSafeBotLogout(guid, reason, false);
+}
+
+
 void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
 {
     if (!sPlayerbotAIConfig.rtgEventDriven || !sPlayerbotAIConfig.rtgQueueOwnershipEnable)

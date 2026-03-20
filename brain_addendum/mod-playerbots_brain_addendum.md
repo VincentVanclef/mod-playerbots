@@ -97,3 +97,27 @@ For RTG queue work, compile recovery should first collapse logic back into the p
 - Root cause: the Phase 3 RDF demand-emission file relied on role constants without directly including the LFG role definitions header.
 - Recovery rule: when emitting RDF role payloads outside of existing queue action files, include the header that defines LFG role constants explicitly instead of assuming transitive visibility through manager headers.
 - Narrow fix applied: add `#include "LFG.h"` to `RtgRdfQueuePlanner.cpp`; keep the existing `lfg::PLAYER_ROLE_*` usage unchanged.
+
+## 2026-03-20 — Queue helper logout linker recovery
+
+### Symptom
+Worldserver link failed after the Phase 3 queue/RDF pass because `LfgActions.cpp` referenced two public queue-helper cleanup APIs that were declared in `RandomPlayerbotMgr.h` but had no matching definitions in `RandomPlayerbotMgr.cpp`:
+- `RTG_ClearQueueHelperState(uint32, bool)`
+- `RTG_RequestQueueHelperLogout(ObjectGuid, char const*, bool)`
+
+### Root cause
+The queue/RDF stabilization work had already started routing LFG mismatch cleanup through the public helper-logout interface, but the manager implementation still only had the lower-level private path `RTG_RequestSafeBotLogout(...)`.
+
+### Narrow recovery applied
+- added `RandomPlayerbotMgr::RTG_ClearQueueHelperState(...)`
+- added `RandomPlayerbotMgr::RTG_RequestQueueHelperLogout(...)`
+- kept the behavior narrow by reusing the existing manager event cache and the existing `RTG_RequestSafeBotLogout(...)` path instead of inventing a second logout flow
+
+### Why this shape
+This follows RTG brain doctrine:
+- prefer narrow compile-safe recovery over broad refactors during active queue stabilization
+- reuse the already-proven logout path
+- keep helper queue cleanup semantics explicit and centralized in the manager
+
+### Historical accounting
+This was a **declaration/definition drift** failure, not a queue-planner logic failure. Future passes that expose new public manager hooks must confirm the `.cpp` implementation exists before packaging.
