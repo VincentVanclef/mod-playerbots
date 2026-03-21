@@ -122,27 +122,30 @@ This follows RTG brain doctrine:
 ### Historical accounting
 This was a **declaration/definition drift** failure, not a queue-planner logic failure. Future passes that expose new public manager hooks must confirm the `.cpp` implementation exists before packaging.
 
+## 2026-03-20 — Phase 3 completion pass: finish-fill stall containment and helper headroom accounting
 
-## 2026-03-20 — Phase 3 acquire-side role enforcement packaging recovery
+### Runtime evidence that triggered this pass
+Recent WSG/EOTS/AB runtime logs showed a stable pattern:
+- startup lanes filled correctly
+- `live_refill` reached launch thresholds
+- `finish_fill` continued to request more helpers
+- later requests accumulated as `[RTG][DISPATCH][STALL]`
+- follow-on passes repeated acquisition attempts even when no new offline queue-helper candidates were actually available
 
-### Intake reason
-A partial helper-only replacement of `RandomPlayerbotMgr.cpp` was packaged during Phase 3 follow-up work. That replacement began at helper function content instead of preserving the full translation unit, which produced immediate compile failures at file scope (`uint32`, `Player`, `sRandomPlayerbotMgr`, and `lfg::*` all appeared undeclared because the normal includes and surrounding context were missing).
+### What this pass changes
+- dispatch-stalled helpers now clear through the existing `RTG_ClearQueueHelperState(...)` path instead of open-coding partial event resets
+- BG acquire-side logic now measures whether any offline candidates remain for the requested team before attempting another helper admission
+- RDF acquire-side logic now measures whether any offline candidates remain for the requested team/role before attempting another helper admission
+- acquisition miss logging now records pending-helper count and busy-account count so account-pool pressure can be distinguished from planner defects
 
-### Root cause
-This was not a logic regression in the RDF role-enforcement work itself. It was a **delivery-shape regression**:
-- a fragment patch was handed back where the user needed a full drop-in source file
-- the fragment started before the manager includes / namespace context
-- subsequent local merges created misleading compile symptoms that looked larger than the underlying issue
+### Why this was the correct narrow repair
+The queue planner was still emitting sensible demand. The broken surface was the boundary between demand and materialization:
+- pending/stalled helpers were not being collapsed through the canonical helper-state cleanup path
+- repeated acquire scans did not first prove that another eligible offline helper still existed
 
-### Recovery rule
-For `RandomPlayerbotMgr.cpp`, RTG packaging must return the **full updated file** whenever the modified region sits inside shared helper scope or near high-risk manager glue. Do not return a headerless fragment and expect manual grafting when the active phase is already in compile recovery.
+This pass therefore stays inside `RandomPlayerbotMgr.cpp` and reuses the already-established RTG queue helper cleanup surface instead of inventing a second retirement path.
 
-### Stable Phase 3 state being preserved
-The drop-in manager file preserved here keeps the safer, already-integrated RDF acquisition shape:
-- RDF owner buckets compute explicit tank/heal/dps demand
-- role-demand events are emitted with `lfg::PLAYER_ROLE_*`
-- acquisition only logs helpers whose offline spec role matches the requested RDF role
-- assigned / queued counters are incremented role-faithfully so overfill pressure is reduced before queue join
-
-### Historical accounting
-This incident is recorded as a **packaging-form regression**, not a planner-doctrine regression. Future GPT passes should verify that any file handed back for `RandomPlayerbotMgr.cpp` begins with the original copyright block and include list before shipping it.
+### Historical accounting / lessons
+- “need exists” is not the same as “an admissible offline helper exists right now”
+- finish-fill loops can look like planner defects while actually being headroom starvation
+- dispatch-stall cleanup must always route through the shared helper-state clearer so queue, retry, grace, and logout markers decay together

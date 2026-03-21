@@ -2829,18 +2829,51 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             }
         }
 
-        // Lambda to handle bot login logic
-        auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& addData = "") -> bool
+        auto isQueueHelperBlocked = [&](CharacterInfo const& charInfo) -> bool
         {
-            if (busyAccountIds.find(charInfo.accountId) != busyAccountIds.end() ||
+            return busyAccountIds.find(charInfo.accountId) != busyAccountIds.end() ||
                 GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
-                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT))
+                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT);
+        };
+
+        auto countAvailableBgCandidates = [&](uint32 team) -> uint32
+        {
+            uint32 count = 0;
+            for (CharacterInfo const& charInfo : allCharacters)
             {
-                return false;
+                if (uint32(IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE) != team)
+                    continue;
+                if (isQueueHelperBlocked(charInfo))
+                    continue;
+                ++count;
             }
+            return count;
+        };
+
+        auto countAvailableLfgCandidates = [&](uint32 team, uint32 desiredRole) -> uint32
+        {
+            uint32 count = 0;
+            for (CharacterInfo const& charInfo : allCharacters)
+            {
+                if (uint32(IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE) != team)
+                    continue;
+                if (RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass) != desiredRole)
+                    continue;
+                if (isQueueHelperBlocked(charInfo))
+                    continue;
+                ++count;
+            }
+            return count;
+        };
+
+        // Lambda to handle bot login logic
+        auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& addData = "") -> bool
+        {
+            if (isQueueHelperBlocked(charInfo))
+                return false;
 
             uint32 add_time = sPlayerbotAIConfig.enablePeriodicOnlineOffline
                                 ? urand(sPlayerbotAIConfig.minRandomBotInWorldTime,
@@ -3424,6 +3457,20 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!needTank && !needHeal && !needDps)
                     return false;
 
+                uint32 availableTank = needTank ? countAvailableLfgCandidates(bucket.team, lfg::PLAYER_ROLE_TANK) : 0u;
+                uint32 availableHeal = needHeal ? countAvailableLfgCandidates(bucket.team, lfg::PLAYER_ROLE_HEALER) : 0u;
+                uint32 availableDps = needDps ? countAvailableLfgCandidates(bucket.team, lfg::PLAYER_ROLE_DAMAGE) : 0u;
+                if ((needTank && !availableTank) && (needHeal && !availableHeal) && (needDps && !availableDps))
+                {
+                    if (RTG_QueueDebugEnabled())
+                    {
+                        LOG_INFO("playerbots", "[RTG][LFG][HEADROOM] owner={} team={} needT={} needH={} needD={} availT={} availH={} availD={} pending={} currentBots={}",
+                                 bucket.owner, bucket.team, needTank, needHeal, needDps, availableTank, availableHeal, availableDps,
+                                 RTG_CountPendingHelpers(), static_cast<uint32>(currentBots.size()));
+                    }
+                    return false;
+                }
+
                 bool added = false;
                 if (needTank)
                     added = tryFillLfgRole(bucket, lfg::PLAYER_ROLE_TANK, capacity);
@@ -3481,6 +3528,18 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
                 if (bucket.assignedExtra >= bucket.need)
                     return false;
+
+                uint32 availableCandidates = countAvailableBgCandidates(bucket.team);
+                if (!availableCandidates)
+                {
+                    if (RTG_QueueDebugEnabled())
+                    {
+                        LOG_INFO("playerbots", "[RTG][BG][HEADROOM] queue={} bracket={} team={} phase={} need={} pending={} currentBots={} reason=no_offline_candidates",
+                                 bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.phase, bucket.need,
+                                 RTG_CountPendingHelpers(), static_cast<uint32>(currentBots.size()));
+                    }
+                    return false;
+                }
 
                 uint32 pendingGlobal = RTG_CountPendingHelpers();
                 if (pendingGlobal >= RTG_GetPendingHelperLoginGlobalCap())
@@ -3604,8 +3663,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 if (RTG_QueueDebugEnabled())
                 {
-                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={}",
-                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()));
+                    LOG_INFO("playerbots", "[RTG][ACQUIRE][MISS] no more offline candidates available for current RTG demand; remainingCapacity={} allCharacters={} currentBots={} pendingHelpers={} busyAccounts={}",
+                             remainingCapacity, static_cast<uint32>(allCharacters.size()), static_cast<uint32>(currentBots.size()),
+                             RTG_CountPendingHelpers(), static_cast<uint32>(busyAccountIds.size()));
                 }
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
@@ -4439,13 +4499,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
             if (requestTs && nowTs > requestTs && (nowTs - requestTs) >= stallThreshold)
             {
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][STALL] helper={} waited={} add='{}'", bot, (nowTs - requestTs), addData));
-                SetEventValue(bot, "add", 0, 0);
-                SetEventValue(bot, "logout", 0, 0);
-                SetEventValue(bot, "rtg_add_requested", 0, 0);
-                SetEventValue(bot, "rtg_lfg_pending", 0, 0);
-                SetEventValue(bot, "rtg_bg_pending", 0, 0);
-                SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
-                SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
+                RTG_ClearQueueHelperState(bot, true);
                 currentBots.remove(bot);
                 if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                     RTG::RtgQueueLedger::Instance().Remove(bot);
