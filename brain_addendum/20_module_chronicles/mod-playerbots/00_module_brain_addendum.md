@@ -313,3 +313,51 @@ This pass verified three concrete defects instead of guessing:
 - The missing Phase 3 proof surface was **not** just “add more RDF logs” — the real gap was that BG had manager-owned immediate dispatch while RDF did not.
 - The multi-queue bug was **not** solely a planner failure — acquire-side phase-number drift was still warping bucket priority/suppression behavior.
 - Earlier partial RDF-starvation recovery was **not yet complete** — one shared-surplus guard still skipped queued RDF buckets under BG pressure.
+
+
+## 2026-03-21 — RDF Phase 3 validation correction: pre-join role-sync gate was blocking all solo helper joins
+
+### Runtime evidence
+Fresh RDF test logs finally proved the dispatch surface existed, but it was still not completing:
+- helpers were acquired
+- helpers logged in with `[RTG][LFG][LOGIN]`
+- manager repeatedly emitted `[RTG][RDF][JOIN]`
+- every attempt failed with `[RTG][DISPATCH][FAIL_REASON] ... lane=rdf reason=login_or_idle ... state=0 grouped=0`
+
+That log pattern matters because it proves the failure was **after login** and **before actual LFG queue state changed**. The bots were alive, in-world, ungroupped, not in combat, and not teleporting.
+
+### Root cause confirmed in code
+The failure was not the manager dispatch helper itself. The blocker lived inside `LfgJoinAction::JoinLFG()`.
+
+For assigned RTG RDF helpers, the join action did this before allowing `CMSG_LFG_JOIN`:
+- compared `currentRoles = sLFGMgr->GetRoles(botGuid)` against the desired RDF role
+- if they differed, sent `CMSG_LFG_SET_ROLES`
+- returned `false` and waited for a retry
+
+That behavior is reasonable for grouped role-check contexts, but it is wrong for fresh **solo** RTG helpers because:
+- solo helpers are not yet in an LFG group
+- `sLFGMgr->GetRoles(botGuid)` can remain `0` before the actual join packet
+- the real role is already carried by the later `CMSG_LFG_JOIN` packet via `GetRoles()`
+
+Result: solo RDF helpers could get trapped in an endless pre-join role-sync loop and never actually queue.
+
+`src/Ai/Base/Actions/LfgActions.cpp` was narrowed so that:
+- **grouped** helpers still keep the cautious role-sync wait behavior
+- **solo** RTG RDF helpers no longer block on `currentRoles != desiredRole`
+- solo helpers now proceed directly to `CMSG_LFG_JOIN`, letting the join packet carry the role mask as intended
+- an RDF breadcrumb now marks this path:
+  - `[RTG][RDF][JOIN] helper=... desiredRole=... currentRoles=... roleSync=join_packet grouped=0`
+
+### Assumption corrected
+The earlier assumption that “RDF still needs more manager-side dispatch forcing” was incomplete.
+
+Manager dispatch was reaching the action surface already. The real hard stop was the **solo pre-join role-sync gate** inside the LFG action itself.
+
+### Expected behavioral change
+After this correction, a healthy RDF sequence should become:
+1. acquire
+2. dispatch add
+3. login
+4. RDF join dispatch
+5. actual `CMSG_LFG_JOIN` submission
+6. queue/proposal progression instead of endless `state=0` failures

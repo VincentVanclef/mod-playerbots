@@ -279,14 +279,22 @@ bool LfgJoinAction::JoinLFG()
                 uint32 currentRoles = sLFGMgr->GetRoles(bot->GetGUID());
                 if (currentRoles != desiredRole)
                 {
-                    WorldPacket* rolePacket = new WorldPacket(CMSG_LFG_SET_ROLES);
-                    *rolePacket << (uint8)desiredRole;
-                    bot->GetSession()->QueuePacket(rolePacket);
-                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
-                    rtgNextJoinAttempt[botId] = now + 1;
-                    if (RTG_LfgDebugEnabled())
-                        LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} waiting role_sync desiredRole={} currentRoles={}", botId, desiredRole, currentRoles);
-                    return false;
+                    if (bot->GetGroup())
+                    {
+                        WorldPacket* rolePacket = new WorldPacket(CMSG_LFG_SET_ROLES);
+                        *rolePacket << (uint8)desiredRole;
+                        bot->GetSession()->QueuePacket(rolePacket);
+                        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
+                        rtgNextJoinAttempt[botId] = now + 1;
+                        if (RTG_LfgDebugEnabled())
+                            LOG_INFO("playerbots", "[RTGDBG][LFGJOIN] bot={} waiting role_sync desiredRole={} currentRoles={} grouped=1", botId, desiredRole, currentRoles);
+                        return false;
+                    }
+
+                    if (RTG_IsQueuedLfgBot(bot))
+                    {
+                        LOG_INFO("playerbots", "[RTG][RDF][JOIN] helper={} desiredRole={} currentRoles={} roleSync=join_packet grouped=0", botId, desiredRole, currentRoles);
+                    }
                 }
             }
 
