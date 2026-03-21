@@ -59,6 +59,8 @@
 #include "RandomPlayerbotFactory.h"
 #include "RtgQueueMetadata.h"
 #include "RtgBgQueuePlanner.h"
+#include "RtgRdfQueuePlanner.h"
+#include "RtgRdfRoleResolver.h"
 #include "RtgQueueLedger.h"
 #include "RtgQueueLifecycle.h"
 #include "ServerFacade.h"
@@ -280,170 +282,53 @@ namespace
 
     static bool RTG_ClassCanRole(uint8 cls, uint32 role)
     {
-        switch (role)
-        {
-            case lfg::PLAYER_ROLE_TANK:
-                return cls == CLASS_WARRIOR || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_DEATH_KNIGHT;
-            case lfg::PLAYER_ROLE_HEALER:
-                return cls == CLASS_PRIEST || cls == CLASS_PALADIN || cls == CLASS_DRUID || cls == CLASS_SHAMAN;
-            case lfg::PLAYER_ROLE_DAMAGE:
-                return true;
-            default:
-                return false;
-        }
+        return RTG::ClassCanRole(cls, role);
     }
 
     static uint32 RTG_DefaultRoleForClass(uint8 cls)
     {
-        if (RTG_ClassCanRole(cls, lfg::PLAYER_ROLE_HEALER))
-            return lfg::PLAYER_ROLE_HEALER;
-        if (RTG_ClassCanRole(cls, lfg::PLAYER_ROLE_TANK))
-            return lfg::PLAYER_ROLE_TANK;
-        return lfg::PLAYER_ROLE_DAMAGE;
+        return RTG::DefaultRoleForClass(cls);
     }
 
     static uint8 RTG_DefaultSpecTabForClass(uint8 cls)
     {
-        switch (cls)
-        {
-            case CLASS_MAGE: return MAGE_TAB_FROST;
-            case CLASS_PALADIN: return PALADIN_TAB_RETRIBUTION;
-            case CLASS_PRIEST: return PRIEST_TAB_HOLY;
-            case CLASS_WARLOCK: return WARLOCK_TAB_DEMONOLOGY;
-            case CLASS_SHAMAN: return SHAMAN_TAB_ELEMENTAL;
-            default: return 0;
-        }
+        return RTG::DefaultSpecTabForClass(cls);
     }
 
     static uint32 RTG_RoleForClassSpecTab(uint8 cls, uint8 specTab)
     {
-        switch (cls)
-        {
-            case CLASS_DRUID:
-                if (specTab == DRUID_TAB_RESTORATION)
-                    return lfg::PLAYER_ROLE_HEALER;
-                if (specTab == DRUID_TAB_FERAL)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_PALADIN:
-                if (specTab == PALADIN_TAB_HOLY)
-                    return lfg::PLAYER_ROLE_HEALER;
-                if (specTab == PALADIN_TAB_PROTECTION)
-                    return lfg::PLAYER_ROLE_TANK;
-                return lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_PRIEST:
-                return specTab == PRIEST_TAB_SHADOW ? lfg::PLAYER_ROLE_DAMAGE : lfg::PLAYER_ROLE_HEALER;
-            case CLASS_SHAMAN:
-                return specTab == SHAMAN_TAB_RESTORATION ? lfg::PLAYER_ROLE_HEALER : lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_WARRIOR:
-                return specTab == WARRIOR_TAB_PROTECTION ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
-            case CLASS_DEATH_KNIGHT:
-                return specTab == DEATH_KNIGHT_TAB_BLOOD ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
-            default:
-                return lfg::PLAYER_ROLE_DAMAGE;
-        }
+        return RTG::RoleForClassSpecTab(cls, specTab);
     }
 
     static bool RTG_GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
     {
-        specTab = RTG_DefaultSpecTabForClass(cls);
-
-        QueryResult specResult = CharacterDatabase.Query("SELECT activeTalentGroup FROM characters WHERE guid = {}", guid);
-        uint8 activeSpec = 0;
-        if (specResult)
-            activeSpec = specResult->Fetch()[0].Get<uint8>();
-
-        uint32 activeMask = (1u << activeSpec);
-        uint32 const* talentTabIds = GetTalentTabPages(cls);
-        if (!talentTabIds)
-            return true;
-
-        std::map<uint8, uint32> tabs = {{0, 0}, {1, 0}, {2, 0}};
-        QueryResult talentResult = CharacterDatabase.Query("SELECT spell, specMask FROM character_talent WHERE guid = {}", guid);
-        if (!talentResult)
-            return true;
-
-        do
-        {
-            Field* fields = talentResult->Fetch();
-            uint32 spellId = fields[0].Get<uint32>();
-            uint8 specMask = fields[1].Get<uint8>();
-            if ((activeMask & specMask) == 0)
-                continue;
-
-            TalentSpellPos const* talentPos = GetTalentSpellPos(spellId);
-            if (!talentPos)
-                continue;
-            TalentEntry const* talentInfo = sTalentStore.LookupEntry(talentPos->talent_id);
-            if (!talentInfo)
-                continue;
-
-            SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-            uint32 rank = spellInfo ? spellInfo->GetRank() : 1u;
-            if (talentInfo->TalentTab == talentTabIds[0])
-                tabs[0] += rank;
-            else if (talentInfo->TalentTab == talentTabIds[1])
-                tabs[1] += rank;
-            else if (talentInfo->TalentTab == talentTabIds[2])
-                tabs[2] += rank;
-        } while (talentResult->NextRow());
-
-        if ((tabs[0] + tabs[1] + tabs[2]) == 0)
-            return true;
-
-        specTab = 0;
-        uint32 maxPoints = tabs[0];
-        for (uint8 i = 1; i < 3; ++i)
-        {
-            if (tabs[i] > maxPoints)
-            {
-                maxPoints = tabs[i];
-                specTab = i;
-            }
-        }
-        return true;
+        return RTG::GetOfflineSpecTab(guid, cls, specTab);
     }
 
     static uint32 RTG_GetOfflineSpecRole(ObjectGuid::LowType guid, uint8 cls)
     {
-        uint8 specTab = 0;
-        RTG_GetOfflineSpecTab(guid, cls, specTab);
-        return RTG_RoleForClassSpecTab(cls, specTab);
+        return RTG::GetOfflineSpecRole(guid, cls);
     }
 
     static uint32 RTG_GetActualSpecRole(Player* bot)
     {
-        if (!bot)
-            return lfg::PLAYER_ROLE_DAMAGE;
-
-        return RTG_RoleForClassSpecTab(bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+        return RTG::GetActualSpecRole(bot);
     }
+
     static uint32 RTG_NormalizeQueuedRoleMask(uint32 roleMask)
-	{
-		if (roleMask & lfg::PLAYER_ROLE_TANK)
-			return lfg::PLAYER_ROLE_TANK;
-		if (roleMask & lfg::PLAYER_ROLE_HEALER)
-			return lfg::PLAYER_ROLE_HEALER;
-		if (roleMask & lfg::PLAYER_ROLE_DAMAGE)
-			return lfg::PLAYER_ROLE_DAMAGE;
-		return 0u;
-	}
+    {
+        return RTG::NormalizeQueuedRoleMask(roleMask);
+    }
 
-	static uint32 RTG_TargetLfgRoleCount(uint32 role)
-	{
-		switch (role)
-		{
-			case lfg::PLAYER_ROLE_TANK: return 1u;
-			case lfg::PLAYER_ROLE_HEALER: return 1u;
-			case lfg::PLAYER_ROLE_DAMAGE: return 3u;
-			default: return 0u;
-		}
-	}
+    static uint32 RTG_TargetLfgRoleCount(uint32 role)
+    {
+        return RTG::TargetLfgRoleCount(role);
+    }
 
-	static uint32 RTG_ActualRoleForBot(Player* bot)
-	{
-		return RTG_GetActualSpecRole(bot);
-	}
+    static uint32 RTG_ActualRoleForBot(Player* bot)
+    {
+        return RTG::ActualRoleForBot(bot);
+    }
 
     static bool RTG_IsRealPlayer(Player* player)
     {
@@ -4271,20 +4156,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
     if (RTG_QueueDebugEnabled())
         LOG_INFO("playerbots", "[RTGDBG][LFG] check begin trackedPlayers={} trackedBots={}", static_cast<uint32>(players.size()), static_cast<uint32>(playerBots.size()));
 
-    struct QueueRequest
-    {
-        uint32 owner = 0;
-        uint32 team = 0;
-        uint32 level = 0;
-        uint32 realTank = 0;
-        uint32 realHeal = 0;
-        uint32 realDps = 0;
-        uint32 realQueued = 0;
-        uint32 realActive = 0;
-        bool activeDungeon = false;
-    };
-
-    std::map<uint32, QueueRequest> requests;
+    std::map<uint32, RTG::RtgLfgQueueOwnerSnapshot> requests;
     bool anyRealLfgDemand = false;
 
     LfgDungeons[TEAM_ALLIANCE].clear();
@@ -4317,10 +4189,10 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         anyRealLfgDemand = true;
 
         uint32 owner = queueGuid.GetCounter();
-        QueueRequest& req = requests[owner];
+        RTG::RtgLfgQueueOwnerSnapshot& req = requests[owner];
         req.owner = owner;
-        req.team = player->GetTeamId();
-        req.level = player->GetLevel();
+        req.team = static_cast<uint32>(player->GetTeamId());
+        req.level = static_cast<uint32>(player->GetLevel());
         req.activeDungeon = req.activeDungeon || activeDungeon;
         if (queuedLfg)
             ++req.realQueued;
@@ -4352,65 +4224,10 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         }
     }
 	
-	// Owner-local LFG demand should expire quickly so stale real-player groups
-	// do not keep helper bots alive too long after queue/group collapse.
-	// Global LFG demand can live longer to avoid thrashing between scans.
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
-        uint32 now = static_cast<uint32>(time(nullptr));
-		uint32 ownerTtl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 20;
-		uint32 globalTtl = sPlayerbotAIConfig.rtgQueueGraceSeconds + 120;
-		uint32 desiredHelperTotal = 0;
-		bool anyReady = false;
-		uint32 oldestPendingStart = 0;
-
-        for (auto const& kv : requests)
-        {
-            QueueRequest const& req = kv.second;
-            uint32 existingStart = GetEventValue(req.owner, "rtg_lfg_start");
-            uint32 startTs = req.activeDungeon ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (existingStart ? existingStart : now);
-            SetEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
-			SetEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, RTG::MakeLfgAddData(req.team, req.level, 0, req.owner));
-            
-			uint32 needTank = req.realTank >= 1 ? 0u : 1u;
-            uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
-            uint32 needDps = req.realDps >= 3 ? 0u : (3u - req.realDps);
-            uint32 helperNeed = needTank + needHeal + needDps;
-            desiredHelperTotal += helperNeed;
-
-            SetEventValue(req.owner, "rtg_lfg_need_tank", needTank, needTank ? ownerTtl : 0u,
-                          needTank ? RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_TANK, req.owner) : "");
-            SetEventValue(req.owner, "rtg_lfg_need_heal", needHeal, needHeal ? ownerTtl : 0u,
-                          needHeal ? RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_HEALER, req.owner) : "");
-            SetEventValue(req.owner, "rtg_lfg_need_dps", needDps, needDps ? ownerTtl : 0u,
-                          needDps ? RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_DAMAGE, req.owner) : "");
-
-            if (RTG_QueueDebugEnabled() || helperNeed)
-            {
-                LOG_INFO("playerbots", "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} needTank={} needHeal={} needDps={} startTs={}",
-                         req.owner, req.team, req.level, req.realQueued, req.realActive, needTank, needHeal, needDps, startTs);
-            }
-
-            if (req.activeDungeon || now >= startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
-                anyReady = true;
-            else if (!oldestPendingStart || startTs < oldestPendingStart)
-                oldestPendingStart = startTs;
-        }
-
-        if (anyRealLfgDemand && desiredHelperTotal)
-        {
-            uint32 globalStart = anyReady ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds) : (oldestPendingStart ? oldestPendingStart : now);
-            uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgLfgMaxBots);
-            LOG_INFO("playerbots", "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
-                     static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
-            SetEventValue(0, "rtg_lfg_start", globalStart, globalTtl);
-			SetEventValue(0, "rtg_lfg_need_total", cappedNeed, globalTtl);
-        }
-        else
-        {
-            SetEventValue(0, "rtg_lfg_start", 0, 0);
-            SetEventValue(0, "rtg_lfg_need_total", 0, 0);
-        }
+        RTG::RtgRdfQueuePlanner rdfPlanner;
+        rdfPlanner.ApplyDemandEvents(*this, requests, anyRealLfgDemand);
     }
 
     if (RTG_QueueDebugEnabled())

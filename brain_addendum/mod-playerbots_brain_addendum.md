@@ -186,3 +186,32 @@ This stays inside the queue-helper admission/account-pool boundary instead of br
 - RTG helper pools must be sized by **concurrent helper sessions**, not by stored characters per account
 - legacy random-bot account math is not safe to reuse blindly inside standalone queue-helper mode
 - global BG pressure should influence capacity sharing, but it must not hard-disable queued RDF admissions
+
+## 2026-03-21 — Phase 3 planner-authority conversion: RDF demand publishing moved to `RtgRdfQueuePlanner`
+
+### Intake reason
+The project reached a split-brain Phase 3 state:
+- `RtgRdfQueuePlanner.cpp` and `RtgRdfRoleResolver.cpp` existed
+- `LfgActions.cpp` was already consuming the resolver surface
+- `RandomPlayerbotMgr.cpp` still owned RDF demand publication inline
+
+That meant the new RDF planner translation unit existed but was not authoritative, which violates the RTG extraction checklist for Phase 3.
+
+### Manual conversion performed
+- added `#include "RtgRdfQueuePlanner.h"` to `RandomPlayerbotMgr.cpp`
+- added `#include "RtgRdfRoleResolver.h"` to `RandomPlayerbotMgr.cpp`
+- converted the local RDF role/spec helper layer in `RandomPlayerbotMgr.cpp` into thin wrappers over the shared `RTG::...` resolver functions instead of maintaining a second competing truth surface
+- replaced the inline RDF demand-event publication block inside `RandomPlayerbotMgr::CheckLfgQueue()` with a single authoritative call to:
+  - `RTG::RtgRdfQueuePlanner::ApplyDemandEvents(*this, requests, anyRealLfgDemand)`
+- upgraded the local LFG owner snapshot usage in `CheckLfgQueue()` to use `RTG::RtgLfgQueueOwnerSnapshot`
+
+### Why this shape was chosen
+This follows the brain’s Phase 3 doctrine directly:
+- keep raw LFG observation in `CheckLfgQueue()`
+- move RDF demand policy into `RtgRdfQueuePlanner`
+- keep role truth outside the stock file in `RtgRdfRoleResolver`
+
+It also avoids a broad queue rewrite. Only the authority boundary was changed.
+
+### Historical accounting / assumptions corrected
+Previous recovery passes treated the missing piece as header hygiene or compile drift. Inspection of the uploaded module proved the deeper issue was architectural: the planner file existed, but the manager still published RDF events inline. This entry records that the real repair was an authority conversion, not another compile hotfix.

@@ -223,3 +223,21 @@ Two queue-system assumptions were too narrow:
 
 ### Engineering lesson
 RTG queue-helper mode is a concurrency system, not a static character inventory system. Any sizing or admission rule that assumes one account can satisfy multiple simultaneous helpers will under-provision the queue lanes and create fake planner failures.
+
+## 2026-03-21 — Phase 3 RDF planner authority handoff
+
+### What changed
+The RDF planner extraction is now advanced from “helper file exists” to “manager calls planner.”
+
+`RandomPlayerbotMgr::CheckLfgQueue()` now:
+- observes real RDF/LFG demand
+- builds `RTG::RtgLfgQueueOwnerSnapshot`
+- delegates event publication to `RTG::RtgRdfQueuePlanner`
+
+The shared role/spec truth is also now routed through `RtgRdfRoleResolver` from the manager side instead of preserving a second local implementation.
+
+### Why this matters
+This removes the split-brain failure mode where future work could silently patch the planner file while runtime behavior continued to come from old inline manager code.
+
+### Scope discipline
+This pass does **not** claim Phase 4/5 completion. It is specifically the Phase 3 authority handoff required by the extraction checklist.
