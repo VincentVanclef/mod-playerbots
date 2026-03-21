@@ -129,6 +129,22 @@ namespace
 
         return RTG_GetFallbackBounds(bgTemplate);
     }
+
+    static uint32 RTG_NormalizeArenaTeamSize(BattlegroundQueueTypeId queueTypeId)
+    {
+        uint32 raw = uint32(BattlegroundMgr::BGArenaType(queueTypeId));
+        if (raw == 4u)
+            return 3u;
+        if (raw == 1u)
+            return 1u;
+        if (queueTypeId == BATTLEGROUND_QUEUE_2v2)
+            return 2u;
+        if (queueTypeId == BATTLEGROUND_QUEUE_3v3)
+            return 3u;
+        if (queueTypeId == BATTLEGROUND_QUEUE_5v5)
+            return 5u;
+        return raw;
+    }
 }
 
 namespace RTG
@@ -147,8 +163,72 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
     for (auto const& queueTypePair : mgr.BattlegroundData)
     {
         BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueTypePair.first);
-        if (BattlegroundMgr::BGArenaType(queueTypeId))
+
+        if (uint32 arenaTeamSize = RTG_NormalizeArenaTeamSize(queueTypeId))
+        {
+            for (auto const& bracketIdPair : queueTypePair.second)
+            {
+                BattlegroundBracketId bracketId = static_cast<BattlegroundBracketId>(bracketIdPair.first);
+                seenKeys.insert(RTG_MakeSeenKey(uint32(queueTypeId), uint32(bracketId)));
+
+                BattlegroundInfo const& bgInfo = bracketIdPair.second;
+                if (!bgInfo.minLevel)
+                    continue;
+
+                bool isRated = bgInfo.ratedArenaPlayerCount || bgInfo.ratedArenaBotCount ||
+                               bgInfo.activeRatedArenaQueue || bgInfo.ratedArenaInstanceCount;
+                uint32 realQueued = isRated ? bgInfo.ratedArenaPlayerCount : bgInfo.skirmishArenaPlayerCount;
+                uint32 botQueued = isRated ? bgInfo.ratedArenaBotCount : bgInfo.skirmishArenaBotCount;
+                uint32 currentQueued = realQueued + botQueued;
+                uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
+                bool hasRealDemand = realQueued > 0;
+                bool hasQueueSeed = currentQueued > 0;
+                bool orphanQueueResidue = !hasRealDemand && (currentQueued || activeInstances);
+
+                mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
+                mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
+
+                uint32 desiredTotal = arenaTeamSize * 2u;
+                uint32 totalNeed = desiredTotal > currentQueued ? (desiredTotal - currentQueued) : 0u;
+                uint32 allianceNeed = (totalNeed + 1u) / 2u;
+                uint32 hordeNeed = totalNeed / 2u;
+                uint32 phase = 0u;
+
+                if (hasRealDemand)
+                    phase = activeInstances ? 3u : 2u;
+
+                if (orphanQueueResidue)
+                {
+                    RTG_WorldLog("[RTG][ARENA][CLEAR] queue={} bracket={} reason=orphan_queue_residue queued={} activeInstances={}",
+                        uint32(queueTypeId), uint32(bracketId), currentQueued, activeInstances);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_ALLIANCE)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_HORDE)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgPhaseKey(uint32(queueTypeId), uint32(bracketId)), 0u, 0, "dormant");
+                    continue;
+                }
+
+                mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_ALLIANCE)), allianceNeed, allianceNeed ? ttl : 0);
+                mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_HORDE)), hordeNeed, hordeNeed ? ttl : 0);
+                mgr.RTG_SetGlobalEvent(RTG_MakeBgPhaseKey(uint32(queueTypeId), uint32(bracketId)), phase, phase ? ttl : 0, RTG_GetBgPhaseName(phase));
+
+                if (!hasQueueSeed)
+                    continue;
+
+                if (hasRealDemand)
+                    anyRealBgDemand = true;
+
+                rtgBgNeedTotal += allianceNeed + hordeNeed;
+
+                RTG_WorldLog("[RTG][ARENA][PHASE] queue={} bracket={} phase={} teamSize={} queued={} realQueued={} activeInstances={} rated={}",
+                    uint32(queueTypeId), uint32(bracketId), RTG_GetBgPhaseName(phase), arenaTeamSize, currentQueued, realQueued, activeInstances, isRated ? 1u : 0u);
+                RTG_WorldLog("[RTG][ARENA][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} rated={}",
+                    uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u, isRated ? 1u : 0u);
+            }
+
             continue;
+        }
 
         BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
         Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);

@@ -218,7 +218,8 @@ namespace
             return false;
 
         return entry.pendingQueueJoin || entry.state == RTG::RtgHelperState::Reserved ||
-               entry.state == RTG::RtgHelperState::LoggingIn || entry.state == RTG::RtgHelperState::WorldIdle;
+               entry.state == RTG::RtgHelperState::LoggingIn || entry.state == RTG::RtgHelperState::Queued ||
+               entry.state == RTG::RtgHelperState::Invited;
     }
 
     static uint32 RTG_CountPendingHelpers(uint32 queueType = 0, uint32 bracketId = UINT32_MAX, uint32 team = UINT32_MAX)
@@ -414,6 +415,22 @@ namespace
         minLevel = pvpDiff->minLevel;
         maxLevel = pvpDiff->maxLevel;
         return true;
+    }
+
+    static uint32 RTG_NormalizeArenaTeamSizeForQueue(BattlegroundQueueTypeId queueTypeId)
+    {
+        uint32 raw = uint32(BattlegroundMgr::BGArenaType(queueTypeId));
+        if (raw == 4u)
+            return 3u;
+        if (raw == 1u)
+            return 1u;
+        if (queueTypeId == BATTLEGROUND_QUEUE_2v2)
+            return 2u;
+        if (queueTypeId == BATTLEGROUND_QUEUE_3v3)
+            return 3u;
+        if (queueTypeId == BATTLEGROUND_QUEUE_5v5)
+            return 5u;
+        return raw;
     }
 
     static uint64 RTG_MakeBgParticipantKey(uint32 queueTypeId, BattlegroundBracketId bracketId, ObjectGuid guid, bool isBot)
@@ -831,8 +848,19 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
 
         if (!bot || !bot->IsInWorld())
         {
+            bool hasPendingAdd = GetEventValue(botId, "add") != 0;
+            bool hasPendingLogout = GetEventValue(botId, "logout") != 0;
+
             if (entry->state == RTG::RtgHelperState::Retired)
                 ledger.Remove(botId);
+            else if (!hasPendingAdd && !hasPendingLogout)
+            {
+                if (RTG_QueueOwnershipDebugEnabled())
+                    LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} removing stale offline ledger entry state={} queue={}",
+                             botId, uint32(entry->state), uint32(entry->target.queueTypeId));
+
+                ledger.Remove(botId);
+            }
             continue;
         }
 
@@ -2726,7 +2754,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!entry || !entry->accountId || entry->pendingRetire)
                     continue;
 
-                if (entry->state == RTG::RtgHelperState::Retired)
+                if (!RTG_IsTrackedPendingHelperState(*entry))
                     continue;
 
                 busyAccountIds.insert(entry->accountId);
@@ -2910,8 +2938,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     BattlegroundQueueTypeId queueTypeId = player->GetBattlegroundQueueTypeId(queueType);
                     if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
                         continue;
-                    if (BattlegroundMgr::BGArenaType(queueTypeId))
-                        continue;
 
                     BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
                     if (bgTypeId == BATTLEGROUND_TYPE_NONE)
@@ -2928,7 +2954,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     auto bgKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetLevel()));
                     ++bgQueueTotals[bgKey];
                     bgBrackets[bgKey] = pvpDiff->GetBracketId();
-                    bgTeamSizes[bgKey] = bgTemplate->GetMaxPlayersPerTeam();
+                    bgTeamSizes[bgKey] = BattlegroundMgr::BGArenaType(queueTypeId)
+                        ? RTG_NormalizeArenaTeamSizeForQueue(queueTypeId)
+                        : bgTemplate->GetMaxPlayersPerTeam();
                     bgAdaptiveLevels[std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()))].push_back(static_cast<uint32>(player->GetLevel()));
                 }
             }

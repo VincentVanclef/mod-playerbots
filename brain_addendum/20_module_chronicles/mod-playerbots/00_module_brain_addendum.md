@@ -241,3 +241,9 @@ This removes the split-brain failure mode where future work could silently patch
 
 ### Scope discipline
 This pass does **not** claim Phase 4/5 completion. It is specifically the Phase 3 authority handoff required by the extraction checklist.
+
+## 2026-03-21 — Phase 3 hookup completion: arena planner breadcrumbs + pending-ledger cleanup
+- Added arena planner publication into `RtgBgQueuePlanner.cpp` so queue families that are arena-backed now emit RTG phase/demand breadcrumbs instead of living mostly outside the planner surface.
+- Corrected pending-helper pressure accounting so `WorldIdle` ledger rows no longer count as active pending admissions.
+- Corrected busy-account reconstruction so stale non-retired ledger rows do not keep blocking fresh helper acquisition.
+- Ownership audit now removes stale offline helper ledger rows when there is no surviving `add` or `logout` truth behind them.

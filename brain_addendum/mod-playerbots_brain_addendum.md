@@ -215,3 +215,37 @@ It also avoids a broad queue rewrite. Only the authority boundary was changed.
 
 ### Historical accounting / assumptions corrected
 Previous recovery passes treated the missing piece as header hygiene or compile drift. Inspection of the uploaded module proved the deeper issue was architectural: the planner file existed, but the manager still published RDF events inline. This entry records that the real repair was an authority conversion, not another compile hotfix.
+
+## 2026-03-21 — Phase 3 follow-up: planner hookup completion and pending-ledger pressure correction
+
+### Runtime evidence that triggered this pass
+Fresh queue testing showed three linked symptoms:
+- RDF helper bots could log in but never materially advance into queue participation
+- battleground follow-up fills were stalling after the first lane, especially once multiple queue families overlapped
+- arena queues still had almost no RTG planner breadcrumbs because the planner path was skipping arena queue families entirely
+
+### Root cause findings
+This inspection found three narrow integration defects:
+1. `RtgBgQueuePlanner` was still skipping arena queue families, so arena demand had almost no planner-event/log surface.
+2. RTG pending-helper accounting still treated `WorldIdle` ledger rows as in-flight pressure, which overstated pending helpers and lane pressure.
+3. RTG busy-account reconstruction was still counting any non-retired ledger row as account pressure, which let stale offline helper rows artificially block later queue admissions.
+
+### Manual corrections applied
+- `RandomPlayerbotMgr.cpp`
+  - added normalized arena team-size helper for queue planning surfaces
+  - stopped skipping arena queues when building adaptive BG/arena queue observations for RTG helper admission
+  - changed pending-helper accounting so `WorldIdle` no longer counts as active pending pressure
+  - changed busy-account reconstruction to count only truly pending helper ledger states
+  - upgraded ownership audit to remove stale offline helper ledger rows that no longer have `add`/`logout` truth behind them
+- `RtgBgQueuePlanner.cpp`
+  - added normalized arena team-size logic
+  - added planner/event emission for arena queues using `[RTG][ARENA][PHASE]`, `[RTG][ARENA][DEMAND]`, and `[RTG][ARENA][CLEAR]`
+  - publishes shared `rtg_bg_team_need:*` and phase events for arena queue families so the stock orchestrator can consume them the same way it does battleground demand
+
+### Why this is the correct narrow repair
+The newest symptoms were not solved by more RDF role logic alone. The real break sat in the planner/materialization seam:
+- arenas were still largely outside the planner breadcrumb surface
+- stale helper ledger rows were inflating pending and busy-account pressure
+- later lanes were being blocked by accounting truth that no longer reflected real helper state
+
+This pass therefore tightens the authority boundary instead of broadening queue doctrine.
