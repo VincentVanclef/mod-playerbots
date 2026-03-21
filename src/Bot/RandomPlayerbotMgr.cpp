@@ -3687,7 +3687,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
                 {
-                    uint32 accountDivisor = sPlayerbotAIConfig.rtgEventDriven ? 1u : static_cast<uint32>(std::max<uint32>(1u, static_cast<uint32>(RandomPlayerbotFactory::CalculateAvailableCharsPerAccount())));
+                    uint32 accountDivisor = sPlayerbotAIConfig.rtgEventDriven
+						? 1u
+						: std::max<uint32>(1u, static_cast<uint32>(RandomPlayerbotFactory::CalculateAvailableCharsPerAccount()));
                     uint32 moreAccountsNeeded = (remainingCapacity + accountDivisor - 1) / accountDivisor;
                     LOG_ERROR("playerbots",
                               "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
@@ -3744,7 +3746,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             if (time(nullptr) - missingBotsTimer >= 10)
             {
-                uint32 accountDivisor = sPlayerbotAIConfig.rtgEventDriven ? 1u : static_cast<uint32>(std::max<uint32>(1u, static_cast<uint32>(RandomPlayerbotFactory::CalculateAvailableCharsPerAccount())));
+                uint32 accountDivisor = sPlayerbotAIConfig.rtgEventDriven
+					? 1u
+					: std::max<uint32>(1u, static_cast<uint32>(RandomPlayerbotFactory::CalculateAvailableCharsPerAccount()));
                 uint32 moreAccountsNeeded = (maxAllowedBotCount + accountDivisor - 1) / accountDivisor;
                 LOG_ERROR("playerbots",
                           "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
