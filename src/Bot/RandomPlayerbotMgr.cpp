@@ -2479,13 +2479,25 @@ uint32 desiredTotalAccounts = sPlayerbotAIConfig.randomBotAccountCount;
 
 if (desiredTotalAccounts == 0)
 {
-    // Derive a sensible minimum if not configured
-    int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-    int maxBots = static_cast<int>(RTG_GetStandaloneHelperCeiling());
-    if (!sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.enablePeriodicOnlineOffline)
-        maxBots = static_cast<int>(maxBots * sPlayerbotAIConfig.periodicOnlineOfflineRatio);
+    // Derive a sensible minimum if not configured.
+    // RTG event-driven queue helpers need one concurrently-usable account per helper,
+    // because the queue system intentionally keeps only one active helper logged in per account.
+    uint32 neededRnd = 0;
+    uint32 standaloneCeiling = RTG_GetStandaloneHelperCeiling();
+    if (standaloneCeiling > 0)
+    {
+        if (sPlayerbotAIConfig.rtgEventDriven)
+            neededRnd = standaloneCeiling;
+        else
+        {
+            int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
+            int maxBots = static_cast<int>(standaloneCeiling);
+            if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+                maxBots = static_cast<int>(maxBots * sPlayerbotAIConfig.periodicOnlineOfflineRatio);
+            neededRnd = (maxBots > 0) ? static_cast<uint32>((maxBots + divisor - 1) / divisor) : 0;
+        }
+    }
 
-    uint32 neededRnd = (maxBots > 0) ? static_cast<uint32>((maxBots + divisor - 1) / divisor) : 0;
     uint32 neededAdd = sPlayerbotAIConfig.addClassAccountPoolSize;
     desiredTotalAccounts = std::max<uint32>(neededRnd + neededAdd, 1);
 }
@@ -2555,17 +2567,24 @@ if (allRandomBotAccounts.size() < desiredTotalAccounts)
     uint32 standaloneCeiling = RTG_GetStandaloneHelperCeiling();
     if (standaloneCeiling > 0)
     {
-        int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-        int maxBots = static_cast<int>(standaloneCeiling);
-
-        // Take periodic online-offline into account only for legacy random-bot sizing.
-        if (!sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+        if (sPlayerbotAIConfig.rtgEventDriven)
         {
-            maxBots *= sPlayerbotAIConfig.periodicOnlineOfflineRatio;
+            // RTG queue helpers reserve one logged-in helper per account on purpose,
+            // so queue-helper account sizing must match the helper ceiling directly.
+            neededRndBotAccounts = standaloneCeiling;
         }
+        else
+        {
+            int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
+            int maxBots = static_cast<int>(standaloneCeiling);
 
-        // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
-        neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
+            // Take periodic online-offline into account only for legacy random-bot sizing.
+            if (sPlayerbotAIConfig.enablePeriodicOnlineOffline)
+                maxBots *= sPlayerbotAIConfig.periodicOnlineOfflineRatio;
+
+            // Calculate base accounts needed for RNDbots, ensuring round up for maxBots not cleanly divisible by the divisor
+            neededRndBotAccounts = (maxBots + divisor - 1) / divisor;
+        }
     }
 
     // Count existing assigned accounts
@@ -3485,8 +3504,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 for (RtgLfgBucket& bucket : orderedLfgBuckets)
                 {
-                    if (bgDemandActive && !bucket.activeDungeon)
-                        continue;
 
                     while (capacity && remainingCapacity && tryFillLfgBucketOnce(bucket, capacity))
                     {
@@ -3670,8 +3687,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 if (time(nullptr) - missingBotsTimer >= 10 && (totalLfgNeed || totalBgNeed))
                 {
-                    int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-                    uint32 moreAccountsNeeded = (remainingCapacity + divisor - 1) / divisor;
+                    uint32 accountDivisor = sPlayerbotAIConfig.rtgEventDriven ? 1u : static_cast<uint32>(std::max(1, RandomPlayerbotFactory::CalculateAvailableCharsPerAccount()));
+                    uint32 moreAccountsNeeded = (remainingCapacity + accountDivisor - 1) / accountDivisor;
                     LOG_ERROR("playerbots",
                               "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
                               "{} more accounts needed.", moreAccountsNeeded);
@@ -3727,8 +3744,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             if (time(nullptr) - missingBotsTimer >= 10)
             {
-                int divisor = RandomPlayerbotFactory::CalculateAvailableCharsPerAccount();
-                uint32 moreAccountsNeeded = (maxAllowedBotCount + divisor - 1) / divisor;
+                uint32 accountDivisor = sPlayerbotAIConfig.rtgEventDriven ? 1u : static_cast<uint32>(std::max(1, RandomPlayerbotFactory::CalculateAvailableCharsPerAccount()));
+                uint32 moreAccountsNeeded = (maxAllowedBotCount + accountDivisor - 1) / accountDivisor;
                 LOG_ERROR("playerbots",
                           "Can't log-in all the requested bots. Try increasing RandomBotAccountCount in your conf file.\n"
                           "{} more accounts needed.", moreAccountsNeeded);

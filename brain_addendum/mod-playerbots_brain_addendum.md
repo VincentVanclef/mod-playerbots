@@ -149,3 +149,40 @@ This pass therefore stays inside `RandomPlayerbotMgr.cpp` and reuses the already
 - “need exists” is not the same as “an admissible offline helper exists right now”
 - finish-fill loops can look like planner defects while actually being headroom starvation
 - dispatch-stall cleanup must always route through the shared helper-state clearer so queue, retry, grace, and logout markers decay together
+
+## 2026-03-20 — Phase 3 follow-up: event-driven helper account sizing and RDF starvation recovery
+
+### Runtime evidence that triggered this pass
+Fresh live logs showed three tightly related symptoms:
+- one active BG lane could fill its minimum shell, but follow-on BG lanes repeatedly stalled at `pop_or_invite` or `finish_fill`
+- RDF demand could coexist in the logs but never materially advance while BG demand remained active
+- repeated `Can't log-in all the requested bots` errors appeared even though `RandomBotAccountCount = 1200`
+
+### Root cause findings
+This pass identified two narrow logic defects:
+
+1. **RTG helper account sizing was still using legacy chars-per-account math**
+   - legacy random-bot sizing divides by `CalculateAvailableCharsPerAccount()` because one account can supply different characters over time
+   - RTG queue helpers do **not** work that way during a live queue window: the system intentionally treats one logged-in helper as consuming one account until the helper retires
+   - result: only ~`eventMaxBots / charsPerAccount` accounts were being assigned to the RNDbot helper pool, which artificially capped multi-lane queue throughput
+
+2. **Queued RDF admission was being suppressed whenever any BG demand existed**
+   - the RTG acquire loop skipped non-active-dungeon RDF buckets whenever BG demand was present
+   - result: RDF queue fill could be starved indefinitely by simultaneous BG demand even when lane capacity existed for both
+
+### What changed
+- RTG event-driven auto-sizing now derives helper-account demand as **one account per helper ceiling**, not chars-per-account
+- RTG RNDbot account assignment now uses the same one-account-per-helper rule in event-driven mode
+- RTG missing-account diagnostics now report helper-account shortage using divisor `1` in event-driven mode so the error reflects real queue-helper economics
+- RDF reserved/shared-lane acquisition no longer suppresses queued RDF buckets merely because BG demand exists elsewhere
+
+### Why this is the correct narrow repair
+This stays inside the queue-helper admission/account-pool boundary instead of broadening planner behavior:
+- the BG/RDF planners were still emitting valid demand
+- the real break was helper materialization capacity and an over-aggressive RDF suppression guard
+- fixing account-pool sizing plus the RDF starvation gate directly addresses the observed live symptoms without rewriting planner doctrine
+
+### Historical accounting / lessons
+- RTG helper pools must be sized by **concurrent helper sessions**, not by stored characters per account
+- legacy random-bot account math is not safe to reuse blindly inside standalone queue-helper mode
+- global BG pressure should influence capacity sharing, but it must not hard-disable queued RDF admissions
