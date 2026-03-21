@@ -249,3 +249,9 @@ The newest symptoms were not solved by more RDF role logic alone. The real break
 - later lanes were being blocked by accounting truth that no longer reflected real helper state
 
 This pass therefore tightens the authority boundary instead of broadening queue doctrine.
+
+## 2026-03-21 — Queue-system continuation journal: RDF dispatch + multi-queue correction
+- Confirmed RDF was still weaker than BG at the manager/dispatch boundary: acquire/login existed, but there was no equivalent of the BG immediate queue-dispatch helper. That is why logs could stop at acquire/add with little proof of actual queue participation.
+- Confirmed acquire-side phase mapping had drifted away from planner truth. This was a quiet multi-queue bug because wrong phase ordering/suppression can make one lane appear “dominant” while others remain starved.
+- Confirmed one shared-surplus RDF suppression guard still existed despite prior starvation-recovery intent.
+- Repaired all three surgically and expanded breadcrumbs only at the proving surfaces: RDF join/accept/fail, BG multi-queue/assign, Arena form/pop, and generic dispatch success/failure reasons.

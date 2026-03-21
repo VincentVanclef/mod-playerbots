@@ -352,7 +352,10 @@ bool LfgJoinAction::JoinLFG()
     RTG_ClearDungeonQueuePenalties(bot);
 
     if (RTG_IsQueuedLfgBot(bot))
+    {
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 20, sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add"));
+        LOG_INFO("playerbots", "[RTG][RDF][JOIN] helper={} roleMask={} selectedCount={} grouped={}", botId, roleMask, static_cast<uint32>(list.size()), bot->GetGroup() ? 1u : 0u);
+    }
 
     LOG_INFO("playerbots", "Bot {} {}:{} <{}>: queues LFG, Dungeon as {} ({})", bot->GetGUID().ToString().c_str(),
              bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), _roles,
@@ -445,7 +448,10 @@ bool LfgAcceptAction::Execute(Event event)
             return true;
         }
         if (RTG_IsQueuedLfgBot(bot))
+        {
             bot->CombatStop(true);
+            LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=stored", bot->GetGUID().GetCounter(), id);
+        }
 
         botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
         bot->ClearUnitState(UNIT_STATE_ALL_STATE);
@@ -482,7 +488,10 @@ bool LfgAcceptAction::Execute(Event event)
                 return true;
             }
             if (RTG_IsQueuedLfgBot(bot))
+            {
                 bot->CombatStop(true);
+                LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=packet", bot->GetGUID().GetCounter(), id);
+            }
 
             botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
             bot->ClearUnitState(UNIT_STATE_ALL_STATE);

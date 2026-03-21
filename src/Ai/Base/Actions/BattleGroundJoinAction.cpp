@@ -886,14 +886,21 @@ bool BGJoinAction::JoinQueue(uint32 type)
     else
     {
         if (RTG_DirectJoinArenaQueue(bot, queueTypeId, arenaType, isRated))
+        {
+            LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} teamSize={} rated={} result=1", bot->GetGUID().GetCounter(), uint32(queueTypeId), TeamSize, isRated ? 1u : 0u);
             return true;
+        }
 
         if (!unit)
+        {
+            LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} teamSize={} rated={} result=0 reason=no_battlemaster", bot->GetGUID().GetCounter(), uint32(queueTypeId), TeamSize, isRated ? 1u : 0u);
             return false;
+        }
 
         WorldPacket arena_packet(CMSG_BATTLEMASTER_JOIN_ARENA, 20);
         arena_packet << unit->GetGUID() << arenaslot << asGroup << uint8(isRated);
         bot->GetSession()->HandleBattlemasterJoinArena(arena_packet);
+        LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} teamSize={} rated={} result=1", bot->GetGUID().GetCounter(), uint32(queueTypeId), TeamSize, isRated ? 1u : 0u);
     }
 
     return true;

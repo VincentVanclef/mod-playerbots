@@ -273,7 +273,73 @@ namespace
         bool queued = botAI->DoSpecificAction("bg join", Event(), true);
         RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][DISPATCH] helper={} queue={} reason={} result={}",
             bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg", queued ? 1 : 0));
+
+        if (queued)
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane=bg queue={} reason={}",
+                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg"));
+        else
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane=bg queue={} reason={} inWorld={} inQueue={} invited={} inBg={} inArena={}",
+                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg",
+                bot->IsInWorld() ? 1 : 0,
+                bot->InBattlegroundQueue() ? 1 : 0,
+                bot->IsInvitedForBattlegroundInstance() ? 1 : 0,
+                bot->InBattleground() ? 1 : 0,
+                bot->InArena() ? 1 : 0));
         return queued;
+    }
+
+    static bool RTG_DispatchImmediateLfgJoin(Player* bot, char const* reason)
+    {
+        if (!bot || !bot->IsInWorld() || bot->IsBeingTeleported())
+            return false;
+
+        if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE)
+            return true;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI)
+            return false;
+
+        bool joined = botAI->DoSpecificAction("lfg join", Event(), true);
+        if (joined)
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane=rdf reason={}", bot->GetGUID().GetCounter(), reason ? reason : "rtg"));
+        else
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane=rdf reason={} inWorld={} state={} grouped={} combat={} dead={} teleport={} inBg={} inArena={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg",
+                bot->IsInWorld() ? 1 : 0,
+                uint32(sLFGMgr->GetState(bot->GetGUID())),
+                bot->GetGroup() ? 1 : 0,
+                bot->IsInCombat() ? 1 : 0,
+                bot->isDead() ? 1 : 0,
+                bot->IsBeingTeleported() ? 1 : 0,
+                bot->InBattleground() ? 1 : 0,
+                bot->InArena() ? 1 : 0));
+        return joined;
+    }
+
+    static bool RTG_DispatchImmediateLfgAccept(Player* bot, char const* reason)
+    {
+        if (!bot || !bot->IsInWorld())
+            return false;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI)
+            return false;
+
+        uint32 proposalId = botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Get();
+        if (!proposalId)
+            return false;
+
+        bool accepted = botAI->DoSpecificAction("lfg accept", Event(), true);
+        if (accepted)
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane=rdf_accept reason={} proposal={}", bot->GetGUID().GetCounter(), reason ? reason : "rtg", proposalId));
+        else
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane=rdf_accept reason={} proposal={} combat={} dead={} grouped={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", proposalId,
+                bot->IsInCombat() ? 1 : 0,
+                bot->isDead() ? 1 : 0,
+                bot->GetGroup() ? 1 : 0));
+        return accepted;
     }
 
     static bool RTG_IsQueueSupervisorEvent(std::string const& event)
@@ -1360,6 +1426,67 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (inDungeonRun)
                 SetEventValue(botId, "rtg_dungeon_active", now, 7200);
+        }
+    }
+
+    if (sPlayerbotAIConfig.rtgEventDriven)
+    {
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = kv.first.GetCounter();
+            std::string addData = GetEventData(botId, "add");
+            uint32 desiredTeam = 0;
+            uint32 desiredLevel = 0;
+            uint32 desiredRole = 0;
+            uint32 desiredOwner = 0;
+            if (!RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
+                continue;
+
+            if (desiredOwner && !GetEventValue(desiredOwner, "rtg_lfg_real_demand") && !GetEventValue(botId, "rtg_dungeon_active"))
+                continue;
+
+            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsBeingTeleported())
+                continue;
+
+            Map* map = bot->GetMap();
+            Group* group = bot->GetGroup();
+            lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
+            bool inDungeonRun = (map && (map->IsDungeon() || map->IsRaid())) ||
+                                (group && group->isLFGGroup()) ||
+                                (state == lfg::LFG_STATE_DUNGEON);
+            if (inDungeonRun)
+                continue;
+
+            if (uint32 proposalId = GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Get())
+            {
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ACCEPT] helper={} owner={} proposal={} state=dispatch", botId, desiredOwner, proposalId));
+                RTG_DispatchImmediateLfgAccept(bot, "proposal_active");
+                continue;
+            }
+
+            if (state == lfg::LFG_STATE_NONE)
+            {
+                bool retryOpen = !GetEventValue(botId, "rtg_lfg_join_retry");
+                SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
+                if (retryOpen)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][JOIN] helper={} owner={} role={} state=dispatch", botId, desiredOwner, desiredRole));
+                    bool joined = RTG_DispatchImmediateLfgJoin(bot, "login_or_idle");
+                    SetEventValue(botId, "rtg_lfg_join_retry", 1, joined ? 2 : 4, addData);
+                    if (!joined)
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=join_dispatch_failed role={} state={} grouped={} combat={} dead={}",
+                            botId, desiredOwner, desiredRole, uint32(state), group ? 1 : 0, bot->IsInCombat() ? 1 : 0, bot->isDead() ? 1 : 0));
+                }
+            }
+            else if (state < lfg::LFG_STATE_DUNGEON)
+            {
+                SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
+                SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
+            }
         }
     }
 
@@ -3245,10 +3372,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 switch (phase)
                 {
-                    case 0: return 0; // pop_or_invite
+                    case 2: return 0; // pop_or_invite
                     case 1: return 1; // starter_fill
-                    case 2: return 2; // live_refill
-                    case 3: return 3; // finish_fill
+                    case 3: return 2; // live_refill
+                    case 4: return 3; // finish_fill
                     default: return 4;
                 }
             };
@@ -3270,24 +3397,24 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return a.level > b.level;
             });
 
-            bool bgHasStartupNeed = false;
+            bool bgHasPopNeed = false;
             bool bgHasStarterNeed = false;
             for (RtgBgBucket const& bucket : orderedBgBuckets)
             {
                 if (!bucket.need)
                     continue;
-                if (bucket.phase == 0)
-                    bgHasStartupNeed = true;
+                if (bucket.phase == 2)
+                    bgHasPopNeed = true;
                 else if (bucket.phase == 1)
                     bgHasStarterNeed = true;
             }
 
-            bool suppressBgFinishFill = bgHasStartupNeed || bgHasStarterNeed;
+            bool suppressBgFinishFill = bgHasPopNeed || bgHasStarterNeed;
 
             if (RTG_QueueDebugEnabled())
             {
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][BG_ORDER] startupNeed={} starterNeed={} suppressFinishFill={}",
-                         bgHasStartupNeed ? 1u : 0u,
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][BG_ORDER] popNeed={} starterNeed={} suppressFinishFill={}",
+                         bgHasPopNeed ? 1u : 0u,
                          bgHasStarterNeed ? 1u : 0u,
                          suppressBgFinishFill ? 1u : 0u);
             }
@@ -3332,6 +3459,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         }
                     }
                 }
+            }
+
+            if (RTG_QueueDebugEnabled())
+            {
+                LOG_INFO("playerbots", "[RTG][BG][MULTI_QUEUE] totalLfgNeed={} totalBgNeed={} remainingCapacity={} lfgCapacity={} bgCapacity={} lfgBuckets={} bgBuckets={}",
+                         totalLfgNeed, totalBgNeed, remainingCapacity, lfgCapacity, bgCapacity,
+                         static_cast<uint32>(orderedLfgBuckets.size()), static_cast<uint32>(orderedBgBuckets.size()));
             }
 
             uint32 rtgLfgLogged = 0;
@@ -3443,6 +3577,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     LOG_INFO("playerbots", "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                        charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
+                        bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
+                    if (BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(bucket.queueTypeId)) != ARENA_TYPE_NONE)
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][FORM] helper={} queue={} bracket={} team={} level={} teamSize={}",
+                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.teamSize));
                     ++rtgBgLogged;
                     --capacity;
                     --remainingCapacity;
@@ -3492,7 +3632,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     {
                         if (!capacity || !remainingCapacity)
                             break;
-                        if (suppressBgFinishFill && bucket.phase == 3)
+                        if (suppressBgFinishFill && bucket.phase == 4)
                             continue;
                         if (tryFillBgBucketOnce(bucket, capacity))
                             added = true;
@@ -3528,15 +3668,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         {
                             for (RtgBgBucket& bucket : orderedBgBuckets)
                             {
-                                if (suppressBgFinishFill && bucket.phase == 3)
+                                if (suppressBgFinishFill && bucket.phase == 4)
                                     continue;
                                 if (tryFillBgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
-                                if (bgDemandActive && !bucket.activeDungeon)
-                                    continue;
                                 if (tryFillLfgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
@@ -3545,14 +3683,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         {
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
-                                if (bgDemandActive && !bucket.activeDungeon)
-                                    continue;
                                 if (tryFillLfgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
                             for (RtgBgBucket& bucket : orderedBgBuckets)
                             {
-                                if (suppressBgFinishFill && bucket.phase == 3)
+                                if (suppressBgFinishFill && bucket.phase == 4)
                                     continue;
                                 if (tryFillBgBucketOnce(bucket, sharedSurplus))
                                     return true;
@@ -6098,6 +6234,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={}",
+                bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel()));
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {

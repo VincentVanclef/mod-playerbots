@@ -247,3 +247,69 @@ This pass does **not** claim Phase 4/5 completion. It is specifically the Phase 
 - Corrected pending-helper pressure accounting so `WorldIdle` ledger rows no longer count as active pending admissions.
 - Corrected busy-account reconstruction so stale non-retired ledger rows do not keep blocking fresh helper acquisition.
 - Ownership audit now removes stale offline helper ledger rows when there is no surviving `add` or `logout` truth behind them.
+
+## 2026-03-21 — Phase 3 validation + Phase 4/5 surgical pass: RDF dispatch materialization, multi-queue phase correction, and arena pop breadcrumbs
+
+### Runtime evidence that triggered this pass
+Fresh RTG queue logs showed a narrow but decisive pattern:
+- RDF helpers were being acquired and logged into `add`, but runtime never progressed beyond acquire/dispatch-add breadcrumbs
+- battleground demand could exist across multiple queues, yet one lane monopolized effective progress while others remained planned-but-unmaterialized
+- arena queues had planner breadcrumbs after the prior hookup pass, but there was still not enough runtime proof of helper formation and actual pop attempts
+
+### Root causes confirmed in code
+This pass verified three concrete defects instead of guessing:
+
+1. **RDF had no manager-owned immediate join/accept dispatch surface**
+   - BG helpers already had `RTG_DispatchImmediateBgQueueJoin(...)`
+   - RDF helpers relied on eventual AI strategy cadence only
+   - result: helpers could log in, retain pending markers, and still never emit a clear queue-join/accept progression surface during the narrow event-driven window
+
+2. **BG multi-queue prioritization still had phase-number drift**
+   - planner phase values are authoritative as:
+     - `1 = starter_fill`
+     - `2 = pop_or_invite`
+     - `3 = live_refill`
+     - `4 = finish_fill`
+   - acquire-side priority/suppression logic was still treating old numbers/comments as truth
+   - result: queue ordering and finish-fill suppression could target the wrong buckets, which helps explain “only one queue seems to fully work” under overlapping demand
+
+3. **Shared-surplus lane arbitration still skipped queued RDF buckets whenever BG demand existed**
+   - that guard contradicted the intended Phase 4 multi-lane fairness doctrine
+   - result: RDF could still be starved in shared-capacity conditions even after earlier partial recovery work
+
+### Manual corrections applied
+- `RandomPlayerbotMgr.cpp`
+  - added immediate RDF dispatch helpers for:
+    - queue join
+    - proposal accept
+  - added manager-owned RDF runtime breadcrumbs:
+    - `[RTG][RDF][JOIN]`
+    - `[RTG][RDF][ACCEPT]`
+    - `[RTG][RDF][FAIL]`
+  - added generic success/failure dispatch breadcrumbs:
+    - `[RTG][DISPATCH][SUCCESS]`
+    - `[RTG][DISPATCH][FAIL_REASON]`
+  - added explicit RDF helper login breadcrumb:
+    - `[RTG][LFG][LOGIN]`
+  - corrected BG phase priority mapping to match planner truth
+  - corrected finish-fill suppression checks to target actual `phase == 4`
+  - removed the remaining shared-surplus RDF starvation guard so queued RDF buckets can compete during multi-lane operation
+  - added `[RTG][BG][MULTI_QUEUE]` capacity-sharing breadcrumb
+  - added `[RTG][BG][ASSIGN]` helper-assignment breadcrumb
+  - added `[RTG][ARENA][FORM]` breadcrumb when arena helper assignments materialize
+- `BattleGroundJoinAction.cpp`
+  - added `[RTG][ARENA][POP]` breadcrumbs around actual arena queue pop attempts
+- `LfgActions.cpp`
+  - added explicit RDF join/accept breadcrumbs inside the LFG action surface so runtime now proves whether the helper actually queued and accepted
+
+### Behavioral changes after this pass
+- RDF helpers should no longer stop at acquire/add visibility only; the manager now actively pushes them into join and accept attempts and logs the result
+- overlapping queue families should no longer suffer phase-priority drift between planner and acquire logic
+- finish-fill suppression is now aimed at real finish-fill buckets rather than the wrong phase ID
+- RDF should retain a fair chance to use shared helper surplus even when BG demand exists simultaneously
+- arena queues now expose helper formation and pop-attempt breadcrumbs, making “planner exists but no pop proof” far easier to diagnose
+
+### Assumptions corrected
+- The missing Phase 3 proof surface was **not** just “add more RDF logs” — the real gap was that BG had manager-owned immediate dispatch while RDF did not.
+- The multi-queue bug was **not** solely a planner failure — acquire-side phase-number drift was still warping bucket priority/suppression behavior.
+- Earlier partial RDF-starvation recovery was **not yet complete** — one shared-surplus guard still skipped queued RDF buckets under BG pressure.
