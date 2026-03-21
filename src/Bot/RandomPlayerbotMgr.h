@@ -136,7 +136,7 @@ public:
     std::string const HandleRemoteCommand(std::string const request);
     void OnPlayerLogout(Player* player);
     void OnPlayerLogin(Player* player);
-    void OnPlayerLoginError(uint32 bot);
+    void OnPlayerLoginError(uint32 bot, char const* reason = nullptr);
     Player* GetRandomPlayer();
     std::vector<Player*> GetPlayers() { return players; };
     PlayerBotMap GetAllBots() { return playerBots; };

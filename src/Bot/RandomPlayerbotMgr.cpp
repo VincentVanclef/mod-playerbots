@@ -2895,7 +2895,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
-                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT);
+                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT) ||
+                GetEventValue(charInfo.guid, "rtg_login_fail_recent");
         };
 
         auto countAvailableBgCandidates = [&](uint32 team) -> uint32
@@ -6234,6 +6235,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={}",
                 bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel()));
         }
@@ -6378,7 +6380,7 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
     }
 }
 
-void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
+void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
 {
     std::string addData = GetEventData(bot, "add");
     SetEventValue(bot, "add", 0, 0);
@@ -6387,10 +6389,12 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+    SetEventValue(bot, "rtg_add_requested", 0, 0);
+    SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     currentBots.remove(bot);
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
         RTG::RtgQueueLedger::Instance().Remove(bot);
-    RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN][FAIL] helper={} add='{}'", bot, addData));
+    RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN][FAIL] helper={} add='{}' reason={}", bot, addData, reason ? reason : "unknown"));
 }
 
 Player* RandomPlayerbotMgr::GetRandomPlayer()
