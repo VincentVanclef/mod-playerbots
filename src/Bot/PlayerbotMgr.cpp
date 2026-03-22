@@ -85,26 +85,6 @@ public:
     uint32 GetMasterAccountId() const { return masterAccountId; }
 };
 
-namespace
-{
-    static bool RTG_IsQueuedHelperAddData(std::string const& addData)
-    {
-        return RTG::IsQueueManagedAddData(addData);
-    }
-
-    static void RTG_ReportQueuedHelperLoginFailure(ObjectGuid playerGuid, uint32 masterAccountId, char const* reason)
-    {
-        if (masterAccountId)
-            return;
-
-        std::string addData = sRandomPlayerbotMgr.GetEventData(playerGuid.GetCounter(), "add");
-        if (!RTG_IsQueuedHelperAddData(addData))
-            return;
-
-        sRandomPlayerbotMgr.OnPlayerLoginError(playerGuid.GetCounter(), reason);
-    }
-}
-
 void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId)
 {
     if (botLoading.find(playerGuid) != botLoading.end())
@@ -117,10 +97,7 @@ void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId
 
     uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(playerGuid);
     if (!accountId)
-    {
-        RTG_ReportQueuedHelperLoginFailure(playerGuid, masterAccountId, "missing_account");
         return;
-    }
 
     WorldSession* masterSession = masterAccountId ? sWorldSessionMgr->FindSession(masterAccountId) : nullptr;
     Player* masterPlayer = masterSession ? masterSession->GetPlayer() : nullptr;
@@ -169,7 +146,6 @@ void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId
         std::make_shared<PlayerbotLoginQueryHolder>(masterAccountId, accountId, playerGuid);
     if (!holder->Initialize())
     {
-        RTG_ReportQueuedHelperLoginFailure(playerGuid, masterAccountId, "holder_initialize_failed");
         return;
     }
 
@@ -236,7 +212,6 @@ void PlayerbotHolder::HandlePlayerBotLoginCallback(PlayerbotLoginQueryHolder con
         botSession->LogoutPlayer(true);
         delete botSession;
         PlayerbotHolder::botLoading.erase(holder.GetGuid());
-        RTG_ReportQueuedHelperLoginFailure(holder.GetGuid(), masterAccountId, "session_player_null");
 
         return;
     }
