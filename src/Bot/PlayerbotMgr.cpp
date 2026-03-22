@@ -85,19 +85,47 @@ public:
     uint32 GetMasterAccountId() const { return masterAccountId; }
 };
 
+namespace
+{
+static bool RTG_IsQueuedHelperGuid(ObjectGuid guid)
+{
+    return RTG::IsQueueManagedAddData(sRandomPlayerbotMgr.GetEventData(guid.GetCounter(), "add"));
+}
+
+static void RTG_ReportQueuedHelperLoginFailure(ObjectGuid guid, uint32 masterAccountId, char const* reason)
+{
+    if (masterAccountId)
+        return;
+
+    if (!RTG_IsQueuedHelperGuid(guid))
+        return;
+
+    sRandomPlayerbotMgr.OnPlayerLoginError(guid.GetCounter(), reason);
+}
+}
+
 void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId)
 {
     if (botLoading.find(playerGuid) != botLoading.end())
+    {
+        RTG_ReportQueuedHelperLoginFailure(playerGuid, masterAccountId, "bot_loading_guard");
         return;
+    }
 
     // has bot already been added?
     Player* bot = ObjectAccessor::FindConnectedPlayer(playerGuid);
     if (bot && bot->IsInWorld())
+    {
+        RTG_ReportQueuedHelperLoginFailure(playerGuid, masterAccountId, "already_in_world");
         return;
+    }
 
     uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(playerGuid);
     if (!accountId)
+    {
+        RTG_ReportQueuedHelperLoginFailure(playerGuid, masterAccountId, "missing_account");
         return;
+    }
 
     WorldSession* masterSession = masterAccountId ? sWorldSessionMgr->FindSession(masterAccountId) : nullptr;
     Player* masterPlayer = masterSession ? masterSession->GetPlayer() : nullptr;
@@ -146,6 +174,7 @@ void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId
         std::make_shared<PlayerbotLoginQueryHolder>(masterAccountId, accountId, playerGuid);
     if (!holder->Initialize())
     {
+        RTG_ReportQueuedHelperLoginFailure(playerGuid, masterAccountId, "holder_initialize_failed");
         return;
     }
 
@@ -209,6 +238,7 @@ void PlayerbotHolder::HandlePlayerBotLoginCallback(PlayerbotLoginQueryHolder con
     {
         // Debug log
         LOG_DEBUG("mod-playerbots", "Bot player could not be loaded for account ID: {}", botAccountId);
+        RTG_ReportQueuedHelperLoginFailure(holder.GetGuid(), holder.GetMasterAccountId(), "session_player_null");
         botSession->LogoutPlayer(true);
         delete botSession;
         PlayerbotHolder::botLoading.erase(holder.GetGuid());

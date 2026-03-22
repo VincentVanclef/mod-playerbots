@@ -107,6 +107,40 @@ namespace
         return std::max<uint32>(5u, std::min<uint32>(10u, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds));
     }
 
+    static std::string RTG_RoleMismatchCooldownKey(uint32 desiredRole)
+    {
+        return std::string("rtg_lfg_role_block:") + std::to_string(desiredRole);
+    }
+
+    static uint32 RTG_GetCachedRuntimeLfgRole(ObjectGuid::LowType botId)
+    {
+        return sRandomPlayerbotMgr.GetEventValue(botId, "rtg_runtime_lfg_role");
+    }
+
+    static void RTG_SetCachedRuntimeLfgRole(ObjectGuid::LowType botId, uint32 actualRole, uint32 ttlSeconds = 86400u)
+    {
+        if (!botId || !actualRole)
+            return;
+
+        sRandomPlayerbotMgr.SetEventValue(botId, "rtg_runtime_lfg_role", actualRole, ttlSeconds);
+    }
+
+    static void RTG_BlockBotForDesiredLfgRole(ObjectGuid::LowType botId, uint32 desiredRole, uint32 ttlSeconds = 900u)
+    {
+        if (!botId || !desiredRole)
+            return;
+
+        sRandomPlayerbotMgr.SetEventValue(botId, RTG_RoleMismatchCooldownKey(desiredRole), 1u, ttlSeconds);
+    }
+
+    static bool RTG_IsBotBlockedForDesiredLfgRole(ObjectGuid::LowType botId, uint32 desiredRole)
+    {
+        if (!botId || !desiredRole)
+            return false;
+
+        return sRandomPlayerbotMgr.GetEventValue(botId, RTG_RoleMismatchCooldownKey(desiredRole)) != 0;
+    }
+
     static uint32 RTG_GetDispatchStallThresholdSeconds()
     {
         return std::max<uint32>(20u, RTG_GetQueueGraceTtlSeconds() + 10u);
@@ -1477,6 +1511,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} class={} specTab={}",
                             botId, desiredOwner, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                        RTG_SetCachedRuntimeLfgRole(botId, actualRole);
+                        RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
                         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                         SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
                         RTG_ClearQueueHelperState(botId);
@@ -2928,6 +2964,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             return count;
         };
 
+        auto getPreferredOfflineLfgRole = [&](CharacterInfo const& charInfo) -> uint32
+        {
+            uint32 cachedRole = RTG_GetCachedRuntimeLfgRole(charInfo.guid);
+            if (cachedRole)
+                return cachedRole;
+
+            return RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass);
+        };
+
         auto countAvailableLfgCandidates = [&](uint32 team, uint32 desiredRole) -> uint32
         {
             uint32 count = 0;
@@ -2935,7 +2980,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 if (uint32(IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE) != team)
                     continue;
-                if (RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass) != desiredRole)
+                if (RTG_IsBotBlockedForDesiredLfgRole(charInfo.guid, desiredRole))
+                    continue;
+                if (getPreferredOfflineLfgRole(charInfo) != desiredRole)
                     continue;
                 if (isQueueHelperBlocked(charInfo))
                     continue;
@@ -6251,6 +6298,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
+            RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), RTG_ActualRoleForBot(bot));
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={}",
                 bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel()));
         }

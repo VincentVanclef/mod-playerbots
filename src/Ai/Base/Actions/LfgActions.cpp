@@ -76,6 +76,27 @@ namespace
         return RTG::ActualRoleForBot(bot);
     }
 
+    static std::string RTG_RoleMismatchCooldownKey(uint32 desiredRole)
+    {
+        return std::string("rtg_lfg_role_block:") + std::to_string(desiredRole);
+    }
+
+    static void RTG_RecordRuntimeRole(Player* bot, uint32 actualRole)
+    {
+        if (!bot || !actualRole)
+            return;
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(bot->GetGUID().GetCounter(), "rtg_runtime_lfg_role", actualRole, 86400);
+    }
+
+    static void RTG_BlockDesiredRole(Player* bot, uint32 desiredRole)
+    {
+        if (!bot || !desiredRole)
+            return;
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(bot->GetGUID().GetCounter(), RTG_RoleMismatchCooldownKey(desiredRole), 1u, 900);
+    }
+
     static bool RTG_GroupHasRealPlayerMember(Player* bot)
     {
         if (!bot)
@@ -375,6 +396,7 @@ bool LfgJoinAction::JoinLFG()
 
     if (RTG_IsQueuedLfgBot(bot))
     {
+        RTG_RecordRuntimeRole(bot, roleMask);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 20, sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add"));
         LOG_INFO("playerbots", "[RTG][RDF][JOIN] helper={} roleMask={} selectedCount={} grouped={}", botId, roleMask, static_cast<uint32>(list.size()), bot->GetGroup() ? 1u : 0u);
     }

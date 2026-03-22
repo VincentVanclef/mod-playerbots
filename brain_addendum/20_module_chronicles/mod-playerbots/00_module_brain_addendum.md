@@ -438,3 +438,32 @@ A healthy RDF completion should now show:
 - dungeon teleport / run
 
 instead of repeated proposal expiry loops with no accept breadcrumbs.
+
+## 2026-03-22 — RDF deep audit: candidate-role targeting, login-failure surfacing, and per-role mismatch quarantine
+
+### Runtime evidence
+Recent live RDF tests proved the lane had advanced past acquire-only failure, but still lagged behind the BG lane in three key ways:
+- helper selection still trusted offline talent reads too much, producing repeated runtime role mismatches
+- some queued helper login failures were still silent at the `PlayerbotMgr` boundary
+- repeated bad RDF candidates could burn through busy accounts and make one damaged queue look like global account starvation
+
+### Architecture correction
+RDF should mirror BG queue doctrine as closely as possible:
+- planner owns demand
+- acquire fulfills demand
+- runtime validation confirms the selected helper really matches the requested role
+- bad candidates must be quarantined quickly so they do not poison shared queue capacity
+
+### What changed
+- queued helper login failures now report through `OnPlayerLoginError(...)` for `bot_loading_guard`, `missing_account`, `holder_initialize_failed`, and `session_player_null` paths in `PlayerbotMgr.cpp`
+- RDF now keeps a runtime role cache (`rtg_runtime_lfg_role`) learned from real helper logins/mismatches
+- RDF mismatch now also places a per-role cooldown (`rtg_lfg_role_block:<role>`) on the mismatched helper so the same bot is not immediately re-selected for the same wrong role
+- event-driven RDF acquisition now prefers known runtime role truth first, then falls back to offline role inference only when runtime evidence does not yet exist
+
+### Why this matters
+This moves RDF closer to the BG lane's stronger behavior: once a helper proves what it really is at runtime, the queue system should use that truth on later passes instead of repeatedly rediscovering the same mismatch through expensive login attempts.
+
+### Expected next-proof signals
+- fewer repeated `runtime_role_mismatch` failures for the same helper
+- fewer false `RandomBotAccountCount` shortage signals during active RDF demand
+- cleaner mixed-lane behavior when BG, RDF, and arena demand coexist
