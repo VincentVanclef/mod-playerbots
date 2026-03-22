@@ -1080,6 +1080,28 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
 
     switch (packet.GetOpcode())
     {
+        case SMSG_LFG_PROPOSAL_UPDATE:
+        {
+            WorldPacket p(packet);
+            if (p.rpos() + sizeof(uint32) <= p.size())
+            {
+                uint32 proposalId = 0;
+                p.rpos(0);
+                p >> proposalId;
+                if (proposalId)
+                {
+                    aiObjectContext->GetValue<uint32>("lfg proposal")->Set(proposalId);
+
+                    std::string addData = sRandomPlayerbotMgr.GetEventData(bot->GetGUID().GetCounter(), "add");
+                    if (addData.rfind("rtg_lfg:", 0) == 0)
+                    {
+                        LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} proposal={} source=packet_cache bytes={}",
+                                 bot->GetGUID().GetCounter(), proposalId, p.size());
+                    }
+                }
+            }
+            break;
+        }
         case SMSG_SPELL_FAILURE:
         {
             WorldPacket p(packet);

@@ -467,3 +467,31 @@ This moves RDF closer to the BG lane's stronger behavior: once a helper proves w
 - fewer repeated `runtime_role_mismatch` failures for the same helper
 - fewer false `RandomBotAccountCount` shortage signals during active RDF demand
 - cleaner mixed-lane behavior when BG, RDF, and arena demand coexist
+
+## 2026-03-22 — RDF audit continuation: proposal-id capture at packet ingress, stale role-cache precedence correction, and queue-helper gear hygiene
+
+### Runtime evidence
+Latest live RDF tests showed three intertwined symptoms:
+- helpers were joining RDF quickly, but some proposals still expired with no matching `[RTG][RDF][ACCEPT]` proof on the bot side
+- candidate selection could still treat a visibly role-correct helper (for example a holy priest) as the wrong offline target because stale runtime cache won over persistent talent truth
+- queue helpers that churned across levels/spec refreshes accumulated bag overflow and mail spill, causing repeated `Player::_LoadInventory ... Item will be sent by mail` warnings and making later initialization less deterministic
+
+### Confirmed architecture corrections
+1. **Proposal acceptance needed a harder owner boundary than AI strategy timing**
+   - relying only on the world-packet trigger path left a gap where proposal id might not be cached early enough for the manager-side accept dispatch
+   - fix: cache `SMSG_LFG_PROPOSAL_UPDATE` proposal id immediately inside `PlayerbotAI::HandleBotOutgoingPacket(...)`, before normal trigger handling, so manager polling can always see the active proposal id
+
+2. **Offline RDF selection must not let stale runtime cache outrank real offline talent truth**
+   - once explicit talent preparation started persisting role-correct specs, the selector still prioritized `rtg_runtime_lfg_role` first
+   - that could preserve old role memory after a later spec correction and make selection look wrong from the player's point of view
+   - fix: prefer real offline talent truth first; only fall back to runtime cache when offline talent data is not available
+
+3. **Queue-helper gear initialization needs hygiene, not infinite accumulation**
+   - repeated queue-helper level/spec preparation was reinitializing gear while old backpack contents and overflow mail remained
+   - fix: for queue-managed RDF helpers that actually need bootstrap work (missing talents / role mismatch / level mismatch), clear bag contents and purge mailbox records before fresh equipment initialization
+
+### Doctrine update
+RDF should mirror BG discipline not only at acquire/dispatch, but also at the **materialization hygiene** layer:
+- capture proposal state at the earliest reliable packet ingress
+- prefer persistent role truth over stale cache memory
+- treat queue-helper bootstrap inventory as disposable state that must be cleaned before re-gearing

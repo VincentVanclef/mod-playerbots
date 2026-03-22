@@ -26,6 +26,7 @@
 #include "AccountMgr.h"
 #include "AiFactory.h"
 #include "ArenaTeamMgr.h"
+#include "Bag.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "CellImpl.h"
@@ -139,6 +140,40 @@ namespace
             return false;
 
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_RoleMismatchCooldownKey(desiredRole)) != 0;
+    }
+
+    static void RTG_PurgeQueueHelperMailbox(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        CharacterDatabase.Execute("DELETE FROM mail_items WHERE receiver = {}", bot->GetGUID().GetCounter());
+        CharacterDatabase.Execute("DELETE FROM mail WHERE receiver = {}", bot->GetGUID().GetCounter());
+    }
+
+    static void RTG_ClearQueueHelperBagItems(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        for (uint8 slot = INVENTORY_SLOT_ITEM_START; slot < INVENTORY_SLOT_ITEM_END; ++slot)
+        {
+            if (bot->GetItemByPos(INVENTORY_SLOT_BAG_0, slot))
+                bot->DestroyItem(INVENTORY_SLOT_BAG_0, slot, true);
+        }
+
+        for (uint8 bagSlot = INVENTORY_SLOT_BAG_START; bagSlot < INVENTORY_SLOT_BAG_END; ++bagSlot)
+        {
+            Bag* bag = bot->GetBagByPos(bagSlot);
+            if (!bag)
+                continue;
+
+            for (uint32 slot = 0; slot < bag->GetBagSize(); ++slot)
+            {
+                if (bag->GetItemByPos(slot))
+                    bot->DestroyItem(bagSlot, slot, true);
+            }
+        }
     }
 
     static uint32 RTG_GetDispatchStallThresholdSeconds()
@@ -466,6 +501,12 @@ namespace
             bot->GiveLevel(desiredLevel);
             bot->InitStatsForLevel(true);
             bot->SetUInt32Value(PLAYER_XP, 0);
+        }
+
+        if (missingTalents || roleMismatch || levelMismatch)
+        {
+            RTG_ClearQueueHelperBagItems(bot);
+            RTG_PurgeQueueHelperMailbox(bot);
         }
 
         PlayerbotFactory factory(bot, desiredLevel ? desiredLevel : bot->GetLevel());
@@ -3028,18 +3069,18 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
         auto getPreferredOfflineLfgRole = [&](CharacterInfo const& charInfo, bool& roleKnown) -> uint32
         {
-            uint32 cachedRole = RTG_GetCachedRuntimeLfgRole(charInfo.guid);
-            if (cachedRole)
-            {
-                roleKnown = true;
-                return cachedRole;
-            }
-
             uint8 specTab = 0;
             if (RTG::HasOfflineSpecData(charInfo.guid, charInfo.rClass, &specTab))
             {
                 roleKnown = true;
                 return RTG_RoleForClassSpecTab(charInfo.rClass, specTab);
+            }
+
+            uint32 cachedRole = RTG_GetCachedRuntimeLfgRole(charInfo.guid);
+            if (cachedRole)
+            {
+                roleKnown = true;
+                return cachedRole;
             }
 
             roleKnown = false;
