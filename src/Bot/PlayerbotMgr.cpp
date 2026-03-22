@@ -34,6 +34,7 @@
 #include "Playerbots.h"
 #include "PlayerbotGuildMgr.h"
 #include "RandomPlayerbotMgr.h"
+#include "RtgQueueMetadata.h"
 #include "SharedDefines.h"
 #include "WorldSession.h"
 #include "BroadcastHelper.h"
@@ -87,28 +88,16 @@ public:
 void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId)
 {
     if (botLoading.find(playerGuid) != botLoading.end())
-    {
-        if (!masterAccountId && RTG::IsQueueManagedAddData(sRandomPlayerbotMgr.GetEventData(playerGuid.GetCounter(), "add")))
-            sRandomPlayerbotMgr.OnPlayerLoginError(playerGuid.GetCounter(), "bot_loading_guard");
         return;
-    }
 
     // has bot already been added?
     Player* bot = ObjectAccessor::FindConnectedPlayer(playerGuid);
     if (bot && bot->IsInWorld())
-    {
-        if (!masterAccountId && RTG::IsQueueManagedAddData(sRandomPlayerbotMgr.GetEventData(playerGuid.GetCounter(), "add")))
-            sRandomPlayerbotMgr.OnPlayerLoginError(playerGuid.GetCounter(), "already_in_world");
         return;
-    }
 
     uint32 accountId = sCharacterCache->GetCharacterAccountIdByGuid(playerGuid);
     if (!accountId)
-    {
-        if (!masterAccountId && RTG::IsQueueManagedAddData(sRandomPlayerbotMgr.GetEventData(playerGuid.GetCounter(), "add")))
-            sRandomPlayerbotMgr.OnPlayerLoginError(playerGuid.GetCounter(), "missing_account");
         return;
-    }
 
     WorldSession* masterSession = masterAccountId ? sWorldSessionMgr->FindSession(masterAccountId) : nullptr;
     Player* masterPlayer = masterSession ? masterSession->GetPlayer() : nullptr;
@@ -157,8 +146,6 @@ void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId
         std::make_shared<PlayerbotLoginQueryHolder>(masterAccountId, accountId, playerGuid);
     if (!holder->Initialize())
     {
-        if (!masterAccountId && RTG::IsQueueManagedAddData(sRandomPlayerbotMgr.GetEventData(playerGuid.GetCounter(), "add")))
-            sRandomPlayerbotMgr.OnPlayerLoginError(playerGuid.GetCounter(), "holder_initialize_failed");
         return;
     }
 
@@ -224,7 +211,6 @@ void PlayerbotHolder::HandlePlayerBotLoginCallback(PlayerbotLoginQueryHolder con
         LOG_DEBUG("mod-playerbots", "Bot player could not be loaded for account ID: {}", botAccountId);
         botSession->LogoutPlayer(true);
         delete botSession;
-        RandomPlayerbotMgr::instance().OnPlayerLoginError(holder.GetGuid().GetCounter(), "session_player_null");
         PlayerbotHolder::botLoading.erase(holder.GetGuid());
 
         return;
