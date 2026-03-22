@@ -495,3 +495,64 @@ RDF should mirror BG discipline not only at acquire/dispatch, but also at the **
 - capture proposal state at the earliest reliable packet ingress
 - prefer persistent role truth over stale cache memory
 - treat queue-helper bootstrap inventory as disposable state that must be cleaned before re-gearing
+
+## 2026-03-22 — RDF proposal lifecycle lock pass: accept-sent state, join suppression during active proposal, and lock release only on dungeon entry or resolved failure
+
+### Runtime evidence
+Live RDF testing finally isolated the blocker beyond join/materialization:
+- helpers logged in cleanly
+- helpers joined RDF cleanly
+- helpers emitted repeated `[RTG][RDF][ACCEPT]` and `rdf_accept` success breadcrumbs for the same proposal id
+- yet the dungeon never finalized, and helpers fell back into repeated RDF join work while the ready-check window was still unresolved
+
+This proved the helpers were no longer failing to *press accept*; instead, the queue system was failing to **hold them inside proposal resolution** as a first-class lifecycle phase.
+
+### Confirmed root cause
+`LfgAcceptAction` was still clearing the in-memory proposal state too early and resetting AI immediately after sending `CMSG_LFG_PROPOSAL_RESULT`. That let the event-driven RDF manager see the same helper as ordinary `LFG_STATE_NONE` / join-eligible work again before the dungeon transfer or failure boundary had resolved.
+
+In practice, the RDF lane was doing:
+- accept proposal
+- forget proposal exists
+- drift back into ordinary join dispatch
+- accept again on the same unresolved proposal
+
+That is architecturally weaker than the BG lane, where the pop/match transition is treated as an owned state and not re-entered as raw queue work.
+
+### Doctrine correction
+RDF needs an explicit **proposal lock** phase between:
+- queue join
+- proposal acceptance sent
+- dungeon entry / proposal failure resolution
+
+Once a queued helper has accepted a proposal, it must not:
+- re-join RDF
+- re-bootstrap role prep
+- get treated as idle/ordinary LFG state again
+
+until the proposal resolves by either:
+- entering the dungeon, or
+- timing out / failing and being intentionally released back to the queue lifecycle
+
+### Fix applied
+- Added queue-helper event-backed proposal lifecycle state:
+  - `rtg_lfg_proposal_lock`
+  - `rtg_lfg_accept_sent`
+- Queued RDF helpers now mark proposal lock + accept-sent timestamp when `lfg accept` succeeds.
+- Queued RDF accept no longer clears `lfg proposal` or resets AI immediately after sending accept.
+- Event-driven RDF dispatch now suppresses all new join work while proposal lock / accept-sent state is active.
+- Proposal lifecycle state now clears only when:
+  - helper is confirmed in dungeon/LFG run state, or
+  - the proposal never resolves after accept and is intentionally released as `proposal_not_resolved`
+- Queue-state cleanup and login-error cleanup now also clear proposal lifecycle state so dead helpers do not retain stale proposal locks.
+
+### Expected proof after fix
+Healthy RDF completion should now look like:
+- `[RTG][RDF][JOIN]`
+- `[RTG][RDF][ACCEPT]`
+- no repeated `JOIN` spam for that helper during the same proposal window
+- dungeon entry / active run state
+
+If a proposal genuinely fails, the expected breadcrumb becomes a single controlled release such as:
+- `[RTG][RDF][FAIL] ... reason=proposal_not_resolved ...`
+
+rather than endless accept/join oscillation.

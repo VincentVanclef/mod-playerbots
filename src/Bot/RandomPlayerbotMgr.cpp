@@ -362,6 +362,10 @@ namespace
         if (!bot || !bot->IsInWorld() || bot->IsBeingTeleported())
             return false;
 
+        uint32 botId = bot->GetGUID().GetCounter();
+        if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId))
+            return true;
+
         if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE)
             return true;
 
@@ -409,6 +413,27 @@ namespace
                 bot->isDead() ? 1 : 0,
                 bot->GetGroup() ? 1 : 0));
         return accepted;
+    }
+
+    static uint32 RTG_GetProposalLock(uint32 botId)
+    {
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_proposal_lock");
+    }
+
+    static uint32 RTG_GetProposalAcceptSentAt(uint32 botId)
+    {
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_accept_sent");
+    }
+
+    static void RTG_ClearProposalLifecycle(uint32 botId, Player* bot = nullptr)
+    {
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
+        if (bot)
+        {
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
+        }
     }
 
     static bool RTG_IsQueueSupervisorEvent(std::string const& event)
@@ -1017,6 +1042,8 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
+    SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
+    SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -1594,13 +1621,45 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                                 (group && group->isLFGGroup()) ||
                                 (state == lfg::LFG_STATE_DUNGEON);
             if (inDungeonRun)
-                continue;
-
-            if (uint32 proposalId = GET_PLAYERBOT_AI(bot)->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Get())
             {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ACCEPT] helper={} owner={} proposal={} state=dispatch", botId, desiredOwner, proposalId));
-                RTG_DispatchImmediateLfgAccept(bot, "proposal_active");
+                if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId))
+                    RTG_ClearProposalLifecycle(botId, bot);
                 continue;
+            }
+
+            PlayerbotAI* queuedBotAI = GET_PLAYERBOT_AI(bot);
+            uint32 proposalId = queuedBotAI ? queuedBotAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Get() : 0;
+            uint32 proposalLockId = RTG_GetProposalLock(botId);
+            uint32 acceptSentAt = RTG_GetProposalAcceptSentAt(botId);
+            uint32 nowTs = uint32(time(nullptr));
+
+            if (proposalId)
+            {
+                if (!proposalLockId)
+                    SetEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
+                if (!acceptSentAt)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ACCEPT] helper={} owner={} proposal={} state=dispatch", botId, desiredOwner, proposalId));
+                    RTG_DispatchImmediateLfgAccept(bot, "proposal_active");
+                }
+                continue;
+            }
+
+            if (proposalLockId || acceptSentAt)
+            {
+                bool proposalFailed = (state == lfg::LFG_STATE_NONE || state == lfg::LFG_STATE_QUEUED) &&
+                                      acceptSentAt && nowTs > acceptSentAt && (nowTs - acceptSentAt) >= 12;
+                bool staleLock = !acceptSentAt && proposalLockId;
+                if (proposalFailed || staleLock)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=proposal_not_resolved proposal={} acceptAge={} state={}",
+                        botId, desiredOwner, proposalLockId, acceptSentAt ? (nowTs - acceptSentAt) : 0, uint32(state)));
+                    RTG_ClearProposalLifecycle(botId, bot);
+                }
+                else
+                {
+                    continue;
+                }
             }
 
             if (state == lfg::LFG_STATE_NONE)
@@ -6602,6 +6661,8 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
+    SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
+    SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     currentBots.remove(bot);

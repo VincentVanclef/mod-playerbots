@@ -17,6 +17,7 @@
 #include "WorldPacket.h"
 
 #include <unordered_map>
+#include <ctime>
 
 using namespace lfg;
 
@@ -481,6 +482,15 @@ bool LfgAcceptAction::Execute(Event event)
 {
     uint32 id = AI_VALUE(uint32, "lfg proposal");
 
+    auto markQueuedProposalAccepted = [&](uint32 proposalId)
+    {
+        uint32 botId = bot->GetGUID().GetCounter();
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+        uint32 nowTs = uint32(time(nullptr));
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", nowTs, 90, addData);
+    };
+
     // Try accept if already stored
     if (id)
     {
@@ -495,15 +505,19 @@ bool LfgAcceptAction::Execute(Event event)
         {
             bot->CombatStop(true);
             LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=stored", bot->GetGUID().GetCounter(), id);
+            markQueuedProposalAccepted(id);
         }
 
-        botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
         bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
         WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
         *packet << id << true;
         bot->GetSession()->QueuePacket(packet);
 
+        if (RTG_IsQueuedLfgBot(bot))
+            return true;
+
+        botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
         if (sRandomPlayerbotMgr.IsRandomBot(bot) && !bot->GetGroup())
         {
             sRandomPlayerbotMgr.Refresh(bot);
@@ -542,15 +556,19 @@ bool LfgAcceptAction::Execute(Event event)
             {
                 bot->CombatStop(true);
                 LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=packet", bot->GetGUID().GetCounter(), id);
+                markQueuedProposalAccepted(id);
             }
 
-            botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
             bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
             WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
             *packet << id << true;
             bot->GetSession()->QueuePacket(packet);
 
+            if (RTG_IsQueuedLfgBot(bot))
+                return true;
+
+            botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
             if (sRandomPlayerbotMgr.IsRandomBot(bot) && !bot->GetGroup())
             {
                 sRandomPlayerbotMgr.Refresh(bot);
