@@ -492,13 +492,20 @@ bool LfgAcceptAction::Execute(Event event)
         return true;
     }
 
-    // If we get the proposal packet, accept immediately
+    // If we get the proposal packet, cache the proposal id immediately and accept.
+    // In 3.3.5a the proposal id is the leading uint32 in SMSG_LFG_PROPOSAL_UPDATE.
     if (!event.getPacket().empty())
     {
         WorldPacket p(event.getPacket());
-        uint32 dungeonId;
-        uint8 state;
-        p >> dungeonId >> state >> id;
+        if (p.rpos() + sizeof(uint32) > p.size())
+            return false;
+
+        p.rpos(0);
+        p >> id;
+        botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(id);
+
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} proposal={} bytes={}", bot->GetGUID().GetCounter(), id, p.size());
 
         if (id)
         {

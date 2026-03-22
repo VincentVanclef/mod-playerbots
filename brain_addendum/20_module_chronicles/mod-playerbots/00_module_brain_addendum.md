@@ -399,3 +399,42 @@ RDF role correctness is a two-step contract:
 2. runtime helper validation must confirm the logged-in bot actually matches that role before queue admission
 
 If those disagree, reacquire. Do not force the queue packet to pretend the helper is a different spec.
+
+---
+
+## 2026-03-22 — RDF proposal acceptance packet order correction
+
+### Symptom
+- RDF helpers joined quickly and role composition improved.
+- Proposal ready-checks popped, but queued helpers did not reliably accept.
+- Live symptom on player side: proposal kept expiring or being declined, then re-popping with the same helper set.
+- RTG runtime logs showed repeated `[RTG][RDF][JOIN]` success breadcrumbs, but no matching `[RTG][RDF][ACCEPT]` breadcrumbs for the affected helpers.
+
+### Confirmed cause
+The accept path in `LfgAcceptAction::Execute` was parsing `SMSG_LFG_PROPOSAL_UPDATE` in the wrong field order. The code read the packet as:
+- `dungeonId`
+- `state`
+- `proposalId`
+
+For 3.3.5a acceptance purposes, the proposal id is the leading `uint32`. That meant the packet-triggered accept path often failed to recover a valid proposal id, so the queued helper never sent `CMSG_LFG_PROPOSAL_RESULT` with `accept=true`.
+
+### Doctrine correction
+Planner/manager/join can be healthy and still fail the dungeon form if proposal acceptance misreads packet authority. In RDF, proposal id extraction is a hard owner boundary between:
+- queue materialization
+- final group lock-in
+- teleport into dungeon
+
+### Fix applied
+- Read the leading `uint32` from `SMSG_LFG_PROPOSAL_UPDATE` as the proposal id.
+- Persist it immediately into the `lfg proposal` AI value.
+- Keep packet-triggered immediate acceptance for queued RDF helpers.
+- Add RTG debug breadcrumb for proposal packet receipt so future regressions can be isolated faster.
+
+### Expected proof after fix
+A healthy RDF completion should now show:
+- `[RTG][RDF][JOIN]`
+- `[RTG][RDF][ACCEPT]`
+- proposal lock-in
+- dungeon teleport / run
+
+instead of repeated proposal expiry loops with no accept breadcrumbs.
