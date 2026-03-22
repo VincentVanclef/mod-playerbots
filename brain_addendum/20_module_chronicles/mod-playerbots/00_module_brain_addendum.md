@@ -346,3 +346,35 @@ This meant a character-load failure could masquerade as queue starvation or acco
 
 ### Doctrine correction
 A dispatch stall is not always a queue-join problem. If helper login materialization has silent exits, Phase 3 can look partially healthy while Phase 5 is still broken at the login boundary. Queue-managed login failure must be explicit and immediate.
+
+
+## 2026-03-21 — RDF completion follow-up: login materialization failures must clear ownership, and planner role intent must survive join
+
+### Runtime evidence
+Live RDF tests still showed two distinct failure families even after the earlier Phase 3 hookup work:
+- some helpers reached acquire but never reached login, then sat until `[RTG][DISPATCH][STALL]`
+- some logged-in helpers hit RDF join dispatch but failed before entering LFG state, especially healers
+
+### Root causes confirmed
+1. **Queue-managed helper login still had silent early exits inside `PlayerbotMgr.cpp`**
+   - missing account / query-holder initialize failure / null player session load could all return without telling RTG queue ownership that the helper never materialized
+   - result: helper reservations remained live until the later stall watchdog, inflating pressure and slowing replacement
+
+2. **RDF join still treated runtime spec detection as stronger than planner role intent**
+   - `GetRoles()` always returned `actualRole` even for assigned RTG helpers
+   - `JoinLFG()` could logout an assigned helper merely because spec inference differed from the planner reservation
+   - result: valid class-capable helpers could be discarded before ever sending `CMSG_LFG_JOIN`, violating the queue-architecture rule that RDF role intent must survive acquisition through dispatch
+
+### Manual corrections applied
+- `PlayerbotMgr.cpp`
+  - added queue-managed login failure routing to `RandomPlayerbotMgr::OnPlayerLoginError(...)` for:
+    - `missing_account`
+    - `holder_initialize_failed`
+    - `session_player_null`
+- `LfgActions.cpp`
+  - assigned RTG RDF helpers now use **planner desired role** as the join role when the class can legitimately perform that role
+  - class-incompatible reservations still fail closed and retire
+  - removed the old spec-mismatch auto-logout path for class-compatible assigned helpers
+
+### Doctrine correction
+For assigned RTG RDF helpers, **planner role intent is the queue authority**. Runtime spec detection is diagnostic and can influence AI behavior later, but it must not preempt queue admission when the class is role-compatible and the reservation was deliberately made for that role.
