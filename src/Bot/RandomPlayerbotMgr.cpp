@@ -73,6 +73,11 @@
 
 namespace
 {
+	// --- RDF Proposal Lifecycle Helpers ---
+	static uint32 RTG_GetProposalLock(uint32 botId);
+	static uint32 RTG_GetProposalAcceptSentAt(uint32 botId);
+	static void RTG_ClearProposalLifecycle(uint32 botId);
+	
     static bool RTG_QueueDebugEnabled()
     {
         return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgEventDebug;
