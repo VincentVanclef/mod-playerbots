@@ -378,3 +378,24 @@ Live RDF tests still showed two distinct failure families even after the earlier
 
 ### Doctrine correction
 For assigned RTG RDF helpers, **planner role intent is the queue authority**. Runtime spec detection is diagnostic and can influence AI behavior later, but it must not preempt queue admission when the class is role-compatible and the reservation was deliberately made for that role.
+
+
+## 2026-03-22 — RDF role-faithfulness correction
+
+### Runtime evidence
+Live RDF testing proved groups could now form quickly, but role correctness regressed: helpers were entering RDF under planner-requested roles that did not match their loaded runtime spec, producing cases like restoration druids tanking and retribution paladins healing.
+
+### Wrong assumption corrected
+Planner authority is not permission to override runtime specialization truth. Planner role intent must survive acquisition and dispatch, but only through helpers whose runtime spec actually satisfies that intent.
+
+### Repair
+- removed the effective planner-overrides-runtime behavior from `LfgJoinAction::GetRoles()`
+- added runtime role mismatch fail-closed handling before RDF join dispatch
+- added manager-side runtime role mismatch retirement so wrong-spec helpers are logged out and reacquired instead of entering RDF under false role masks
+
+### Doctrine update
+RDF role correctness is a two-step contract:
+1. planner chooses the missing role
+2. runtime helper validation must confirm the logged-in bot actually matches that role before queue admission
+
+If those disagree, reacquire. Do not force the queue packet to pretend the helper is a different spec.

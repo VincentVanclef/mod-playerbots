@@ -179,14 +179,15 @@ uint32 LfgJoinAction::GetRoles()
 
             if (desiredRole != actualRole)
             {
-                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=planner_authority usingDesiredRole", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=runtime_mismatch_usingActualRole", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                return actualRole;
             }
             else if (RTG_LfgDebugEnabled())
             {
                 LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=aligned", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
             }
 
-            return desiredRole;
+            return actualRole;
         }
     }
 
@@ -275,6 +276,17 @@ bool LfgJoinAction::JoinLFG()
                     sRandomPlayerbotMgr.RTG_ClearQueueHelperState(botId);
                     rtgNextJoinAttempt.erase(botId);
                     sRandomPlayerbotMgr.RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_role_class_incompatible_join");
+                    return false;
+                }
+
+                uint32 actualRole = RTG_ActualRoleForBot(bot);
+                if (actualRole != desiredRole)
+                {
+                    LOG_INFO("playerbots", "[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} class={} specTab={}",
+                        botId, 0u, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                    sRandomPlayerbotMgr.RTG_ClearQueueHelperState(botId);
+                    rtgNextJoinAttempt.erase(botId);
+                    sRandomPlayerbotMgr.RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_runtime_role_mismatch");
                     return false;
                 }
 

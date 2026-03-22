@@ -1470,6 +1470,21 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (state == lfg::LFG_STATE_NONE)
             {
+                if (desiredRole)
+                {
+                    uint32 actualRole = RTG_ActualRoleForBot(bot);
+                    if (actualRole != desiredRole)
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} class={} specTab={}",
+                            botId, desiredOwner, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                        SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
+                        RTG_ClearQueueHelperState(botId);
+                        RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_runtime_role_mismatch");
+                        continue;
+                    }
+                }
+
                 bool retryOpen = !GetEventValue(botId, "rtg_lfg_join_retry");
                 SetEventValue(botId, "rtg_lfg_pending", 1, 20, addData);
                 if (retryOpen)
