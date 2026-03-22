@@ -58,6 +58,53 @@ uint8 DefaultSpecTabForClass(uint8 cls)
     }
 }
 
+
+bool PreferredSpecTabForClassRole(uint8 cls, uint32 role, uint8& specTab)
+{
+    switch (cls)
+    {
+        case CLASS_WARRIOR:
+            specTab = (role == lfg::PLAYER_ROLE_TANK) ? 2 : 0;
+            return role == lfg::PLAYER_ROLE_TANK || role == lfg::PLAYER_ROLE_DAMAGE;
+        case CLASS_PALADIN:
+            if (role == lfg::PLAYER_ROLE_HEALER) { specTab = 0; return true; }
+            if (role == lfg::PLAYER_ROLE_TANK)   { specTab = 1; return true; }
+            if (role == lfg::PLAYER_ROLE_DAMAGE) { specTab = 2; return true; }
+            return false;
+        case CLASS_HUNTER:
+            specTab = 1;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+        case CLASS_ROGUE:
+            specTab = 1;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+        case CLASS_PRIEST:
+            if (role == lfg::PLAYER_ROLE_HEALER) { specTab = 1; return true; }
+            if (role == lfg::PLAYER_ROLE_DAMAGE) { specTab = 2; return true; }
+            return false;
+        case CLASS_DEATH_KNIGHT:
+            specTab = (role == lfg::PLAYER_ROLE_TANK) ? 0 : 2;
+            return role == lfg::PLAYER_ROLE_TANK || role == lfg::PLAYER_ROLE_DAMAGE;
+        case CLASS_SHAMAN:
+            if (role == lfg::PLAYER_ROLE_HEALER) { specTab = 2; return true; }
+            if (role == lfg::PLAYER_ROLE_DAMAGE) { specTab = 0; return true; }
+            return false;
+        case CLASS_MAGE:
+            specTab = 2;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+        case CLASS_WARLOCK:
+            specTab = 2;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+        case CLASS_DRUID:
+            if (role == lfg::PLAYER_ROLE_HEALER) { specTab = 2; return true; }
+            if (role == lfg::PLAYER_ROLE_TANK)   { specTab = 1; return true; }
+            if (role == lfg::PLAYER_ROLE_DAMAGE) { specTab = 0; return true; }
+            return false;
+        default:
+            specTab = DefaultSpecTabForClass(cls);
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+    }
+}
+
 uint32 RoleForClassSpecTab(uint8 cls, uint8 specTab)
 {
     switch (cls)
@@ -99,9 +146,11 @@ uint32 RoleForClassSpecTab(uint8 cls, uint8 specTab)
     }
 }
 
-bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
+static bool ComputeOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab, bool* hasSpecData = nullptr)
 {
     specTab = DefaultSpecTabForClass(cls);
+    if (hasSpecData)
+        *hasSpecData = false;
 
     QueryResult specResult = CharacterDatabase.Query("SELECT activeTalentGroup FROM characters WHERE guid = {}", guid);
     uint8 activeSpec = 0;
@@ -113,7 +162,7 @@ bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
     if (!talentTabIds)
         return true;
 
-    std::map<uint8, uint32> tabs = { {0, 0}, {1, 0}, {2, 0} };
+    std::map<uint8, uint32> tabs = {{0, 0}, {1, 0}, {2, 0}};
 
     QueryResult talentResult = CharacterDatabase.Query("SELECT spell, specMask FROM character_talent WHERE guid = {}", guid);
     if (!talentResult)
@@ -147,12 +196,15 @@ bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
             tabs[2] += rank;
     } while (talentResult->NextRow());
 
-    if ((tabs[0] + tabs[1] + tabs[2]) == 0)
+    uint32 totalPoints = tabs[0] + tabs[1] + tabs[2];
+    if (!totalPoints)
         return true;
+
+    if (hasSpecData)
+        *hasSpecData = true;
 
     specTab = 0;
     uint32 maxPoints = tabs[0];
-
     for (uint8 i = 1; i < 3; ++i)
     {
         if (tabs[i] > maxPoints)
@@ -163,6 +215,21 @@ bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
     }
 
     return true;
+}
+
+bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
+{
+    return ComputeOfflineSpecTab(guid, cls, specTab, nullptr);
+}
+
+bool HasOfflineSpecData(ObjectGuid::LowType guid, uint8 cls, uint8* specTab)
+{
+    uint8 resolvedSpec = DefaultSpecTabForClass(cls);
+    bool hasSpecData = false;
+    ComputeOfflineSpecTab(guid, cls, resolvedSpec, &hasSpecData);
+    if (specTab)
+        *specTab = resolvedSpec;
+    return hasSpecData;
 }
 
 uint32 GetOfflineSpecRole(ObjectGuid::LowType guid, uint8 cls)

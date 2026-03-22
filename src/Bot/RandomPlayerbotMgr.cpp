@@ -431,6 +431,66 @@ namespace
         return RTG::ActualRoleForBot(bot);
     }
 
+    static bool RTG_HasMeaningfulTalents(Player* bot)
+    {
+        if (!bot || bot->GetLevel() < 10)
+            return false;
+
+        auto const tabs = AiFactory::GetPlayerSpecTabs(bot);
+        uint32 totalPoints = 0;
+        auto it0 = tabs.find(0); if (it0 != tabs.end()) totalPoints += it0->second;
+        auto it1 = tabs.find(1); if (it1 != tabs.end()) totalPoints += it1->second;
+        auto it2 = tabs.find(2); if (it2 != tabs.end()) totalPoints += it2->second;
+        return totalPoints > 0;
+    }
+
+    static bool RTG_PrepareLfgHelperForDesiredRole(Player* bot, uint32 desiredLevel, uint32 desiredRole, char const* reason)
+    {
+        if (!bot || !desiredRole || !RTG::ClassCanRole(bot->getClass(), desiredRole))
+            return false;
+
+        bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
+        bool missingTalents = !RTG_HasMeaningfulTalents(bot);
+        uint32 currentRole = RTG_ActualRoleForBot(bot);
+        bool roleMismatch = currentRole != desiredRole;
+
+        if (!levelMismatch && !missingTalents && !roleMismatch)
+            return false;
+
+        uint8 desiredSpecTab = 0;
+        if (!RTG::PreferredSpecTabForClassRole(bot->getClass(), desiredRole, desiredSpecTab))
+            return false;
+
+        if (desiredLevel && bot->GetLevel() != desiredLevel)
+        {
+            bot->GiveLevel(desiredLevel);
+            bot->InitStatsForLevel(true);
+            bot->SetUInt32Value(PLAYER_XP, 0);
+        }
+
+        PlayerbotFactory factory(bot, desiredLevel ? desiredLevel : bot->GetLevel());
+        PlayerbotFactory::InitTalentsBySpecNo(bot, desiredSpecTab, true);
+        factory.InitClassSpells();
+        factory.InitAvailableSpells();
+        factory.InitSpecialSpells();
+        factory.InitEquipment(true, true);
+
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            botAI->ResetStrategies(false);
+
+        uint32 preparedRole = RTG_ActualRoleForBot(bot);
+        RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), preparedRole);
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} level={} preparedRole={} hadTalents={} roleMismatch={} levelMismatch={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(desiredSpecTab), bot->GetLevel(), preparedRole,
+                missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0);
+        }
+
+        return true;
+    }
+
     static bool RTG_IsRealPlayer(Player* player)
     {
         return player && !GET_PLAYERBOT_AI(player);
@@ -1506,6 +1566,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 if (desiredRole)
                 {
+                    RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "dispatch_prepare");
+
                     uint32 actualRole = RTG_ActualRoleForBot(bot);
                     if (actualRole != desiredRole)
                     {
@@ -2964,13 +3026,24 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             return count;
         };
 
-        auto getPreferredOfflineLfgRole = [&](CharacterInfo const& charInfo) -> uint32
+        auto getPreferredOfflineLfgRole = [&](CharacterInfo const& charInfo, bool& roleKnown) -> uint32
         {
             uint32 cachedRole = RTG_GetCachedRuntimeLfgRole(charInfo.guid);
             if (cachedRole)
+            {
+                roleKnown = true;
                 return cachedRole;
+            }
 
-            return RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass);
+            uint8 specTab = 0;
+            if (RTG::HasOfflineSpecData(charInfo.guid, charInfo.rClass, &specTab))
+            {
+                roleKnown = true;
+                return RTG_RoleForClassSpecTab(charInfo.rClass, specTab);
+            }
+
+            roleKnown = false;
+            return 0u;
         };
 
         auto countAvailableLfgCandidates = [&](uint32 team, uint32 desiredRole) -> uint32
@@ -2982,10 +3055,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
                 if (RTG_IsBotBlockedForDesiredLfgRole(charInfo.guid, desiredRole))
                     continue;
-                if (getPreferredOfflineLfgRole(charInfo) != desiredRole)
-                    continue;
                 if (isQueueHelperBlocked(charInfo))
                     continue;
+
+                bool roleKnown = false;
+                uint32 preferredRole = getPreferredOfflineLfgRole(charInfo, roleKnown);
+                if (roleKnown)
+                {
+                    if (preferredRole != desiredRole)
+                        continue;
+                }
+                else if (!RTG::ClassCanRole(charInfo.rClass, desiredRole))
+                    continue;
+
                 ++count;
             }
             return count;
@@ -3541,32 +3623,52 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 uint32 adaptiveLevel = RTG_ChooseAdaptiveQueueBotLevel({bucket.minLevel, bucket.maxLevel, bucket.avgLevel}, bucket.fallbackLevel ? bucket.fallbackLevel : sPlayerbotAIConfig.rtgQueueBotLevel);
                 std::string addData = RTG::MakeLfgAddData(bucket.team, adaptiveLevel, desiredRole, bucket.owner);
-                for (auto const& charInfo : allCharacters)
+
+                for (uint8 pass = 0; pass < 2; ++pass)
                 {
-                    if (!capacity)
-                        return false;
+                    for (auto const& charInfo : allCharacters)
+                    {
+                        if (!capacity)
+                            return false;
 
-                    uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
-                    if (charTeam != bucket.team)
-                        continue;
-                    if (RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass) != desiredRole)
-                        continue;
-                    if (!tryLoginBot(charInfo, addData))
-                        continue;
+                        uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
+                        if (charTeam != bucket.team)
+                            continue;
+                        if (RTG_IsBotBlockedForDesiredLfgRole(charInfo.guid, desiredRole))
+                            continue;
 
-                    LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {})", charInfo.guid, bucket.owner, desiredRole, charInfo.rClass);
+                        bool roleKnown = false;
+                        uint32 preferredRole = getPreferredOfflineLfgRole(charInfo, roleKnown);
+                        if (pass == 0)
+                        {
+                            if (!roleKnown || preferredRole != desiredRole)
+                                continue;
+                        }
+                        else
+                        {
+                            if (roleKnown || !RTG::ClassCanRole(charInfo.rClass, desiredRole))
+                                continue;
+                        }
 
-                    ++rtgLfgLogged;
-                    --capacity;
-                    --remainingCapacity;
-                    if (desiredRole == lfg::PLAYER_ROLE_TANK)
-                        ++bucket.assignedTank;
-                    else if (desiredRole == lfg::PLAYER_ROLE_HEALER)
-                        ++bucket.assignedHeal;
-                    else
-                        ++bucket.assignedDps;
-                    return true;
+                        if (!tryLoginBot(charInfo, addData))
+                            continue;
+
+                        LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {}) source={}",
+                            charInfo.guid, bucket.owner, desiredRole, charInfo.rClass, pass == 0 ? "known_role" : "bootstrap_fallback");
+
+                        ++rtgLfgLogged;
+                        --capacity;
+                        --remainingCapacity;
+                        if (desiredRole == lfg::PLAYER_ROLE_TANK)
+                            ++bucket.assignedTank;
+                        else if (desiredRole == lfg::PLAYER_ROLE_HEALER)
+                            ++bucket.assignedHeal;
+                        else
+                            ++bucket.assignedDps;
+                        return true;
+                    }
                 }
+
                 return false;
             };
 
@@ -6284,6 +6386,10 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
         if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel))
         {
+            uint32 desiredRole = 0;
+            uint32 desiredOwner = 0;
+            RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner);
+
             if (desiredLevel && bot->GetLevel() != desiredLevel)
             {
                 bot->GiveLevel(desiredLevel);
@@ -6295,12 +6401,15 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 factory.Refresh();
             }
 
+            if (desiredRole)
+                RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "login_prepare");
+
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
             RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), RTG_ActualRoleForBot(bot));
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={}",
-                bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel()));
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={} role={} owner={}",
+                bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel(), desiredRole, desiredOwner));
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
