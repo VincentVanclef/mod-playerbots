@@ -114,7 +114,7 @@ namespace
 
     static uint32 RTG_GetCachedRuntimeLfgRole(ObjectGuid::LowType botId)
     {
-        return sRandomPlayerbotMgr.GetEventValue(botId, "rtg_runtime_lfg_role");
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_runtime_lfg_role");
     }
 
     static void RTG_SetCachedRuntimeLfgRole(ObjectGuid::LowType botId, uint32 actualRole, uint32 ttlSeconds = 86400u)
@@ -122,7 +122,7 @@ namespace
         if (!botId || !actualRole)
             return;
 
-        sRandomPlayerbotMgr.SetEventValue(botId, "rtg_runtime_lfg_role", actualRole, ttlSeconds);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_runtime_lfg_role", actualRole, ttlSeconds);
     }
 
     static void RTG_BlockBotForDesiredLfgRole(ObjectGuid::LowType botId, uint32 desiredRole, uint32 ttlSeconds = 900u)
@@ -130,7 +130,7 @@ namespace
         if (!botId || !desiredRole)
             return;
 
-        sRandomPlayerbotMgr.SetEventValue(botId, RTG_RoleMismatchCooldownKey(desiredRole), 1u, ttlSeconds);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, RTG_RoleMismatchCooldownKey(desiredRole), 1u, ttlSeconds);
     }
 
     static bool RTG_IsBotBlockedForDesiredLfgRole(ObjectGuid::LowType botId, uint32 desiredRole)
@@ -138,7 +138,7 @@ namespace
         if (!botId || !desiredRole)
             return false;
 
-        return sRandomPlayerbotMgr.GetEventValue(botId, RTG_RoleMismatchCooldownKey(desiredRole)) != 0;
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_RoleMismatchCooldownKey(desiredRole)) != 0;
     }
 
     static uint32 RTG_GetDispatchStallThresholdSeconds()
