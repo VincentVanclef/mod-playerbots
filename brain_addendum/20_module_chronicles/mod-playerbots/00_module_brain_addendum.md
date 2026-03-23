@@ -270,26 +270,15 @@ That left helper materialization dependent on a later `GetBots()` rebuild pass a
 ### Engineering lesson
 For RTG event-driven helper lanes, successful acquisition is not complete until the helper is visible to the dispatch scan. Future passes should treat `add` metadata and `currentBots` enrollment as one materialization surface, not two loosely coupled stages.
 
-## 2026-03-22 — RDF owner-fair dispatch pass: prevent fresh owners from stalling behind older unresolved lanes
 
-### Runtime evidence
-Recent RDF logs showed a clear mixed-owner starvation pattern:
-- owner A would acquire a fresh 4- or 5-helper RDF batch
-- dispatcher/login work would still keep draining an older owner B lane first
-- owner A helpers would remain acquired but never receive `[RTG][DISPATCH][ADD]` before aging into `[RTG][DISPATCH][STALL]`
-
-This created the false appearance of a single missing helper, but the deeper failure was owner-level starvation in the login/dispatch ordering.
-
-### Root cause summary
-`availableBots` was still inheriting `currentBots` list order directly. In event-driven RDF mode, that let older unresolved owner lanes sit at the front of the login/dispatch queue, while newly acquired helpers for a fresh owner remained later in the list.
-
-The result was not just one helper stalling — it was a materialization fairness problem where a new owner with zero online helpers could be starved behind an older owner that already had online/pending helpers.
-
-### Recovery action recorded in this chronicle
-- event-driven `availableBots` ordering now prefers RDF owners with lower materialized pressure first
-- ordering considers current online helper count and pending helper count per RDF owner
-- a new debug breadcrumb `[RTG][RDF][DISPATCH_OWNER]` now exposes owner-level online/pending pressure at dispatch time
-- `OnPlayerLoginError` definition was re-aligned with the header declaration using `char const* reason`
-
-### Engineering lesson
-For RTG RDF, fairness must be evaluated at the owner lane level, not just per-helper FIFO order. New owner lanes should get admission into dispatch/login before older unresolved lanes can consume the entire same-cycle budget.
+## Chapter 18 - RDF Online-But-Not-Queued Materialization Gap
+- **Date:** 2026-03-23
+- **Subsystem:** mod-playerbots / RTG RDF queue system / login->join materialization
+- **Context:** Live RDF tests showed full helper login with one helper never actually selecting its RDF role / join path, followed by the planner trying to acquire an extra replacement before the online helper had been retired.
+- **Situation:** Four helpers could log in, but only three would reliably emit RDF join. The remaining online helper held a slot while the planner kept asking for an extra DPS, inflating account-pressure symptoms and making the system look capped when the real problem was a stuck online helper.
+- **Hypothesis:** RDF helper login was weaker than BG because it did not immediately dispatch join on login, and stale online helpers with `rtg_lfg_pending` could be granted indefinite patience even while never entering LFG state.
+- **Experiments:** Added immediate `lfg join` dispatch on RTG helper login, recorded `rtg_lfg_login_at`, and changed stale-helper logic to retire online helpers that remain in `LFG_STATE_NONE` beyond a short window instead of perpetually refreshing pending state.
+- **Findings:** The correct doctrine is: queue-managed RDF helpers must either join promptly after login or be retired quickly before replacement. Keeping an online non-queued helper alive while also acquiring replacements causes false max-account noise and starves real role completion.
+- **Regression:** None intended; risk is only slightly more aggressive churn on helpers that fail to join promptly.
+- **Next Investigation:** If a helper still misses join after immediate login dispatch, inspect the precise AI action/role-selection path for that class/spec at login time.
+- **Status:** Implemented in source pass.
