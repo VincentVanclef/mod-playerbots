@@ -269,3 +269,27 @@ That left helper materialization dependent on a later `GetBots()` rebuild pass a
 
 ### Engineering lesson
 For RTG event-driven helper lanes, successful acquisition is not complete until the helper is visible to the dispatch scan. Future passes should treat `add` metadata and `currentBots` enrollment as one materialization surface, not two loosely coupled stages.
+
+## 2026-03-22 — RDF owner-fair dispatch pass: prevent fresh owners from stalling behind older unresolved lanes
+
+### Runtime evidence
+Recent RDF logs showed a clear mixed-owner starvation pattern:
+- owner A would acquire a fresh 4- or 5-helper RDF batch
+- dispatcher/login work would still keep draining an older owner B lane first
+- owner A helpers would remain acquired but never receive `[RTG][DISPATCH][ADD]` before aging into `[RTG][DISPATCH][STALL]`
+
+This created the false appearance of a single missing helper, but the deeper failure was owner-level starvation in the login/dispatch ordering.
+
+### Root cause summary
+`availableBots` was still inheriting `currentBots` list order directly. In event-driven RDF mode, that let older unresolved owner lanes sit at the front of the login/dispatch queue, while newly acquired helpers for a fresh owner remained later in the list.
+
+The result was not just one helper stalling — it was a materialization fairness problem where a new owner with zero online helpers could be starved behind an older owner that already had online/pending helpers.
+
+### Recovery action recorded in this chronicle
+- event-driven `availableBots` ordering now prefers RDF owners with lower materialized pressure first
+- ordering considers current online helper count and pending helper count per RDF owner
+- a new debug breadcrumb `[RTG][RDF][DISPATCH_OWNER]` now exposes owner-level online/pending pressure at dispatch time
+- `OnPlayerLoginError` definition was re-aligned with the header declaration using `char const* reason`
+
+### Engineering lesson
+For RTG RDF, fairness must be evaluated at the owner lane level, not just per-helper FIFO order. New owner lanes should get admission into dispatch/login before older unresolved lanes can consume the entire same-cycle budget.
