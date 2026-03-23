@@ -420,6 +420,28 @@ namespace
         return accepted;
     }
 
+    static bool RTG_DispatchImmediateLfgTeleport(Player* bot, char const* reason)
+    {
+        if (!bot || !bot->IsInWorld() || bot->IsBeingTeleported())
+            return false;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI)
+            return false;
+
+        bool teleported = botAI->DoSpecificAction("lfg teleport", Event(), true);
+        if (teleported)
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane=rdf_teleport reason={}", bot->GetGUID().GetCounter(), reason ? reason : "rtg"));
+        else
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane=rdf_teleport reason={} inWorld={} teleport={} state={} grouped={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg",
+                bot->IsInWorld() ? 1 : 0,
+                bot->IsBeingTeleported() ? 1 : 0,
+                uint32(sLFGMgr->GetState(bot->GetGUID())),
+                bot->GetGroup() ? 1 : 0));
+        return teleported;
+    }
+
     static uint32 RTG_GetProposalLock(uint32 botId)
     {
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_proposal_lock");
@@ -430,10 +452,16 @@ namespace
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_accept_sent");
     }
 
+    static uint32 RTG_GetTeleportSentAt(uint32 botId)
+    {
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_teleport_sent");
+    }
+
     static void RTG_ClearProposalLifecycle(uint32 botId, Player* bot = nullptr)
     {
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
         if (bot)
         {
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
@@ -1049,6 +1077,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
+    SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -1622,13 +1651,25 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             Map* map = bot->GetMap();
             Group* group = bot->GetGroup();
             lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
-            bool inDungeonRun = (map && (map->IsDungeon() || map->IsRaid())) ||
-                                (group && group->isLFGGroup()) ||
-                                (state == lfg::LFG_STATE_DUNGEON);
-            if (inDungeonRun)
+            bool groupReadyForTeleport = (group && group->isLFGGroup()) || (state == lfg::LFG_STATE_DUNGEON);
+            bool inDungeonMap = map && (map->IsDungeon() || map->IsRaid());
+            bool inDungeonRun = inDungeonMap || groupReadyForTeleport;
+            if (inDungeonMap)
             {
-                if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId))
+                if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId) || RTG_GetTeleportSentAt(botId))
                     RTG_ClearProposalLifecycle(botId, bot);
+                continue;
+            }
+
+            if (groupReadyForTeleport)
+            {
+                uint32 teleportSentAt = RTG_GetTeleportSentAt(botId);
+                if (!teleportSentAt)
+                {
+                    SetEventValue(botId, "rtg_lfg_teleport_sent", nowTs, 60, addData);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} state=dispatch", botId, desiredOwner));
+                    RTG_DispatchImmediateLfgTeleport(bot, "group_ready");
+                }
                 continue;
             }
 
@@ -6668,6 +6709,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
+    SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     currentBots.remove(bot);

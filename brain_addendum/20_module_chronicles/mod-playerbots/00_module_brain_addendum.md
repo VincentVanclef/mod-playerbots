@@ -556,3 +556,21 @@ If a proposal genuinely fails, the expected breadcrumb becomes a single controll
 - `[RTG][RDF][FAIL] ... reason=proposal_not_resolved ...`
 
 rather than endless accept/join oscillation.
+
+
+## 2026-03-22 — RDF teleport phase audit (accept vs enter dungeon)
+
+### Symptom
+Bots were now reaching `JOIN` and `ACCEPT`, but still idled at the final **Enter Dungeon** stage. Live logs showed repeated `rdf_accept` success for the same proposal without any dungeon transfer.
+
+### Root cause
+The queue lane had advanced past proposal acceptance, but it still had no explicit **teleport phase**. In WotLK RDF flow, accepting the proposal is not the final client action; the client must still send `CMSG_LFG_TELEPORT` to actually enter the dungeon. RTG RDF helpers were latching proposal state, but once the group became an LFG group / dungeon state, there was no event-driven dispatch step to press the final teleport button.
+
+### Doctrine correction
+RDF lifecycle is not just `join -> accept`. It is `join -> accept -> teleport -> dungeon ownership`. BG already had a stronger pop/entry boundary; RDF needed the same explicit finalization phase.
+
+### Fix direction
+- Added `rdf_teleport` dispatch helper using the existing `lfg teleport` action.
+- Added `rtg_lfg_teleport_sent` lifecycle state.
+- When helper is in LFG group / dungeon state but not yet on a dungeon map, manager now dispatches the teleport action instead of rejoining or idling.
+- Proposal lifecycle state is released only once helper is actually on a dungeon map.
