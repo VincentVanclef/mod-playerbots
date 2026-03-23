@@ -6302,7 +6302,7 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
     }
 }
 
-void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
+void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
 {
     std::string addData = GetEventData(bot, "add");
     SetEventValue(bot, "add", 0, 0);
