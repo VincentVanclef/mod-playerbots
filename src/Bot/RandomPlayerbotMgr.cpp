@@ -1653,24 +1653,25 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
             bool groupReadyForTeleport = (group && group->isLFGGroup()) || (state == lfg::LFG_STATE_DUNGEON);
             bool inDungeonMap = map && (map->IsDungeon() || map->IsRaid());
-            bool inDungeonRun = inDungeonMap || groupReadyForTeleport;
+            bool proposalLatched = RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId);
             if (inDungeonMap)
             {
-                if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId) || RTG_GetTeleportSentAt(botId))
+                if (proposalLatched || RTG_GetTeleportSentAt(botId))
                     RTG_ClearProposalLifecycle(botId, bot);
                 continue;
             }
 
-            if (groupReadyForTeleport)
+            if (proposalLatched || groupReadyForTeleport)
             {
                 uint32 teleportSentAt = RTG_GetTeleportSentAt(botId);
-                if (!teleportSentAt)
+                uint32 nowTs = uint32(GameTime::GetGameTime().count());
+                bool teleportWindowOpen = groupReadyForTeleport || (RTG_GetProposalAcceptSentAt(botId) && (!teleportSentAt || (nowTs > teleportSentAt && (nowTs - teleportSentAt) >= 2)));
+                if (teleportWindowOpen && (!teleportSentAt || (nowTs > teleportSentAt && (nowTs - teleportSentAt) >= 2)))
                 {
-                    uint32 nowTs = uint32(GameTime::GetGameTime().count());
-
-					SetEventValue(botId, "rtg_lfg_teleport_sent", nowTs, 60, addData);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} state=dispatch", botId, desiredOwner));
-                    RTG_DispatchImmediateLfgTeleport(bot, "group_ready");
+                    SetEventValue(botId, "rtg_lfg_teleport_sent", nowTs, 60, addData);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} state={} grouped={} lfgGroup={}",
+                        botId, desiredOwner, uint32(state), group ? 1 : 0, (group && group->isLFGGroup()) ? 1 : 0));
+                    RTG_DispatchImmediateLfgTeleport(bot, groupReadyForTeleport ? "group_ready" : "proposal_latched");
                 }
                 continue;
             }

@@ -574,3 +574,39 @@ RDF lifecycle is not just `join -> accept`. It is `join -> accept -> teleport ->
 - Added `rtg_lfg_teleport_sent` lifecycle state.
 - When helper is in LFG group / dungeon state but not yet on a dungeon map, manager now dispatches the teleport action instead of rejoining or idling.
 - Proposal lifecycle state is released only once helper is actually on a dungeon map.
+
+
+--------------------------------
+
+## RDF Proposal-Latched Teleport Finalization Pass
+
+### Symptom Confirmed
+
+- Queue helpers were reaching `JOIN` and `ACCEPT` reliably, but never actually entering the dungeon.
+- Live logs showed repeated `RDF][ACCEPT` with no matching stable teleport phase completion.
+- The prior teleport gate was still too strict because it waited for `group->isLFGGroup()` / `LFG_STATE_DUNGEON` evidence before sending the teleport packet, which can be later than the ready-dialog window the client exposes.
+
+### Root Cause Correction
+
+RDF finalization is not just `join -> accept -> wait`.
+It is `join -> accept -> proposal-latched teleport enter request -> dungeon map transition`.
+
+The queue system was already latching proposal ownership correctly, but it was not using that latched state strongly enough to drive the final `Enter Dungeon` packet.
+
+### Fix Applied
+
+- Manager-side RDF dispatch now treats proposal-latched state itself as sufficient to begin the final teleport phase.
+- Teleport attempts are allowed once proposal acceptance is latched, even before `group->isLFGGroup()` becomes visibly true.
+- Teleport retries are throttled on a short cadence instead of waiting on a narrower readiness proof that could arrive too late.
+- `LfgTeleportAction` was hardened to send an explicit `uint8(0)` enter-dungeon payload for queued RDF helpers and to breadcrumb that phase directly.
+
+### Expected Behavioral Change
+
+A healthy RDF sequence should now look more like:
+
+- `JOIN`
+- `ACCEPT`
+- `TELEPORT`
+- dungeon map entry
+
+without sitting indefinitely in a post-accept, pre-enter limbo.

@@ -603,18 +603,24 @@ bool LfgTeleportAction::Execute(Event event)
     bool out = false;
 
     WorldPacket p(event.getPacket());
-    if (!p.empty())
+    if (!p.empty() && p.size() >= sizeof(bool))
     {
         p.rpos(0);
         p >> out;
     }
 
+    if (RTG_IsQueuedLfgBot(bot))
+        out = false;
+
     bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
-    WorldPacket* packet = new WorldPacket(CMSG_LFG_TELEPORT);
-    *packet << out;
+    WorldPacket* packet = new WorldPacket(CMSG_LFG_TELEPORT, 1);
+    *packet << uint8(out ? 1 : 0);
     bot->GetSession()->QueuePacket(packet);
-    // sLFGMgr->TeleportPlayer(bot, out);
+
+    if (RTG_IsQueuedLfgBot(bot))
+        LOG_INFO("playerbots", "[RTG][RDF][TELEPORT] helper={} out={} grouped={} state={}",
+                 bot->GetGUID().GetCounter(), out ? 1 : 0, bot->GetGroup() ? 1 : 0, uint32(sLFGMgr->GetState(bot->GetGUID())));
 
     return true;
 }
