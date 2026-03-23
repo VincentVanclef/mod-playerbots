@@ -1666,7 +1666,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 uint32 teleportSentAt = RTG_GetTeleportSentAt(botId);
                 if (!teleportSentAt)
                 {
-                    uint32 nowTs = uint32(GameTime::GetGameTime());
+                    uint32 nowTs = uint32(GameTime::GetGameTime().count());
 
 					SetEventValue(botId, "rtg_lfg_teleport_sent", nowTs, 60, addData);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} state=dispatch", botId, desiredOwner));
