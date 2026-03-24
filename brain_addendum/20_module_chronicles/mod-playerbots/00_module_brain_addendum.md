@@ -331,3 +331,16 @@ For RTG RDF, fairness must be evaluated at the owner lane level, not just per-he
 **Regression:** None intended; this only suppresses extra acquisition when the owner lane is already fully occupied by queued+assigned helpers.
 **Next Investigation:** If a lane is still stuck after this, the next seam is identifying and retiring the exact already-owned helper whose actual queued role does not match the assigned role.
 **Status:** Implemented
+
+
+## Chapter 36 — RDF finalization: deterministic enter-dungeon pump
+- **Date:** 2026-03-23
+- **Subsystem:** mod-playerbots / RTG RDF queue finalization
+- **Context:** Live tests showed four helpers acquiring, dispatching, logging in, and reaching the ready dialog, but no helper actually entered the dungeon.
+- **Situation:** The RDF lane was no longer failing at selection or initial queue join. The remaining blocker was the final enter-dungeon step after proposal acceptance.
+- **Hypothesis:** The queue system had proposal acceptance markers (`rtg_lfg_proposal_lock`, `rtg_lfg_accept_sent`) but no deterministic manager-side phase that converted accepted proposals into `lfg teleport` actions.
+- **Experiments:** Audited the online-queued helper maintenance loop and confirmed that accepted proposal state was not consumed anywhere in `RandomPlayerbotMgr.cpp`. Added a deterministic proposal-latched teleport phase that attempts `lfg teleport` while a queued RDF helper has proposal/accept state and is not yet inside a dungeon map.
+- **Findings:** The RDF lane previously depended on opportunistic AI trigger timing for the final enter-dungeon step. That was weaker than the BG lane lifecycle and allowed ready dialogs to expire even after correct queue assembly. The new pump keeps accepted helpers in a proposal-resolution phase and drives explicit teleport attempts until map transition.
+- **Regression:** None intended; teleport attempts are gated by proposal/accept state and suppressed once the bot is already inside a dungeon.
+- **Next Investigation:** If a helper still fails to enter after deterministic teleport attempts, inspect whether the specific group/leader state expected by the core LFG teleport path differs from current RTG helper group composition.
+- **Status:** Integrated.

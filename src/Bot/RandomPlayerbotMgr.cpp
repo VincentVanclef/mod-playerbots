@@ -1787,6 +1787,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			{
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				SetEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
+				SetEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
+				SetEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
 				continue;
 			}
 
@@ -1823,6 +1826,44 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			}
 
 			lfg::LfgState botState = sLFGMgr->GetState(bot->GetGUID());
+			uint32 proposalLock = GetEventValue(botId, "rtg_lfg_proposal_lock");
+			uint32 acceptSent = GetEventValue(botId, "rtg_lfg_accept_sent");
+			uint32 teleportSent = GetEventValue(botId, "rtg_lfg_teleport_sent");
+
+			if ((proposalLock || acceptSent) && !(map && (map->IsDungeon() || map->IsRaid())))
+			{
+				if (!bot->IsBeingTeleported() && !bot->HasUnitState(UNIT_STATE_IN_FLIGHT) && !bot->IsInCombat())
+				{
+					bool shouldTeleport = false;
+					if (Group* lfgGroup = bot->GetGroup())
+						shouldTeleport = lfgGroup->isLFGGroup();
+					else if (botState != lfg::LFG_STATE_NONE)
+						shouldTeleport = true;
+
+					if (shouldTeleport && !teleportSent)
+					{
+						PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+						if (botAI)
+						{
+							bool teleported = botAI->DoSpecificAction("lfg teleport", Event(), true);
+							if (teleported)
+							{
+								SetEventValue(botId, "rtg_lfg_teleport_sent", 1, 20, addData);
+								RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} grouped={} state={} result=1",
+									botId, desiredOwner, bot->GetGroup() ? 1 : 0, uint32(botState)));
+							}
+							else
+							{
+								RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} grouped={} state={} result=0",
+									botId, desiredOwner, bot->GetGroup() ? 1 : 0, uint32(botState)));
+							}
+						}
+					}
+				}
+
+				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
+				continue;
+			}
 
 			// If the bot is actively queued, do not recycle it
 			if (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON)
