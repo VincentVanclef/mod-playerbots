@@ -287,7 +287,7 @@ namespace
             return false;
 
         lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
-        if (state != lfg::LFG_STATE_NONE)
+		if (state != lfg::LFG_STATE_NONE)
             return true;
 
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
@@ -301,27 +301,12 @@ namespace
         if (!queued)
         {
             std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
-
-            // Hard-fail the helper slot immediately. A bot that cannot materialize into
-            // LFG queue state must stop consuming RDF slot/account pressure before any
-            // replacement acquisition happens.
-            if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
-                RTG::RtgQueueLedger::Instance().Release(botId, "rtg_lfg_join_failed");
-
-            sRandomPlayerbotMgr.RTG_ClearQueueHelperState(botId, false);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
             sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_login_at", 0, 0);
-            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
-            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
-            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
             sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_join_fail_cd", 1, 20, addData);
-            sRandomPlayerbotMgr.currentBots.remove(botId);
-
             LOG_INFO("playerbots", "[RTG][RDF][FAIL] helper={} owner={} reason=join_failed_immediate desiredRole={} state={} grouped={}",
                 botId, ownerGuid, desiredRole, uint32(state), bot->GetGroup() ? 1u : 0u);
-
-            RTG_PrepareBotForLogout(bot);
-            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "logout", 1, 60, addData);
-            sRandomPlayerbotMgr.LogoutPlayerBot(bot->GetGUID());
+            sRandomPlayerbotMgr.RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_join_failed");
         }
 
         return queued;
@@ -3532,12 +3517,35 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (bucket.startTs && static_cast<uint32>(time(nullptr)) < bucket.startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
                     return false;
 
-                uint32 needTank = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
-                needTank = needTank > (bucket.realTank + bucket.queuedTank + bucket.assignedTank) ? (needTank - (bucket.realTank + bucket.queuedTank + bucket.assignedTank)) : 0u;
-                uint32 needHeal = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
-                needHeal = needHeal > (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal) ? (needHeal - (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal)) : 0u;
-                uint32 needDps = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
-                needDps = needDps > (bucket.realDps + bucket.queuedDps + bucket.assignedDps) ? (needDps - (bucket.realDps + bucket.queuedDps + bucket.assignedDps)) : 0u;
+                uint32 targetTank = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_TANK);
+                uint32 targetHeal = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_HEALER);
+                uint32 targetDps = RTG_TargetLfgRoleCount(lfg::PLAYER_ROLE_DAMAGE);
+
+                uint32 needTank = targetTank > (bucket.realTank + bucket.queuedTank + bucket.assignedTank) ? (targetTank - (bucket.realTank + bucket.queuedTank + bucket.assignedTank)) : 0u;
+                uint32 needHeal = targetHeal > (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal) ? (targetHeal - (bucket.realHeal + bucket.queuedHeal + bucket.assignedHeal)) : 0u;
+                uint32 needDps = targetDps > (bucket.realDps + bucket.queuedDps + bucket.assignedDps) ? (targetDps - (bucket.realDps + bucket.queuedDps + bucket.assignedDps)) : 0u;
+
+                uint32 targetHelpers = 0;
+                targetHelpers += targetTank > bucket.realTank ? (targetTank - bucket.realTank) : 0u;
+                targetHelpers += targetHeal > bucket.realHeal ? (targetHeal - bucket.realHeal) : 0u;
+                targetHelpers += targetDps > bucket.realDps ? (targetDps - bucket.realDps) : 0u;
+
+                uint32 ownedHelpers = bucket.queuedTank + bucket.queuedHeal + bucket.queuedDps +
+                    bucket.assignedTank + bucket.assignedHeal + bucket.assignedDps;
+
+                if (ownedHelpers >= targetHelpers)
+                {
+                    if ((needTank || needHeal || needDps) && RTG_QueueDebugEnabled())
+                    {
+                        LOG_INFO("playerbots", "[RTG][LFG][HOLD] owner={} team={} targetHelpers={} ownedHelpers={} needT={} needH={} needD={} queuedT={} queuedH={} queuedD={} assignedT={} assignedH={} assignedD={}",
+                                 bucket.owner, bucket.team, targetHelpers, ownedHelpers,
+                                 needTank, needHeal, needDps,
+                                 bucket.queuedTank, bucket.queuedHeal, bucket.queuedDps,
+                                 bucket.assignedTank, bucket.assignedHeal, bucket.assignedDps);
+                    }
+                    return false;
+                }
+
                 if (!needTank && !needHeal && !needDps)
                     return false;
 

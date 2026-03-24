@@ -320,14 +320,14 @@ For RTG RDF, fairness must be evaluated at the owner lane level, not just per-he
 - **Status:** Applied.
 
 
-## Chapter 70 — Immediate RDF join failure was not invalidating slot ownership
-- **Date:** 2026-03-24
-- **Subsystem:** RTG Queue System / RDF materialization / immediate join dispatch
-- **Context:** Live logs showed helpers reaching `[RTG][QUEUE][DISPATCH] ... result=0` after login, followed by replacement acquisition and misleading account-pressure errors instead of clean slot recycling.
-- **Situation:** The helper had logged in but failed `lfg join` immediately. The code attempted a queue-helper logout, but the failed helper could still continue occupying account/owner pressure until later retirement behavior resolved.
-- **Hypothesis:** Immediate RDF join failure must be treated as a hard materialization failure, not a soft retirement request. Slot ownership must be invalidated before planner replacement logic runs.
-- **Experiments:** Replaced the soft queue-helper logout path in immediate RDF join failure handling with direct hard invalidation: clear queue helper state, clear proposal/accept/teleport lifecycle state, release queue ledger ownership, remove from `currentBots`, mark a short join-fail cooldown, and issue direct logout.
-- **Findings:** The true divergence from BG behavior was not only fairness or selection; it was that RDF login-time `result=0` was still not authoritatively collapsing the slot. BG-style correctness requires failed materialization to immediately free ownership before reacquire.
-- **Regression:** None intended; this path only activates when the helper failed to enter LFG queue state on immediate login dispatch.
-- **Next Investigation:** If a helper still reports `result=0`, inspect `LfgJoinAction::JoinLFG()` return reasons directly and add per-reason breadcrumbs for final role-button/find-group phase parity.
-- **Status:** Applied.
+## Chapter 31 — RDF helper over-acquire hold gate
+**Date:** 2026-03-24
+**Subsystem:** mod-playerbots / RTG RDF acquisition
+**Context:** Live RDF testing showed 4 helpers acquired and dispatched for a solo owner, then a 5th DPS helper was still requested before the earlier four had fully resolved into queue state.
+**Situation:** The queue system was still willing to acquire extra RDF helpers while the owner already had enough queued+assigned helpers to fill the party. This produced misleading account-pressure errors and slot thrash.
+**Hypothesis:** Acquisition was keying too aggressively off per-role transient state and not strongly enough off total owner-lane occupancy.
+**Experiments:** Added an owner-lane hold gate in the RDF acquisition path so no further helpers are acquired once queued+assigned helper ownership already meets the total helper target for that owner.
+**Findings:** This should prevent 5th-helper over-acquire for a 4-helper solo RDF owner and force the system to recycle/repair an existing bad helper before attempting further login.
+**Regression:** None intended; this only suppresses extra acquisition when the owner lane is already fully occupied by queued+assigned helpers.
+**Next Investigation:** If a lane is still stuck after this, the next seam is identifying and retiring the exact already-owned helper whose actual queued role does not match the assigned role.
+**Status:** Implemented
