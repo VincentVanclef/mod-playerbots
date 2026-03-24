@@ -1092,11 +1092,27 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
                 {
                     aiObjectContext->GetValue<uint32>("lfg proposal")->Set(proposalId);
 
-                    std::string addData = sRandomPlayerbotMgr.GetEventData(bot->GetGUID().GetCounter(), "add");
+                    uint32 botId = bot->GetGUID().GetCounter();
+                    std::string addData = sRandomPlayerbotMgr.GetEventData(botId, "add");
                     if (addData.rfind("rtg_lfg:", 0) == 0)
                     {
                         LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} proposal={} source=packet_cache bytes={}",
-                                 bot->GetGUID().GetCounter(), proposalId, p.size());
+                                 botId, proposalId, p.size());
+
+                        bot->CombatStop(true);
+                        bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+
+                        uint32 nowTs = uint32(time(nullptr));
+                        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
+                        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", nowTs, 90, addData);
+                        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+
+                        WorldPacket* acceptPacket = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
+                        *acceptPacket << proposalId << true;
+                        bot->GetSession()->QueuePacket(acceptPacket);
+
+                        LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=packet_direct",
+                                 botId, proposalId);
                     }
                 }
             }

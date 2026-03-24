@@ -248,124 +248,329 @@ This pass does **not** claim Phase 4/5 completion. It is specifically the Phase 
 - Corrected busy-account reconstruction so stale non-retired ledger rows do not keep blocking fresh helper acquisition.
 - Ownership audit now removes stale offline helper ledger rows when there is no surviving `add` or `logout` truth behind them.
 
+## 2026-03-21 — Phase 3 validation + Phase 4/5 surgical pass: RDF dispatch materialization, multi-queue phase correction, and arena pop breadcrumbs
 
-## 2026-03-22 — RDF acquisition materialization fix: immediate currentBots enrollment for queued helpers
+### Runtime evidence that triggered this pass
+Fresh RTG queue logs showed a narrow but decisive pattern:
+- RDF helpers were being acquired and logged into `add`, but runtime never progressed beyond acquire/dispatch-add breadcrumbs
+- battleground demand could exist across multiple queues, yet one lane monopolized effective progress while others remained planned-but-unmaterialized
+- arena queues had planner breadcrumbs after the prior hookup pass, but there was still not enough runtime proof of helper formation and actual pop attempts
+
+### Root causes confirmed in code
+This pass verified three concrete defects instead of guessing:
+
+1. **RDF had no manager-owned immediate join/accept dispatch surface**
+   - BG helpers already had `RTG_DispatchImmediateBgQueueJoin(...)`
+   - RDF helpers relied on eventual AI strategy cadence only
+   - result: helpers could log in, retain pending markers, and still never emit a clear queue-join/accept progression surface during the narrow event-driven window
+
+2. **BG multi-queue prioritization still had phase-number drift**
+   - planner phase values are authoritative as:
+     - `1 = starter_fill`
+     - `2 = pop_or_invite`
+     - `3 = live_refill`
+     - `4 = finish_fill`
+   - acquire-side priority/suppression logic was still treating old numbers/comments as truth
+   - result: queue ordering and finish-fill suppression could target the wrong buckets, which helps explain “only one queue seems to fully work” under overlapping demand
+
+3. **Shared-surplus lane arbitration still skipped queued RDF buckets whenever BG demand existed**
+   - that guard contradicted the intended Phase 4 multi-lane fairness doctrine
+   - result: RDF could still be starved in shared-capacity conditions even after earlier partial recovery work
+
+### Manual corrections applied
+- `RandomPlayerbotMgr.cpp`
+  - added immediate RDF dispatch helpers for:
+    - queue join
+    - proposal accept
+  - added manager-owned RDF runtime breadcrumbs:
+    - `[RTG][RDF][JOIN]`
+    - `[RTG][RDF][ACCEPT]`
+    - `[RTG][RDF][FAIL]`
+  - added generic success/failure dispatch breadcrumbs:
+    - `[RTG][DISPATCH][SUCCESS]`
+    - `[RTG][DISPATCH][FAIL_REASON]`
+  - added explicit RDF helper login breadcrumb:
+    - `[RTG][LFG][LOGIN]`
+  - corrected BG phase priority mapping to match planner truth
+  - corrected finish-fill suppression checks to target actual `phase == 4`
+  - removed the remaining shared-surplus RDF starvation guard so queued RDF buckets can compete during multi-lane operation
+  - added `[RTG][BG][MULTI_QUEUE]` capacity-sharing breadcrumb
+  - added `[RTG][BG][ASSIGN]` helper-assignment breadcrumb
+  - added `[RTG][ARENA][FORM]` breadcrumb when arena helper assignments materialize
+- `BattleGroundJoinAction.cpp`
+  - added `[RTG][ARENA][POP]` breadcrumbs around actual arena queue pop attempts
+- `LfgActions.cpp`
+  - added explicit RDF join/accept breadcrumbs inside the LFG action surface so runtime now proves whether the helper actually queued and accepted
+
+### Behavioral changes after this pass
+- RDF helpers should no longer stop at acquire/add visibility only; the manager now actively pushes them into join and accept attempts and logs the result
+- overlapping queue families should no longer suffer phase-priority drift between planner and acquire logic
+- finish-fill suppression is now aimed at real finish-fill buckets rather than the wrong phase ID
+- RDF should retain a fair chance to use shared helper surplus even when BG demand exists simultaneously
+- arena queues now expose helper formation and pop-attempt breadcrumbs, making “planner exists but no pop proof” far easier to diagnose
+
+### Assumptions corrected
+- The missing Phase 3 proof surface was **not** just “add more RDF logs” — the real gap was that BG had manager-owned immediate dispatch while RDF did not.
+- The multi-queue bug was **not** solely a planner failure — acquire-side phase-number drift was still warping bucket priority/suppression behavior.
+- Earlier partial RDF-starvation recovery was **not yet complete** — one shared-surplus guard still skipped queued RDF buckets under BG pressure.
+
+
+## 2026-03-21 — RDF audit follow-up: silent helper login failure surfaces and cooldown quarantine
 
 ### Runtime evidence
-Live RDF logs showed a repeatable mismatch between:
-- `[RTG][ACQUIRE][REQUEST]` count
-- `[RTG][DISPATCH][ADD]` count
+Fresh RDF testing improved from total join failure to partial helper materialization:
+- tank/healer/one DPS could now log in and reach RDF join dispatch
+- extra requested DPS helpers often never reached `[RTG][DISPATCH][ADD]` or `[RTG][LFG][LOGIN]`
+- after ~30–35 seconds they decayed through `[RTG][DISPATCH][STALL]` and the system misreported the symptom as generic account shortage
 
-In failing cases, RTG would request a full 5-helper RDF composition but only a subset would ever enter the dispatch loop. The missing helpers then aged out as `[RTG][DISPATCH][STALL]` without ever receiving their initial dispatch breadcrumb.
+### Confirmed cause
+The queue system still had a blind spot on the **login materialization** edge:
+- several `AddPlayerBot(...)` failure exits in `PlayerbotMgr.cpp` returned silently for rndbot queue helpers
+- the null-player callback path also returned without notifying RTG helper cleanup
+- those helpers therefore sat with live `add` / pending markers until the dispatch stall watchdog cleaned them much later
 
-### Root cause summary
-Queued helpers were being marked with `add`/pending metadata during acquisition, but not immediately enrolled into `currentBots`.
+This meant a character-load failure could masquerade as queue starvation or account exhaustion.
 
-That left helper materialization dependent on a later `GetBots()` rebuild pass and its current target window. In practice this created a race where some freshly acquired RDF helpers never entered the dispatch scan soon enough, then expired as false stall/fake account-pressure failures.
+### Repairs applied
+- queue-managed rndbot login failures now call `RandomPlayerbotMgr::OnPlayerLoginError(..., reason)` on the previously silent exits:
+  - `bot_loading_guard`
+  - `already_in_world`
+  - `missing_account`
+  - `holder_initialize_failed`
+  - `session_player_null`
+- `OnPlayerLoginError` now:
+  - clears `rtg_add_requested` immediately
+  - records `[RTG][LOGIN][FAIL] ... reason=...`
+  - quarantines the failed helper with short `rtg_login_fail_recent` cooldown so reacquire does not hammer the same broken character repeatedly
+- successful RDF helper login now clears `rtg_add_requested` just like BG helper login already did
 
-### Recovery action recorded in this chronicle
-- queue-managed RTG helpers are now pushed into `currentBots` immediately when acquisition succeeds
-- this keeps acquisition -> dispatch materialization aligned in the same control cycle instead of waiting for a later list rebuild
+### Doctrine correction
+A dispatch stall is not always a queue-join problem. If helper login materialization has silent exits, Phase 3 can look partially healthy while Phase 5 is still broken at the login boundary. Queue-managed login failure must be explicit and immediate.
 
-### Engineering lesson
-For RTG event-driven helper lanes, successful acquisition is not complete until the helper is visible to the dispatch scan. Future passes should treat `add` metadata and `currentBots` enrollment as one materialization surface, not two loosely coupled stages.
 
-## 2026-03-22 — RDF owner-fair dispatch pass: prevent fresh owners from stalling behind older unresolved lanes
+## 2026-03-21 — RDF completion follow-up: login materialization failures must clear ownership, and planner role intent must survive join
 
 ### Runtime evidence
-Recent RDF logs showed a clear mixed-owner starvation pattern:
-- owner A would acquire a fresh 4- or 5-helper RDF batch
-- dispatcher/login work would still keep draining an older owner B lane first
-- owner A helpers would remain acquired but never receive `[RTG][DISPATCH][ADD]` before aging into `[RTG][DISPATCH][STALL]`
+Live RDF tests still showed two distinct failure families even after the earlier Phase 3 hookup work:
+- some helpers reached acquire but never reached login, then sat until `[RTG][DISPATCH][STALL]`
+- some logged-in helpers hit RDF join dispatch but failed before entering LFG state, especially healers
 
-This created the false appearance of a single missing helper, but the deeper failure was owner-level starvation in the login/dispatch ordering.
+### Root causes confirmed
+1. **Queue-managed helper login still had silent early exits inside `PlayerbotMgr.cpp`**
+   - missing account / query-holder initialize failure / null player session load could all return without telling RTG queue ownership that the helper never materialized
+   - result: helper reservations remained live until the later stall watchdog, inflating pressure and slowing replacement
 
-### Root cause summary
-`availableBots` was still inheriting `currentBots` list order directly. In event-driven RDF mode, that let older unresolved owner lanes sit at the front of the login/dispatch queue, while newly acquired helpers for a fresh owner remained later in the list.
+2. **RDF join still treated runtime spec detection as stronger than planner role intent**
+   - `GetRoles()` always returned `actualRole` even for assigned RTG helpers
+   - `JoinLFG()` could logout an assigned helper merely because spec inference differed from the planner reservation
+   - result: valid class-capable helpers could be discarded before ever sending `CMSG_LFG_JOIN`, violating the queue-architecture rule that RDF role intent must survive acquisition through dispatch
 
-The result was not just one helper stalling — it was a materialization fairness problem where a new owner with zero online helpers could be starved behind an older owner that already had online/pending helpers.
+### Manual corrections applied
+- `PlayerbotMgr.cpp`
+  - added queue-managed login failure routing to `RandomPlayerbotMgr::OnPlayerLoginError(...)` for:
+    - `missing_account`
+    - `holder_initialize_failed`
+    - `session_player_null`
+- `LfgActions.cpp`
+  - assigned RTG RDF helpers now use **planner desired role** as the join role when the class can legitimately perform that role
+  - class-incompatible reservations still fail closed and retire
+  - removed the old spec-mismatch auto-logout path for class-compatible assigned helpers
 
-### Recovery action recorded in this chronicle
-- event-driven `availableBots` ordering now prefers RDF owners with lower materialized pressure first
-- ordering considers current online helper count and pending helper count per RDF owner
-- a new debug breadcrumb `[RTG][RDF][DISPATCH_OWNER]` now exposes owner-level online/pending pressure at dispatch time
-- `OnPlayerLoginError` definition was re-aligned with the header declaration using `char const* reason`
-
-### Engineering lesson
-For RTG RDF, fairness must be evaluated at the owner lane level, not just per-helper FIFO order. New owner lanes should get admission into dispatch/login before older unresolved lanes can consume the entire same-cycle budget.
-
-
-## Chapter 25 — RDF Hybrid-Spec Role Compatibility
-- **Date:** 2026-03-24
-- **Subsystem:** RTG Queue System / RDF Role Resolution
-- **Context:** Live RDF tests showed one helper logging in successfully but failing immediate join dispatch while replacement DPS helpers were requested. User also observed dual feral druids where one should tank and the other should dps.
-- **Situation:** The RDF pipeline was still treating actual/offline role truth as a single exact role for a given spec tab. That works for rigid specs, but it breaks hybrid specs like feral druid where the same spec legitimately satisfies tank or dps lane assignment.
-- **Hypothesis:** Exact-role comparisons were rejecting hybrid-spec helpers for desired dps assignment, leading to online bot occupancy without correct queue participation and misleading replacement pressure.
-- **Experiments:** Added spec-role compatibility helpers so offline candidate selection and live join validation can ask whether a spec can perform a role, not only what its default primary role is.
-- **Findings:** Feral druids must be treated as compatible with both tank and dps RDF assignment. Exact-match role gates were too strict and caused false runtime_role_mismatch / login_success result=0 style failures.
-- **Regression:** None intended; rigid specs continue to map to their single compatible role.
-- **Next Investigation:** If a hybrid spec still fails to join under the assigned role, inspect whether the client role-mask packet is being overridden after join submission rather than role-resolution rejecting it.
-- **Status:** Applied.
-
-## Chapter 26 — RDF Join-Failure Hard Recycle + Planner Role Authority
-- **Date:** 2026-03-24
-- **Subsystem:** RTG Queue System / RDF Login Materialization
-- **Context:** Live RDF tests still showed one helper logging in but not actually entering queue participation, followed by replacement acquire attempts and misleading account-pressure messages.
-- **Situation:** A queue-managed helper could log in successfully, fail the immediate `lfg join` attempt, and still occupy lane ownership long enough for the planner to request additional helpers. Hybrid specs could also submit their default role instead of the planner-assigned role even when the spec was compatible with the assigned role.
-- **Hypothesis:** Two remaining seams existed: (1) `login_success result=0` was not treated as a hard failure, and (2) RDF join role-mask generation still preferred actual role over planner-assigned compatible role for hybrid specs.
-- **Experiments:** Added immediate RDF join dispatch on helper login, added hard recycle/logout on immediate join failure with a short retry cooldown, skipped recently failed helpers during acquire, and changed `LfgJoinAction::GetRoles()` to return the planner-assigned role whenever the live spec can legitimately perform that role.
-- **Findings:** RTG RDF must treat failed immediate join as slot invalidation, not a soft retry. Also, spec determines capability while planner determines assigned lane role; hybrid specs like feral druid need planner role authority to prevent dual-tank/dual-dps drift.
-- **Regression:** None intended; incompatible specs still fall back to actual role and are rejected later by compatibility guards.
-- **Next Investigation:** If a logged-in helper still fails to materialize after these changes, inspect server-side LFG state mutation immediately after `CMSG_LFG_JOIN` submission rather than selection/role resolution.
-- **Status:** Applied.
+### Doctrine correction
+For assigned RTG RDF helpers, **planner role intent is the queue authority**. Runtime spec detection is diagnostic and can influence AI behavior later, but it must not preempt queue admission when the class is role-compatible and the reservation was deliberately made for that role.
 
 
-## Chapter 31 — RDF helper over-acquire hold gate
-**Date:** 2026-03-24
-**Subsystem:** mod-playerbots / RTG RDF acquisition
-**Context:** Live RDF testing showed 4 helpers acquired and dispatched for a solo owner, then a 5th DPS helper was still requested before the earlier four had fully resolved into queue state.
-**Situation:** The queue system was still willing to acquire extra RDF helpers while the owner already had enough queued+assigned helpers to fill the party. This produced misleading account-pressure errors and slot thrash.
-**Hypothesis:** Acquisition was keying too aggressively off per-role transient state and not strongly enough off total owner-lane occupancy.
-**Experiments:** Added an owner-lane hold gate in the RDF acquisition path so no further helpers are acquired once queued+assigned helper ownership already meets the total helper target for that owner.
-**Findings:** This should prevent 5th-helper over-acquire for a 4-helper solo RDF owner and force the system to recycle/repair an existing bad helper before attempting further login.
-**Regression:** None intended; this only suppresses extra acquisition when the owner lane is already fully occupied by queued+assigned helpers.
-**Next Investigation:** If a lane is still stuck after this, the next seam is identifying and retiring the exact already-owned helper whose actual queued role does not match the assigned role.
-**Status:** Implemented
+## 2026-03-22 — RDF role-faithfulness correction
+
+### Runtime evidence
+Live RDF testing proved groups could now form quickly, but role correctness regressed: helpers were entering RDF under planner-requested roles that did not match their loaded runtime spec, producing cases like restoration druids tanking and retribution paladins healing.
+
+### Wrong assumption corrected
+Planner authority is not permission to override runtime specialization truth. Planner role intent must survive acquisition and dispatch, but only through helpers whose runtime spec actually satisfies that intent.
+
+### Repair
+- removed the effective planner-overrides-runtime behavior from `LfgJoinAction::GetRoles()`
+- added runtime role mismatch fail-closed handling before RDF join dispatch
+- added manager-side runtime role mismatch retirement so wrong-spec helpers are logged out and reacquired instead of entering RDF under false role masks
+
+### Doctrine update
+RDF role correctness is a two-step contract:
+1. planner chooses the missing role
+2. runtime helper validation must confirm the logged-in bot actually matches that role before queue admission
+
+If those disagree, reacquire. Do not force the queue packet to pretend the helper is a different spec.
+
+---
+
+## 2026-03-22 — RDF proposal acceptance packet order correction
+
+### Symptom
+- RDF helpers joined quickly and role composition improved.
+- Proposal ready-checks popped, but queued helpers did not reliably accept.
+- Live symptom on player side: proposal kept expiring or being declined, then re-popping with the same helper set.
+- RTG runtime logs showed repeated `[RTG][RDF][JOIN]` success breadcrumbs, but no matching `[RTG][RDF][ACCEPT]` breadcrumbs for the affected helpers.
+
+### Confirmed cause
+The accept path in `LfgAcceptAction::Execute` was parsing `SMSG_LFG_PROPOSAL_UPDATE` in the wrong field order. The code read the packet as:
+- `dungeonId`
+- `state`
+- `proposalId`
+
+For 3.3.5a acceptance purposes, the proposal id is the leading `uint32`. That meant the packet-triggered accept path often failed to recover a valid proposal id, so the queued helper never sent `CMSG_LFG_PROPOSAL_RESULT` with `accept=true`.
+
+### Doctrine correction
+Planner/manager/join can be healthy and still fail the dungeon form if proposal acceptance misreads packet authority. In RDF, proposal id extraction is a hard owner boundary between:
+- queue materialization
+- final group lock-in
+- teleport into dungeon
+
+### Fix applied
+- Read the leading `uint32` from `SMSG_LFG_PROPOSAL_UPDATE` as the proposal id.
+- Persist it immediately into the `lfg proposal` AI value.
+- Keep packet-triggered immediate acceptance for queued RDF helpers.
+- Add RTG debug breadcrumb for proposal packet receipt so future regressions can be isolated faster.
+
+### Expected proof after fix
+A healthy RDF completion should now show:
+- `[RTG][RDF][JOIN]`
+- `[RTG][RDF][ACCEPT]`
+- proposal lock-in
+- dungeon teleport / run
+
+instead of repeated proposal expiry loops with no accept breadcrumbs.
+
+## 2026-03-22 — RDF deep audit: candidate-role targeting, login-failure surfacing, and per-role mismatch quarantine
+
+### Runtime evidence
+Recent live RDF tests proved the lane had advanced past acquire-only failure, but still lagged behind the BG lane in three key ways:
+- helper selection still trusted offline talent reads too much, producing repeated runtime role mismatches
+- some queued helper login failures were still silent at the `PlayerbotMgr` boundary
+- repeated bad RDF candidates could burn through busy accounts and make one damaged queue look like global account starvation
+
+### Architecture correction
+RDF should mirror BG queue doctrine as closely as possible:
+- planner owns demand
+- acquire fulfills demand
+- runtime validation confirms the selected helper really matches the requested role
+- bad candidates must be quarantined quickly so they do not poison shared queue capacity
+
+### What changed
+- queued helper login failures now report through `OnPlayerLoginError(...)` for `bot_loading_guard`, `missing_account`, `holder_initialize_failed`, and `session_player_null` paths in `PlayerbotMgr.cpp`
+- RDF now keeps a runtime role cache (`rtg_runtime_lfg_role`) learned from real helper logins/mismatches
+- RDF mismatch now also places a per-role cooldown (`rtg_lfg_role_block:<role>`) on the mismatched helper so the same bot is not immediately re-selected for the same wrong role
+- event-driven RDF acquisition now prefers known runtime role truth first, then falls back to offline role inference only when runtime evidence does not yet exist
+
+### Why this matters
+This moves RDF closer to the BG lane's stronger behavior: once a helper proves what it really is at runtime, the queue system should use that truth on later passes instead of repeatedly rediscovering the same mismatch through expensive login attempts.
+
+### Expected next-proof signals
+- fewer repeated `runtime_role_mismatch` failures for the same helper
+- fewer false `RandomBotAccountCount` shortage signals during active RDF demand
+- cleaner mixed-lane behavior when BG, RDF, and arena demand coexist
+
+## 2026-03-22 — RDF audit continuation: proposal-id capture at packet ingress, stale role-cache precedence correction, and queue-helper gear hygiene
+
+### Runtime evidence
+Latest live RDF tests showed three intertwined symptoms:
+- helpers were joining RDF quickly, but some proposals still expired with no matching `[RTG][RDF][ACCEPT]` proof on the bot side
+- candidate selection could still treat a visibly role-correct helper (for example a holy priest) as the wrong offline target because stale runtime cache won over persistent talent truth
+- queue helpers that churned across levels/spec refreshes accumulated bag overflow and mail spill, causing repeated `Player::_LoadInventory ... Item will be sent by mail` warnings and making later initialization less deterministic
+
+### Confirmed architecture corrections
+1. **Proposal acceptance needed a harder owner boundary than AI strategy timing**
+   - relying only on the world-packet trigger path left a gap where proposal id might not be cached early enough for the manager-side accept dispatch
+   - fix: cache `SMSG_LFG_PROPOSAL_UPDATE` proposal id immediately inside `PlayerbotAI::HandleBotOutgoingPacket(...)`, before normal trigger handling, so manager polling can always see the active proposal id
+
+2. **Offline RDF selection must not let stale runtime cache outrank real offline talent truth**
+   - once explicit talent preparation started persisting role-correct specs, the selector still prioritized `rtg_runtime_lfg_role` first
+   - that could preserve old role memory after a later spec correction and make selection look wrong from the player's point of view
+   - fix: prefer real offline talent truth first; only fall back to runtime cache when offline talent data is not available
+
+3. **Queue-helper gear initialization needs hygiene, not infinite accumulation**
+   - repeated queue-helper level/spec preparation was reinitializing gear while old backpack contents and overflow mail remained
+   - fix: for queue-managed RDF helpers that actually need bootstrap work (missing talents / role mismatch / level mismatch), clear bag contents and purge mailbox records before fresh equipment initialization
+
+### Doctrine update
+RDF should mirror BG discipline not only at acquire/dispatch, but also at the **materialization hygiene** layer:
+- capture proposal state at the earliest reliable packet ingress
+- prefer persistent role truth over stale cache memory
+- treat queue-helper bootstrap inventory as disposable state that must be cleaned before re-gearing
+
+## 2026-03-22 — RDF proposal lifecycle lock pass: accept-sent state, join suppression during active proposal, and lock release only on dungeon entry or resolved failure
+
+### Runtime evidence
+Live RDF testing finally isolated the blocker beyond join/materialization:
+- helpers logged in cleanly
+- helpers joined RDF cleanly
+- helpers emitted repeated `[RTG][RDF][ACCEPT]` and `rdf_accept` success breadcrumbs for the same proposal id
+- yet the dungeon never finalized, and helpers fell back into repeated RDF join work while the ready-check window was still unresolved
+
+This proved the helpers were no longer failing to *press accept*; instead, the queue system was failing to **hold them inside proposal resolution** as a first-class lifecycle phase.
+
+### Confirmed root cause
+`LfgAcceptAction` was still clearing the in-memory proposal state too early and resetting AI immediately after sending `CMSG_LFG_PROPOSAL_RESULT`. That let the event-driven RDF manager see the same helper as ordinary `LFG_STATE_NONE` / join-eligible work again before the dungeon transfer or failure boundary had resolved.
+
+In practice, the RDF lane was doing:
+- accept proposal
+- forget proposal exists
+- drift back into ordinary join dispatch
+- accept again on the same unresolved proposal
+
+That is architecturally weaker than the BG lane, where the pop/match transition is treated as an owned state and not re-entered as raw queue work.
+
+### Doctrine correction
+RDF needs an explicit **proposal lock** phase between:
+- queue join
+- proposal acceptance sent
+- dungeon entry / proposal failure resolution
+
+Once a queued helper has accepted a proposal, it must not:
+- re-join RDF
+- re-bootstrap role prep
+- get treated as idle/ordinary LFG state again
+
+until the proposal resolves by either:
+- entering the dungeon, or
+- timing out / failing and being intentionally released back to the queue lifecycle
+
+### Fix applied
+- Added queue-helper event-backed proposal lifecycle state:
+  - `rtg_lfg_proposal_lock`
+  - `rtg_lfg_accept_sent`
+- Queued RDF helpers now mark proposal lock + accept-sent timestamp when `lfg accept` succeeds.
+- Queued RDF accept no longer clears `lfg proposal` or resets AI immediately after sending accept.
+- Event-driven RDF dispatch now suppresses all new join work while proposal lock / accept-sent state is active.
+- Proposal lifecycle state now clears only when:
+  - helper is confirmed in dungeon/LFG run state, or
+  - the proposal never resolves after accept and is intentionally released as `proposal_not_resolved`
+- Queue-state cleanup and login-error cleanup now also clear proposal lifecycle state so dead helpers do not retain stale proposal locks.
+
+### Expected proof after fix
+Healthy RDF completion should now look like:
+- `[RTG][RDF][JOIN]`
+- `[RTG][RDF][ACCEPT]`
+- no repeated `JOIN` spam for that helper during the same proposal window
+- dungeon entry / active run state
+
+If a proposal genuinely fails, the expected breadcrumb becomes a single controlled release such as:
+- `[RTG][RDF][FAIL] ... reason=proposal_not_resolved ...`
+
+rather than endless accept/join oscillation.
 
 
-## Chapter 36 — RDF finalization: deterministic enter-dungeon pump
-- **Date:** 2026-03-23
-- **Subsystem:** mod-playerbots / RTG RDF queue finalization
-- **Context:** Live tests showed four helpers acquiring, dispatching, logging in, and reaching the ready dialog, but no helper actually entered the dungeon.
-- **Situation:** The RDF lane was no longer failing at selection or initial queue join. The remaining blocker was the final enter-dungeon step after proposal acceptance.
-- **Hypothesis:** The queue system had proposal acceptance markers (`rtg_lfg_proposal_lock`, `rtg_lfg_accept_sent`) but no deterministic manager-side phase that converted accepted proposals into `lfg teleport` actions.
-- **Experiments:** Audited the online-queued helper maintenance loop and confirmed that accepted proposal state was not consumed anywhere in `RandomPlayerbotMgr.cpp`. Added a deterministic proposal-latched teleport phase that attempts `lfg teleport` while a queued RDF helper has proposal/accept state and is not yet inside a dungeon map.
-- **Findings:** The RDF lane previously depended on opportunistic AI trigger timing for the final enter-dungeon step. That was weaker than the BG lane lifecycle and allowed ready dialogs to expire even after correct queue assembly. The new pump keeps accepted helpers in a proposal-resolution phase and drives explicit teleport attempts until map transition.
-- **Regression:** None intended; teleport attempts are gated by proposal/accept state and suppressed once the bot is already inside a dungeon.
-- **Next Investigation:** If a helper still fails to enter after deterministic teleport attempts, inspect whether the specific group/leader state expected by the core LFG teleport path differs from current RTG helper group composition.
-- **Status:** Integrated.
+## 2026-03-22 — RDF teleport phase audit (accept vs enter dungeon)
 
+### Symptom
+Bots were now reaching `JOIN` and `ACCEPT`, but still idled at the final **Enter Dungeon** stage. Live logs showed repeated `rdf_accept` success for the same proposal without any dungeon transfer.
 
-## Chapter 12 - RDF Finalization Button-Path Audit
-- Date: 2026-03-24
-- Subsystem: RTG Queue System / RDF finalization
-- Context: Bots were queueing correctly, reaching accepted proposal state, and manager-side teleport attempts were firing, but all attempts showed `grouped=0`. Screenshots confirmed the ready dialog was visible and the intended action was the normal `Enter Dungeon` path.
-- Situation: The RTG manager was still trying to drive the final step too early. Bots were not yet inside an actual LFG group when `lfg teleport` was attempted, so the last-mile path could not succeed even though queue and proposal stages had already completed.
-- Hypothesis: The clean separation is to let RTG own getting helpers into RDF-ready state and let the core-ready-dialog path own the final enter transition. Manager-side finalization should therefore wait for real LFG grouping before attempting the normal enter-dungeon packet path.
-- Experiments: Tightened the manager-side finalization gate so proposal-latched bots only attempt `lfg teleport` after `bot->GetGroup()` exists and `group->isLFGGroup()` is true. Added `[RTG][RDF][WAIT_GROUP]` breadcrumbs and made `LfgTeleportAction` return false for queued RDF helpers that are not yet in an actual LFG group.
-- Findings: The prior implementation was over-eager and converted accepted proposal state into repeated teleport attempts even when group formation had not completed. That created noisy `result=1` breadcrumbs with `grouped=0`, obscuring the real blocker.
-- Regression: None intended; this pass removes premature finalization attempts instead of broadening behavior.
-- Next Investigation: If bots still fail after this pass, inspect the exact core-side ready-dialog handler path used by the Enter Dungeon button and mirror that handler/opcode path directly rather than relying on generic teleport semantics.
-- Status: In progress.
+### Root cause
+The queue lane had advanced past proposal acceptance, but it still had no explicit **teleport phase**. In WotLK RDF flow, accepting the proposal is not the final client action; the client must still send `CMSG_LFG_TELEPORT` to actually enter the dungeon. RTG RDF helpers were latching proposal state, but once the group became an LFG group / dungeon state, there was no event-driven dispatch step to press the final teleport button.
 
-## Chapter 44 — RDF Core-Side Proposal Finalization Pump
-- **Date:** 2026-03-24
-- **Subsystem:** RTG RDF Queue Finalization / Core LFG Integration
-- **Context:** Live queue tests proved helpers were acquiring, dispatching, logging in, and reaching proposal/ready-dialog state, but they never formed a real LFG group. Logs showed endless `[RTG][RDF][WAIT_GROUP]` with `grouped=0`, first in state `3` and then degrading to `0/2`, followed by healer replacement churn and false account-pressure symptoms.
-- **Situation:** The manager-side RDF logic had been waiting for a real LFG group before doing the final step, but nothing in the queue system was actually driving the core-side proposal resolution path once the proposal was latched. The queue system owned readiness, but it was not invoking the core handler that finalizes proposal acceptance/group formation.
-- **Hypothesis:** Queuing `CMSG_LFG_PROPOSAL_RESULT` through bot AI was not sufficient or not reliably consumed for all queued helpers in the ready-dialog phase. The RTG manager needed an explicit core-side accept pump using `LFGMgr::UpdateProposal(proposalId, guid, true)` while the helper remained ungrouped.
-- **Experiments:** Audited the queued-helper maintenance loop and replaced the passive `WAIT_GROUP` hold with a proposal-latched core accept pump. While `rtg_lfg_proposal_lock` is set and the helper is still not inside an LFG group, the manager now periodically calls `sLFGMgr->UpdateProposal(...)` directly, records `rtg_lfg_accept_pump`, and logs `[RTG][RDF][FORCE_ACCEPT]` before continuing to wait for real grouping.
-- **Findings:** The missing seam was not teleport timing anymore; it was the absence of a deterministic core-side proposal-finalization step after the queue system reached RDF-ready state. This pass re-establishes the correct separation: RTG queue ownership gets helpers to ready state, and the core LFG manager owns the final proposal/group build.
-- **Regression:** None intended. The accept pump is throttled and only active while proposal lock exists and the helper is still not grouped.
-- **Next Investigation:** If grouping still fails after this pass, the next narrow seam is whether the stored proposal id ever becomes stale/incorrect for some helpers, requiring a direct inspection of how proposal ids are cached per helper.
-- **Status:** In progress.
+### Doctrine correction
+RDF lifecycle is not just `join -> accept`. It is `join -> accept -> teleport -> dungeon ownership`. BG already had a stronger pop/entry boundary; RDF needed the same explicit finalization phase.
+
+### Fix direction
+- Added `rdf_teleport` dispatch helper using the existing `lfg teleport` action.
+- Added `rtg_lfg_teleport_sent` lifecycle state.
+- When helper is in LFG group / dungeon state but not yet on a dungeon map, manager now dispatches the teleport action instead of rejoining or idling.
+- Proposal lifecycle state is released only once helper is actually on a dungeon map.
