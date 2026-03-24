@@ -286,8 +286,8 @@ namespace
         if (bot->InBattleground() || bot->InArena() || bot->IsBeingTeleported())
             return false;
 
-        LfgState state = sLFGMgr->GetState(bot->GetGUID());
-        if (state != LFG_STATE_NONE)
+        lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
+		if (state != lfg::LFG_STATE_NONE)
             return true;
 
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
