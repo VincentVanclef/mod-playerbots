@@ -77,6 +77,11 @@ namespace
         return RTG::ActualRoleForBot(bot);
     }
 
+    static bool RTG_ActualSpecCanPerformRole(Player* bot, uint32 role)
+    {
+        return RTG::ActualSpecCanPerformRole(bot, role);
+    }
+
     static std::string RTG_RoleMismatchCooldownKey(uint32 desiredRole)
     {
         return std::string("rtg_lfg_role_block:") + std::to_string(desiredRole);
@@ -302,7 +307,7 @@ bool LfgJoinAction::JoinLFG()
                 }
 
                 uint32 actualRole = RTG_ActualRoleForBot(bot);
-                if (actualRole != desiredRole)
+                if (!RTG_ActualSpecCanPerformRole(bot, desiredRole))
                 {
                     LOG_INFO("playerbots", "[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} class={} specTab={}",
                         botId, 0u, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));

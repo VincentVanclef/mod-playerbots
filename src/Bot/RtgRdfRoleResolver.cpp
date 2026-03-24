@@ -105,6 +105,51 @@ bool PreferredSpecTabForClassRole(uint8 cls, uint32 role, uint8& specTab)
     }
 }
 
+
+static bool SpecTabCanPerformRole(uint8 cls, uint8 specTab, uint32 role)
+{
+    switch (cls)
+    {
+        case CLASS_DRUID:
+            // Feral can legitimately queue as tank or dps.
+            if (specTab == 1)
+                return role == lfg::PLAYER_ROLE_TANK || role == lfg::PLAYER_ROLE_DAMAGE;
+            if (specTab == 2)
+                return role == lfg::PLAYER_ROLE_HEALER;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_PALADIN:
+            if (specTab == 0)
+                return role == lfg::PLAYER_ROLE_HEALER;
+            if (specTab == 1)
+                return role == lfg::PLAYER_ROLE_TANK;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_PRIEST:
+            if (specTab == 2)
+                return role == lfg::PLAYER_ROLE_DAMAGE;
+            return role == lfg::PLAYER_ROLE_HEALER;
+
+        case CLASS_SHAMAN:
+            if (specTab == 2)
+                return role == lfg::PLAYER_ROLE_HEALER;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_WARRIOR:
+            if (specTab == 2)
+                return role == lfg::PLAYER_ROLE_TANK;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_DEATH_KNIGHT:
+            if (specTab == 0)
+                return role == lfg::PLAYER_ROLE_TANK;
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+
+        default:
+            return role == lfg::PLAYER_ROLE_DAMAGE;
+    }
+}
+
 uint32 RoleForClassSpecTab(uint8 cls, uint8 specTab)
 {
     switch (cls)
@@ -239,12 +284,27 @@ uint32 GetOfflineSpecRole(ObjectGuid::LowType guid, uint8 cls)
     return RoleForClassSpecTab(cls, specTab);
 }
 
+bool OfflineSpecCanPerformRole(ObjectGuid::LowType guid, uint8 cls, uint32 role)
+{
+    uint8 specTab = 0;
+    GetOfflineSpecTab(guid, cls, specTab);
+    return SpecTabCanPerformRole(cls, specTab, role);
+}
+
 uint32 GetActualSpecRole(Player* bot)
 {
     if (!bot)
         return lfg::PLAYER_ROLE_DAMAGE;
 
     return RoleForClassSpecTab(bot->getClass(), static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot)));
+}
+
+bool ActualSpecCanPerformRole(Player* bot, uint32 role)
+{
+    if (!bot)
+        return role == lfg::PLAYER_ROLE_DAMAGE;
+
+    return SpecTabCanPerformRole(bot->getClass(), static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot)), role);
 }
 
 uint32 NormalizeQueuedRoleMask(uint32 roleMask)

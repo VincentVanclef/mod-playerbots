@@ -276,25 +276,6 @@ namespace
         return queued;
     }
 
-    static bool RTG_DispatchImmediateLfgQueueJoin(Player* bot, char const* reason)
-    {
-        if (!bot || bot->InBattleground() || bot->InArena())
-            return false;
-
-        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
-        if (!botAI)
-            return false;
-
-        lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
-        if (state != lfg::LFG_STATE_NONE && state < lfg::LFG_STATE_DUNGEON)
-            return true;
-
-        bool queued = botAI->DoSpecificAction("lfg join", Event(), true);
-        RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][DISPATCH] helper={} lane=rdf reason={} result={}",
-            bot->GetGUID().GetCounter(), reason ? reason : "rtg", queued ? 1 : 0));
-        return queued;
-    }
-
     static bool RTG_IsQueueSupervisorEvent(std::string const& event)
     {
         return event == "add" || event == "logout" || RTG::HasPrefix(event, "rtg_");
@@ -330,6 +311,11 @@ namespace
         return RTG::GetOfflineSpecRole(guid, cls);
     }
 
+    static bool RTG_OfflineSpecCanPerformRole(ObjectGuid::LowType guid, uint8 cls, uint32 role)
+    {
+        return RTG::OfflineSpecCanPerformRole(guid, cls, role);
+    }
+
     static uint32 RTG_GetActualSpecRole(Player* bot)
     {
         return RTG::GetActualSpecRole(bot);
@@ -348,6 +334,11 @@ namespace
     static uint32 RTG_ActualRoleForBot(Player* bot)
     {
         return RTG::ActualRoleForBot(bot);
+    }
+
+    static bool RTG_ActualSpecCanPerformRole(Player* bot, uint32 role)
+    {
+        return RTG::ActualSpecCanPerformRole(bot, role);
     }
 
     static bool RTG_IsRealPlayer(Player* player)
@@ -1484,6 +1475,90 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         }
     }
     std::list<uint32> availableBots = currentBots;
+
+    if (sPlayerbotAIConfig.rtgEventDriven && !availableBots.empty())
+    {
+        std::unordered_map<uint32, uint32> lfgOwnerOnlineCount;
+        std::unordered_map<uint32, uint32> lfgOwnerPendingCount;
+
+        for (auto const& kv : playerBots)
+        {
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = kv.first.GetCounter();
+            std::string addData = GetEventData(botId, "add");
+            uint32 team = 0;
+            uint32 level = 0;
+            uint32 role = 0;
+            uint32 owner = 0;
+            if (RTG::ParseLfgAddData(addData, team, level, &role, &owner) && owner)
+                ++lfgOwnerOnlineCount[owner];
+        }
+
+        for (uint32 botId : currentBots)
+        {
+            if (GetPlayerBot(botId))
+                continue;
+
+            std::string addData = GetEventData(botId, "add");
+            uint32 team = 0;
+            uint32 level = 0;
+            uint32 role = 0;
+            uint32 owner = 0;
+            if (RTG::ParseLfgAddData(addData, team, level, &role, &owner) && owner)
+                ++lfgOwnerPendingCount[owner];
+        }
+
+        auto queueSortKey = [&](uint32 botId)
+        {
+            bool online = GetPlayerBot(botId) != nullptr;
+            std::string addData = GetEventData(botId, "add");
+            uint32 team = 0;
+            uint32 level = 0;
+            uint32 role = 0;
+            uint32 owner = 0;
+            bool isLfg = RTG::ParseLfgAddData(addData, team, level, &role, &owner);
+            uint32 requestTs = GetEventValue(botId, "rtg_add_requested");
+            uint32 ownerOnline = owner ? lfgOwnerOnlineCount[owner] : 0u;
+            uint32 ownerPending = owner ? lfgOwnerPendingCount[owner] : 0u;
+            uint32 ownerPressure = ownerOnline + ownerPending;
+            uint32 ageRank = requestTs ? requestTs : UINT32_MAX;
+            return std::tuple<bool, uint32, uint32, uint32, uint32, uint32>(
+                online,
+                isLfg ? 0u : 1u,
+                ownerPressure,
+                ownerOnline,
+                ageRank,
+                botId);
+        };
+
+        availableBots.sort([&](uint32 a, uint32 b)
+        {
+            return queueSortKey(a) < queueSortKey(b);
+        });
+
+        if (RTG_QueueDebugEnabled())
+        {
+            std::unordered_set<uint32> loggedOwners;
+            for (uint32 botId : availableBots)
+            {
+                std::string addData = GetEventData(botId, "add");
+                uint32 team = 0;
+                uint32 level = 0;
+                uint32 role = 0;
+                uint32 owner = 0;
+                if (!RTG::ParseLfgAddData(addData, team, level, &role, &owner) || !owner)
+                    continue;
+                if (!loggedOwners.insert(owner).second)
+                    continue;
+                LOG_INFO("playerbots", "[RTG][RDF][DISPATCH_OWNER] owner={} online={} pending={} firstHelper={}",
+                         owner, lfgOwnerOnlineCount[owner], lfgOwnerPendingCount[owner], botId);
+            }
+        }
+    }
+
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
 
@@ -1676,7 +1751,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			{
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                SetEventValue(botId, "rtg_lfg_login_at", 0, 0);
 				continue;
 			}
 
@@ -1700,7 +1774,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                SetEventValue(botId, "rtg_lfg_login_at", 0, 0);
 				continue;
 			}
 
@@ -1708,7 +1781,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			{
 				SetEventValue(botId, "add", 0, 0);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                SetEventValue(botId, "rtg_lfg_login_at", 0, 0);
 				currentBots.remove(botId);
 				rtgStaleQueueBots.push_back(botGuid);
 				continue;
@@ -1736,27 +1808,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			// Pending bots get more patience, but do not let online non-queued helpers
-			// squat forever and trigger extra acquisitions behind them.
+			// Pending bots get more patience
 			if (GetEventValue(botId, "rtg_lfg_pending"))
 			{
-				uint32 loginAt = GetEventValue(botId, "rtg_lfg_login_at");
-				if (loginAt && bot->IsInWorld() && !grp && botState == lfg::LFG_STATE_NONE)
-				{
-					uint32 nowTs = NowSeconds();
-					if (nowTs > loginAt + 8)
-					{
-                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=online_not_queued desiredRole={} loginAge={}",
-                                botId, desiredOwner, desiredRole, nowTs - loginAt));
-						SetEventValue(botId, "add", 0, 0);
-						SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-                            SetEventValue(botId, "rtg_lfg_login_at", 0, 0);
-						currentBots.remove(botId);
-						rtgStaleQueueBots.push_back(botGuid);
-						continue;
-					}
-				}
-
 				SetEventValue(botId, "rtg_lfg_pending", 1, 15, addData);
 				continue;
 			}
@@ -2832,7 +2886,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 if (uint32(IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE) != team)
                     continue;
-                if (RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass) != desiredRole)
+                if (!RTG_OfflineSpecCanPerformRole(charInfo.guid, charInfo.rClass, desiredRole))
                     continue;
                 if (isQueueHelperBlocked(charInfo))
                     continue;
@@ -3398,7 +3452,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
                     if (charTeam != bucket.team)
                         continue;
-                    if (RTG_GetOfflineSpecRole(charInfo.guid, charInfo.rClass) != desiredRole)
+                    if (!RTG_OfflineSpecCanPerformRole(charInfo.guid, charInfo.rClass, desiredRole))
                         continue;
                     if (!tryLoginBot(charInfo, addData))
                         continue;
@@ -6143,23 +6197,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
-            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_login_at", NowSeconds(), 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
-
-            uint32 desiredRole = 0;
-            uint32 desiredOwner = 0;
-            if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
-            {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={} role={} owner={}",
-                    bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel(), desiredRole, desiredOwner));
-            }
-            else
-            {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={}",
-                    bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel()));
-            }
-
-            RTG_DispatchImmediateLfgQueueJoin(bot, "login_success");
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
@@ -6314,7 +6352,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     currentBots.remove(bot);
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
         RTG::RtgQueueLedger::Instance().Remove(bot);
-    RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN][FAIL] helper={} add='{}'", bot, addData));
+    RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN][FAIL] helper={} add='{}' reason={}", bot, addData, reason ? reason : "unknown"));
 }
 
 Player* RandomPlayerbotMgr::GetRandomPlayer()
