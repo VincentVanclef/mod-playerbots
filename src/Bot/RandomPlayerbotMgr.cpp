@@ -3244,11 +3244,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             if (std::find(currentBots.begin(), currentBots.end(), charInfo.guid) == currentBots.end())
                 currentBots.push_back(charInfo.guid);
 
-            if (std::find(availableBots.begin(), availableBots.end(), charInfo.guid) == availableBots.end())
-            {
-                availableBots.push_back(charInfo.guid);
-                ++availableBotCount;
-            }
 
             uint32 rtgTarget = GetEventValue(0, "rtg_target");
             if (sPlayerbotAIConfig.rtgEventDriven && rtgTarget < currentBots.size())
