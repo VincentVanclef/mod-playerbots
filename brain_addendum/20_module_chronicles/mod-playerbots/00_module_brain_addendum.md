@@ -574,3 +574,22 @@ RDF lifecycle is not just `join -> accept`. It is `join -> accept -> teleport ->
 - Added `rtg_lfg_teleport_sent` lifecycle state.
 - When helper is in LFG group / dungeon state but not yet on a dungeon map, manager now dispatches the teleport action instead of rejoining or idling.
 - Proposal lifecycle state is released only once helper is actually on a dungeon map.
+
+
+## 2026-03-24 — RDF acquire/dispatch same-cycle materialization correction
+
+### Problem surface
+RDF helper acquisition could emit the correct number of `[RTG][ACQUIRE][REQUEST]` lines, but only a smaller subset would receive `[RTG][DISPATCH][ADD]` and login on that same pass. The remainder would sit as pending add-data and later age into dispatch stall, creating the false appearance that the last helper simply "would not log in."
+
+### Root cause
+`availableBots` was snapshotted from `currentBots` before the event-driven RDF acquire pass. Newly acquired helpers updated `add` state and queue metadata, but were not enrolled into the live `availableBots`/`currentBots` working set for the same update cycle. That left dispatch operating on a stale pre-acquire view.
+
+### Repair
+- newly acquired RTG queue helpers are now appended immediately to `currentBots` if absent
+- newly acquired RTG queue helpers are now appended immediately to the live `availableBots` working set if absent
+- `rtg_target` is raised to at least `currentBots.size()` in event-driven mode so the same-cycle working set is not silently clipped by a stale target from the previous pass
+
+### Expected runtime benefit
+- RDF helper requests and dispatch/login now stay in the same control cycle much more reliably
+- fewer false `DISPATCH][STALL]` cases for the last helper in a fresh RDF lane
+- less misleading follow-on acquisition pressure caused by stale pre-acquire dispatch views

@@ -3241,6 +3241,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE][REQUEST] helper={} account={} add='{}'", charInfo.guid, charInfo.accountId, addData));
             }
 
+            if (std::find(currentBots.begin(), currentBots.end(), charInfo.guid) == currentBots.end())
+                currentBots.push_back(charInfo.guid);
+
+            if (std::find(availableBots.begin(), availableBots.end(), charInfo.guid) == availableBots.end())
+            {
+                availableBots.push_back(charInfo.guid);
+                ++availableBotCount;
+            }
+
+            uint32 rtgTarget = GetEventValue(0, "rtg_target");
+            if (sPlayerbotAIConfig.rtgEventDriven && rtgTarget < currentBots.size())
+                SetEventValue(0, "rtg_target", static_cast<uint32>(currentBots.size()), std::max<uint32>(30u, sPlayerbotAIConfig.rtgQueueGraceSeconds + 120));
+
             busyAccountIds.insert(charInfo.accountId);
 
             return true;
