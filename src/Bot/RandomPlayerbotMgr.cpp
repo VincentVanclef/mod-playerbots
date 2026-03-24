@@ -287,7 +287,7 @@ namespace
             return false;
 
         lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
-		if (state != lfg::LFG_STATE_NONE)
+        if (state != lfg::LFG_STATE_NONE)
             return true;
 
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
@@ -301,12 +301,27 @@ namespace
         if (!queued)
         {
             std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
-            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
+
+            // Hard-fail the helper slot immediately. A bot that cannot materialize into
+            // LFG queue state must stop consuming RDF slot/account pressure before any
+            // replacement acquisition happens.
+            if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                RTG::RtgQueueLedger::Instance().Release(botId, "rtg_lfg_join_failed");
+
+            sRandomPlayerbotMgr.RTG_ClearQueueHelperState(botId, false);
             sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_login_at", 0, 0);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
             sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_join_fail_cd", 1, 20, addData);
+            sRandomPlayerbotMgr.currentBots.remove(botId);
+
             LOG_INFO("playerbots", "[RTG][RDF][FAIL] helper={} owner={} reason=join_failed_immediate desiredRole={} state={} grouped={}",
                 botId, ownerGuid, desiredRole, uint32(state), bot->GetGroup() ? 1u : 0u);
-            sRandomPlayerbotMgr.RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_join_failed");
+
+            RTG_PrepareBotForLogout(bot);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "logout", 1, 60, addData);
+            sRandomPlayerbotMgr.LogoutPlayerBot(bot->GetGUID());
         }
 
         return queued;
