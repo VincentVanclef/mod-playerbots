@@ -204,17 +204,22 @@ uint32 LfgJoinAction::GetRoles()
                 return actualRole;
             }
 
+            if (!RTG::ActualSpecCanPerformRole(bot, desiredRole))
+            {
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=runtime_incompatible_usingActualRole", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                return actualRole;
+            }
+
             if (desiredRole != actualRole)
             {
-                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=runtime_mismatch_usingActualRole", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
-                return actualRole;
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=planner_role_override", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
             }
             else if (RTG_LfgDebugEnabled())
             {
                 LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=aligned", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
             }
 
-            return actualRole;
+            return desiredRole;
         }
     }
 

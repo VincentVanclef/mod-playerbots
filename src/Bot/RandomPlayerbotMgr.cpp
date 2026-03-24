@@ -276,6 +276,42 @@ namespace
         return queued;
     }
 
+
+    static bool RTG_DispatchImmediateLfgQueueJoin(Player* bot, uint32 desiredRole, uint32 ownerGuid, char const* reason)
+    {
+        if (!bot)
+            return false;
+
+        uint32 botId = bot->GetGUID().GetCounter();
+        if (bot->InBattleground() || bot->InArena() || bot->IsBeingTeleported())
+            return false;
+
+        LfgState state = sLFGMgr->GetState(bot->GetGUID());
+        if (state != LFG_STATE_NONE)
+            return true;
+
+        PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+        if (!botAI)
+            return false;
+
+        bool queued = botAI->DoSpecificAction("lfg join", Event(), true);
+        RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][DISPATCH] helper={} lane=rdf reason={} result={}",
+            botId, reason ? reason : "rtg", queued ? 1 : 0));
+
+        if (!queued)
+        {
+            std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_login_at", 0, 0);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_join_fail_cd", 1, 20, addData);
+            LOG_INFO("playerbots", "[RTG][RDF][FAIL] helper={} owner={} reason=join_failed_immediate desiredRole={} state={} grouped={}",
+                botId, ownerGuid, desiredRole, uint32(state), bot->GetGroup() ? 1u : 0u);
+            sRandomPlayerbotMgr.RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_join_failed");
+        }
+
+        return queued;
+    }
+
     static bool RTG_IsQueueSupervisorEvent(std::string const& event)
     {
         return event == "add" || event == "logout" || RTG::HasPrefix(event, "rtg_");
@@ -2860,6 +2896,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             return busyAccountIds.find(charInfo.accountId) != busyAccountIds.end() ||
                 GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "logout") ||
+                GetEventValue(charInfo.guid, "rtg_lfg_join_fail_cd") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
                 (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT);
@@ -6182,8 +6219,10 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         uint32 desiredTeam = 0;
         uint32 desiredLevel = 0;
         uint32 desiredQueueType = 0;
+        uint32 desiredRole = 0;
+        uint32 desiredOwner = 0;
 
-        if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel))
+        if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
         {
             if (desiredLevel && bot->GetLevel() != desiredLevel)
             {
@@ -6197,7 +6236,12 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_login_at", uint32(GameTime::GetGameTime().count()), 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
+
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={} role={} owner={}",
+                bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel(), desiredRole, desiredOwner));
+            RTG_DispatchImmediateLfgQueueJoin(bot, desiredRole, desiredOwner, "login_success");
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {

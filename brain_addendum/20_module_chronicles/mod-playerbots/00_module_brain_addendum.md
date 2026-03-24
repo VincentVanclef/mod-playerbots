@@ -306,3 +306,15 @@ For RTG RDF, fairness must be evaluated at the owner lane level, not just per-he
 - **Regression:** None intended; rigid specs continue to map to their single compatible role.
 - **Next Investigation:** If a hybrid spec still fails to join under the assigned role, inspect whether the client role-mask packet is being overridden after join submission rather than role-resolution rejecting it.
 - **Status:** Applied.
+
+## Chapter 26 — RDF Join-Failure Hard Recycle + Planner Role Authority
+- **Date:** 2026-03-24
+- **Subsystem:** RTG Queue System / RDF Login Materialization
+- **Context:** Live RDF tests still showed one helper logging in but not actually entering queue participation, followed by replacement acquire attempts and misleading account-pressure messages.
+- **Situation:** A queue-managed helper could log in successfully, fail the immediate `lfg join` attempt, and still occupy lane ownership long enough for the planner to request additional helpers. Hybrid specs could also submit their default role instead of the planner-assigned role even when the spec was compatible with the assigned role.
+- **Hypothesis:** Two remaining seams existed: (1) `login_success result=0` was not treated as a hard failure, and (2) RDF join role-mask generation still preferred actual role over planner-assigned compatible role for hybrid specs.
+- **Experiments:** Added immediate RDF join dispatch on helper login, added hard recycle/logout on immediate join failure with a short retry cooldown, skipped recently failed helpers during acquire, and changed `LfgJoinAction::GetRoles()` to return the planner-assigned role whenever the live spec can legitimately perform that role.
+- **Findings:** RTG RDF must treat failed immediate join as slot invalidation, not a soft retry. Also, spec determines capability while planner determines assigned lane role; hybrid specs like feral druid need planner role authority to prevent dual-tank/dual-dps drift.
+- **Regression:** None intended; incompatible specs still fall back to actual role and are rejected later by compatibility guards.
+- **Next Investigation:** If a logged-in helper still fails to materialize after these changes, inspect server-side LFG state mutation immediately after `CMSG_LFG_JOIN` submission rather than selection/role resolution.
+- **Status:** Applied.
