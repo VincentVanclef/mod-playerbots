@@ -539,38 +539,21 @@ bool LfgAcceptAction::Execute(Event event)
     }
 
     // If we get the proposal packet, cache the proposal id immediately and accept.
-    // AzerothCore 3.3.5a encodes SMSG_LFG_PROPOSAL_UPDATE as:
-    // dungeonEntry(uint32), state(uint8), proposalId(uint32), encounters(uint32), silent(uint8), groupSize(uint8), ...
-    // The proposal id is NOT the leading uint32.
+    // In 3.3.5a the proposal id is the leading uint32 in SMSG_LFG_PROPOSAL_UPDATE.
     if (!event.getPacket().empty())
     {
         WorldPacket p(event.getPacket());
-        if (p.size() < (sizeof(uint32) + sizeof(uint8) + sizeof(uint32) + sizeof(uint32) + sizeof(uint8) + sizeof(uint8)))
+        if (p.rpos() + sizeof(uint32) > p.size())
             return false;
 
-        uint32 dungeonEntry = 0;
-        uint8 proposalState = 0;
-        uint32 proposalId = 0;
-        uint32 encounters = 0;
-        uint8 silent = 0;
-        uint8 groupSize = 0;
-
         p.rpos(0);
-        p >> dungeonEntry;
-        p >> proposalState;
-        p >> proposalId;
-        p >> encounters;
-        p >> silent;
-        p >> groupSize;
-
-        id = proposalId;
+        p >> id;
         botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(id);
 
         if (RTG_LfgDebugEnabled())
-            LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} dungeonEntry={} proposal={} state={} silent={} groupSize={} bytes={}",
-                bot->GetGUID().GetCounter(), dungeonEntry, id, uint32(proposalState), uint32(silent), uint32(groupSize), p.size());
+            LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} proposal={} bytes={}", bot->GetGUID().GetCounter(), id, p.size());
 
-        if (id && proposalState == lfg::LFG_PROPOSAL_INITIATING)
+        if (id)
         {
             if (!RTG_IsQueuedLfgBot(bot) && (bot->IsInCombat() || bot->isDead()))
             {

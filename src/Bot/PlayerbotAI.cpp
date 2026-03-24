@@ -1083,23 +1083,11 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
         case SMSG_LFG_PROPOSAL_UPDATE:
         {
             WorldPacket p(packet);
-            if (p.size() >= (sizeof(uint32) + sizeof(uint8) + sizeof(uint32) + sizeof(uint32) + sizeof(uint8) + sizeof(uint8)))
+            if (p.rpos() + sizeof(uint32) <= p.size())
             {
-                uint32 dungeonEntry = 0;
-                uint8 proposalState = 0;
                 uint32 proposalId = 0;
-                uint32 encounters = 0;
-                uint8 silent = 0;
-                uint8 groupSize = 0;
-
                 p.rpos(0);
-                p >> dungeonEntry;
-                p >> proposalState;
                 p >> proposalId;
-                p >> encounters;
-                p >> silent;
-                p >> groupSize;
-
                 if (proposalId)
                 {
                     aiObjectContext->GetValue<uint32>("lfg proposal")->Set(proposalId);
@@ -1108,26 +1096,23 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
                     std::string addData = sRandomPlayerbotMgr.GetEventData(botId, "add");
                     if (addData.rfind("rtg_lfg:", 0) == 0)
                     {
-                        LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} dungeonEntry={} proposal={} state={} silent={} groupSize={} source=packet_cache bytes={}",
-                                 botId, dungeonEntry, proposalId, uint32(proposalState), uint32(silent), uint32(groupSize), p.size());
+                        LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} proposal={} source=packet_cache bytes={}",
+                                 botId, proposalId, p.size());
 
-                        if (proposalState == lfg::LFG_PROPOSAL_INITIATING)
-                        {
-                            bot->CombatStop(true);
-                            bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+                        bot->CombatStop(true);
+                        bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
-                            uint32 nowTs = uint32(time(nullptr));
-                            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
-                            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", nowTs, 90, addData);
-                            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+                        uint32 nowTs = uint32(time(nullptr));
+                        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
+                        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", nowTs, 90, addData);
+                        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
 
-                            WorldPacket* acceptPacket = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
-                            *acceptPacket << proposalId << true;
-                            bot->GetSession()->QueuePacket(acceptPacket);
+                        WorldPacket* acceptPacket = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
+                        *acceptPacket << proposalId << true;
+                        bot->GetSession()->QueuePacket(acceptPacket);
 
-                            LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=packet_direct",
-                                     botId, proposalId);
-                        }
+                        LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=packet_direct",
+                                 botId, proposalId);
                     }
                 }
             }
