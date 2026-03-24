@@ -344,3 +344,16 @@ For RTG RDF, fairness must be evaluated at the owner lane level, not just per-he
 - **Regression:** None intended; teleport attempts are gated by proposal/accept state and suppressed once the bot is already inside a dungeon.
 - **Next Investigation:** If a helper still fails to enter after deterministic teleport attempts, inspect whether the specific group/leader state expected by the core LFG teleport path differs from current RTG helper group composition.
 - **Status:** Integrated.
+
+
+## Chapter 12 - RDF Finalization Button-Path Audit
+- Date: 2026-03-24
+- Subsystem: RTG Queue System / RDF finalization
+- Context: Bots were queueing correctly, reaching accepted proposal state, and manager-side teleport attempts were firing, but all attempts showed `grouped=0`. Screenshots confirmed the ready dialog was visible and the intended action was the normal `Enter Dungeon` path.
+- Situation: The RTG manager was still trying to drive the final step too early. Bots were not yet inside an actual LFG group when `lfg teleport` was attempted, so the last-mile path could not succeed even though queue and proposal stages had already completed.
+- Hypothesis: The clean separation is to let RTG own getting helpers into RDF-ready state and let the core-ready-dialog path own the final enter transition. Manager-side finalization should therefore wait for real LFG grouping before attempting the normal enter-dungeon packet path.
+- Experiments: Tightened the manager-side finalization gate so proposal-latched bots only attempt `lfg teleport` after `bot->GetGroup()` exists and `group->isLFGGroup()` is true. Added `[RTG][RDF][WAIT_GROUP]` breadcrumbs and made `LfgTeleportAction` return false for queued RDF helpers that are not yet in an actual LFG group.
+- Findings: The prior implementation was over-eager and converted accepted proposal state into repeated teleport attempts even when group formation had not completed. That created noisy `result=1` breadcrumbs with `grouped=0`, obscuring the real blocker.
+- Regression: None intended; this pass removes premature finalization attempts instead of broadening behavior.
+- Next Investigation: If bots still fail after this pass, inspect the exact core-side ready-dialog handler path used by the Enter Dungeon button and mirror that handler/opcode path directly rather than relying on generic teleport semantics.
+- Status: In progress.

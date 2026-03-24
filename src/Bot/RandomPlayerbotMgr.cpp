@@ -1834,13 +1834,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			{
 				if (!bot->IsBeingTeleported() && !bot->HasUnitState(UNIT_STATE_IN_FLIGHT) && !bot->IsInCombat())
 				{
-					bool shouldTeleport = false;
-					if (Group* lfgGroup = bot->GetGroup())
-						shouldTeleport = lfgGroup->isLFGGroup();
-					else if (botState != lfg::LFG_STATE_NONE)
-						shouldTeleport = true;
+					Group* lfgGroup = bot->GetGroup();
+					bool groupedForLfg = lfgGroup && lfgGroup->isLFGGroup();
 
-					if (shouldTeleport && !teleportSent)
+					if (groupedForLfg && !teleportSent)
 					{
 						PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
 						if (botAI)
@@ -1849,15 +1846,21 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 							if (teleported)
 							{
 								SetEventValue(botId, "rtg_lfg_teleport_sent", 1, 20, addData);
-								RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} grouped={} state={} result=1",
-									botId, desiredOwner, bot->GetGroup() ? 1 : 0, uint32(botState)));
+								RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} grouped=1 state={} result=1",
+									botId, desiredOwner, uint32(botState)));
 							}
 							else
 							{
-								RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} grouped={} state={} result=0",
-									botId, desiredOwner, bot->GetGroup() ? 1 : 0, uint32(botState)));
+								RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][TELEPORT] helper={} owner={} grouped=1 state={} result=0",
+									botId, desiredOwner, uint32(botState)));
 							}
 						}
+					}
+					else if (!groupedForLfg)
+					{
+						SetEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+						RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][WAIT_GROUP] helper={} owner={} grouped=0 state={}",
+							botId, desiredOwner, uint32(botState)));
 					}
 				}
 

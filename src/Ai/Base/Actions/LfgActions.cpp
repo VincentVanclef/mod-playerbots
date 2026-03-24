@@ -620,7 +620,18 @@ bool LfgTeleportAction::Execute(Event event)
     }
 
     if (RTG_IsQueuedLfgBot(bot))
+    {
         out = false;
+
+        Group* group = bot->GetGroup();
+        lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
+        if (!group || !group->isLFGGroup())
+        {
+            LOG_INFO("playerbots", "[RTG][RDF][WAIT_GROUP] helper={} grouped=0 state={}",
+                     bot->GetGUID().GetCounter(), uint32(state));
+            return false;
+        }
+    }
 
     bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
