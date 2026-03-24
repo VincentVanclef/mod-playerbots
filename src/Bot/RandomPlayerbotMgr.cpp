@@ -1787,9 +1787,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			{
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				SetEventValue(botId, "rtg_lfg_accept_pump", 0, 0);
 				SetEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
 				SetEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
 				SetEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+				SetEventValue(botId, "rtg_lfg_accept_pump", 0, 0);
 				continue;
 			}
 
@@ -1813,6 +1815,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				SetEventValue(botId, "rtg_lfg_accept_pump", 0, 0);
 				continue;
 			}
 
@@ -1820,6 +1823,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			{
 				SetEventValue(botId, "add", 0, 0);
 				SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+				SetEventValue(botId, "rtg_lfg_accept_pump", 0, 0);
 				currentBots.remove(botId);
 				rtgStaleQueueBots.push_back(botGuid);
 				continue;
@@ -1837,7 +1841,22 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 					Group* lfgGroup = bot->GetGroup();
 					bool groupedForLfg = lfgGroup && lfgGroup->isLFGGroup();
 
-					if (groupedForLfg && !teleportSent)
+					if (!groupedForLfg && proposalLock)
+					{
+						uint32 acceptPumpAt = GetEventValue(botId, "rtg_lfg_accept_pump");
+						uint32 nowTs = NowSeconds();
+						if (!acceptPumpAt || nowTs >= acceptPumpAt)
+						{
+							sLFGMgr->UpdateProposal(proposalLock, bot->GetGUID(), true);
+							SetEventValue(botId, "rtg_lfg_accept_pump", nowTs + 2, 10, addData);
+							RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FORCE_ACCEPT] helper={} owner={} proposal={} grouped=0 state={}",
+								botId, desiredOwner, proposalLock, uint32(botState)));
+						}
+						SetEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+						RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][WAIT_GROUP] helper={} owner={} grouped=0 state={}",
+							botId, desiredOwner, uint32(botState)));
+					}
+					else if (groupedForLfg && !teleportSent)
 					{
 						PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
 						if (botAI)
@@ -1855,12 +1874,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 									botId, desiredOwner, uint32(botState)));
 							}
 						}
-					}
-					else if (!groupedForLfg)
-					{
-						SetEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
-						RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][WAIT_GROUP] helper={} owner={} grouped=0 state={}",
-							botId, desiredOwner, uint32(botState)));
 					}
 				}
 

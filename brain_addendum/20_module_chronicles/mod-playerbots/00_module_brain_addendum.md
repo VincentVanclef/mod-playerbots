@@ -357,3 +357,15 @@ For RTG RDF, fairness must be evaluated at the owner lane level, not just per-he
 - Regression: None intended; this pass removes premature finalization attempts instead of broadening behavior.
 - Next Investigation: If bots still fail after this pass, inspect the exact core-side ready-dialog handler path used by the Enter Dungeon button and mirror that handler/opcode path directly rather than relying on generic teleport semantics.
 - Status: In progress.
+
+## Chapter 44 — RDF Core-Side Proposal Finalization Pump
+- **Date:** 2026-03-24
+- **Subsystem:** RTG RDF Queue Finalization / Core LFG Integration
+- **Context:** Live queue tests proved helpers were acquiring, dispatching, logging in, and reaching proposal/ready-dialog state, but they never formed a real LFG group. Logs showed endless `[RTG][RDF][WAIT_GROUP]` with `grouped=0`, first in state `3` and then degrading to `0/2`, followed by healer replacement churn and false account-pressure symptoms.
+- **Situation:** The manager-side RDF logic had been waiting for a real LFG group before doing the final step, but nothing in the queue system was actually driving the core-side proposal resolution path once the proposal was latched. The queue system owned readiness, but it was not invoking the core handler that finalizes proposal acceptance/group formation.
+- **Hypothesis:** Queuing `CMSG_LFG_PROPOSAL_RESULT` through bot AI was not sufficient or not reliably consumed for all queued helpers in the ready-dialog phase. The RTG manager needed an explicit core-side accept pump using `LFGMgr::UpdateProposal(proposalId, guid, true)` while the helper remained ungrouped.
+- **Experiments:** Audited the queued-helper maintenance loop and replaced the passive `WAIT_GROUP` hold with a proposal-latched core accept pump. While `rtg_lfg_proposal_lock` is set and the helper is still not inside an LFG group, the manager now periodically calls `sLFGMgr->UpdateProposal(...)` directly, records `rtg_lfg_accept_pump`, and logs `[RTG][RDF][FORCE_ACCEPT]` before continuing to wait for real grouping.
+- **Findings:** The missing seam was not teleport timing anymore; it was the absence of a deterministic core-side proposal-finalization step after the queue system reached RDF-ready state. This pass re-establishes the correct separation: RTG queue ownership gets helpers to ready state, and the core LFG manager owns the final proposal/group build.
+- **Regression:** None intended. The accept pump is throttled and only active while proposal lock exists and the helper is still not grouped.
+- **Next Investigation:** If grouping still fails after this pass, the next narrow seam is whether the stored proposal id ever becomes stale/incorrect for some helpers, requiring a direct inspection of how proposal ids are cached per helper.
+- **Status:** In progress.
