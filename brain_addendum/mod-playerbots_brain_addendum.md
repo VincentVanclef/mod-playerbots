@@ -255,3 +255,73 @@ This pass therefore tightens the authority boundary instead of broadening queue 
 - Confirmed acquire-side phase mapping had drifted away from planner truth. This was a quiet multi-queue bug because wrong phase ordering/suppression can make one lane appear “dominant” while others remain starved.
 - Confirmed one shared-surplus RDF suppression guard still existed despite prior starvation-recovery intent.
 - Repaired all three surgically and expanded breadcrumbs only at the proving surfaces: RDF join/accept/fail, BG multi-queue/assign, Arena form/pop, and generic dispatch success/failure reasons.
+
+## 2026-03-24 — RDF proposal acceptance owner-seam correction: proposal id parsing fixed at the true core packet layout
+
+### Runtime symptom that triggered this pass
+Live RDF tests reached the Dungeon Finder ready dialog, but queued helpers still failed to complete the final proposal-confirmation path reliably. The visible effect matched the screenshots and logs:
+- helpers acquired and logged in
+- helpers joined RDF
+- the ready dialog appeared
+- one or more members still timed out or declined
+- RTG then over-reacted with more helper pressure even though the real break was still inside proposal confirmation
+
+### Incorrect assumption that had to be removed
+Previous RTG/playerbot logic was acting as if the first `uint32` inside `SMSG_LFG_PROPOSAL_UPDATE` was the proposal id.
+
+That assumption was false for AzerothCore 3.3.5a.
+
+Core-side packet layout in `WorldSession::SendLfgUpdateProposal(...)` is:
+- `dungeonEntry` (`uint32`)
+- `proposal.state` (`uint8`)
+- `proposal.id` (`uint32`)
+- `proposal.encounters` (`uint32`)
+- `silent` (`uint8`)
+- `groupSize` (`uint8`)
+- per-player answer payload
+
+So the bot acceptance path was often sending `CMSG_LFG_PROPOSAL_RESULT` with the **dungeon entry** in the proposal-id slot instead of the real `proposal.id`.
+
+### Why that breaks the real owner seam
+Core `WorldSession::HandleLfgProposalResultOpcode(...)` forwards the received proposal id directly into:
+- `sLFGMgr->UpdateProposal(proposalId, GetPlayer()->GetGUID(), accept);`
+
+If the wrong proposal id is sent, `LFGMgr::UpdateProposal(...)` does not update the intended proposal member state, so the bot never truly confirms the real ready dialog. From RTG's perspective the helper looked present, but from core LFG's perspective the proposal was still unresolved.
+
+### Manual repair performed
+Two narrow, owner-seam corrections were applied:
+- `src/Ai/Base/Actions/LfgActions.cpp`
+- `src/Bot/PlayerbotAI.cpp`
+
+Both packet consumers now parse `SMSG_LFG_PROPOSAL_UPDATE` using the real AzerothCore field order and extract the proposal id from the correct offset.
+
+Additional tightening:
+- direct acceptance is now gated to `LFG_PROPOSAL_INITIATING`
+- diagnostic logs now emit `dungeonEntry`, `proposal`, `state`, `silent`, and `groupSize` so future proof passes can see the actual core-side proposal surface
+
+### Real owner seam recorded for future GPT sessions
+RTG/playerbots may:
+- observe proposal packets
+- cache the real `proposal.id`
+- send `CMSG_LFG_PROPOSAL_RESULT` with that exact id
+
+Core LFG must remain the owner of:
+- proposal resolution
+- `LFG_STATE_DUNGEON` transition
+- final group materialization
+- RDF teleport lifecycle
+
+The fix therefore stays at the packet/owner seam and does **not** invent teleport or fake-finalization workarounds.
+
+### Proof signals that should confirm the fix
+Expected next-test evidence:
+- `[RTGDBG][LFGPROPOSAL]` logs show distinct `dungeonEntry` and `proposal`
+- `[RTG][RDF][ACCEPT]` uses the real proposal id
+- helpers stop timing out at the ready dialog
+- group transitions to actual LFG group / `LFG_STATE_DUNGEON`
+- no extra helper-acquire spiral triggered solely by unresolved proposal confirmation
+
+### Files changed in this pass
+- `src/Ai/Base/Actions/LfgActions.cpp`
+- `src/Bot/PlayerbotAI.cpp`
+- `brain_addendum/mod-playerbots_brain_addendum.md`
