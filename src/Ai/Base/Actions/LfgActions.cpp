@@ -173,6 +173,38 @@ namespace
         bot->RemoveAura(71041);
         bot->RemoveAura(71328);
     }
+
+    struct RTG_LfgProposalPacketData
+    {
+        uint32 dungeonEntry = 0;
+        uint8 state = 0;
+        uint32 proposalId = 0;
+        uint32 encounters = 0;
+        uint8 silent = 0;
+        uint8 groupSize = 0;
+    };
+
+    static bool RTG_ParseProposalPacket(WorldPacket const& source, RTG_LfgProposalPacketData& data)
+    {
+        if (source.size() < (sizeof(uint32) + sizeof(uint8) + sizeof(uint32) + sizeof(uint32) + sizeof(uint8) + sizeof(uint8)))
+            return false;
+
+        WorldPacket p(source);
+        p.rpos(0);
+        p >> data.dungeonEntry;
+        p >> data.state;
+        p >> data.proposalId;
+        p >> data.encounters;
+        p >> data.silent;
+        p >> data.groupSize;
+        return true;
+    }
+
+    static uint32 RTG_GetAcceptedProposal(Player* bot)
+    {
+        return bot ? sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_accept_proposal") : 0;
+    }
+
 }
 
 bool LfgJoinAction::Execute(Event event) { return JoinLFG(); }
@@ -490,107 +522,107 @@ bool LfgRoleCheckAction::Execute(Event event)
 
 bool LfgAcceptAction::Execute(Event event)
 {
+    uint32 botId = bot->GetGUID().GetCounter();
+    bool queuedLfgBot = RTG_IsQueuedLfgBot(bot);
     uint32 id = AI_VALUE(uint32, "lfg proposal");
+
+    auto clearStoredProposal = [&]()
+    {
+        botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
+    };
+
+    auto clearQueuedProposalLifecycle = [&]()
+    {
+        if (!queuedLfgBot)
+            return;
+
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", 0, 0, addData);
+    };
 
     auto markQueuedProposalAccepted = [&](uint32 proposalId)
     {
-        uint32 botId = bot->GetGUID().GetCounter();
         std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
         uint32 nowTs = uint32(time(nullptr));
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", nowTs, 90, addData);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", proposalId, 120, addData);
     };
 
-    // Try accept if already stored
-    if (id)
+    RTG_LfgProposalPacketData packetData;
+    bool havePacket = !event.getPacket().empty() && RTG_ParseProposalPacket(event.getPacket(), packetData);
+    if (havePacket)
     {
-        if (!RTG_IsQueuedLfgBot(bot) && (bot->IsInCombat() || bot->isDead()))
-        {
-            WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
-            *packet << id << false;
-            bot->GetSession()->QueuePacket(packet);
-            return true;
-        }
-        if (RTG_IsQueuedLfgBot(bot))
-        {
-            bot->CombatStop(true);
-            LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=stored", bot->GetGUID().GetCounter(), id);
-            markQueuedProposalAccepted(id);
-        }
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} dungeonEntry={} proposal={} state={} silent={} groupSize={} bytes={}",
+                botId, packetData.dungeonEntry, packetData.proposalId, uint32(packetData.state),
+                uint32(packetData.silent), uint32(packetData.groupSize), event.getPacket().size());
 
-        bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+        if (packetData.state == uint8(lfg::LFG_PROPOSAL_INITIATING) && packetData.proposalId)
+        {
+            id = packetData.proposalId;
+            botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(id);
+        }
+        else
+        {
+            clearStoredProposal();
 
+            if (queuedLfgBot && packetData.state == uint8(lfg::LFG_PROPOSAL_FAILED))
+                clearQueuedProposalLifecycle();
+
+            return false;
+        }
+    }
+
+    if (!id)
+        return false;
+
+    if (queuedLfgBot && RTG_GetAcceptedProposal(bot) == id)
+    {
+        if (RTG_LfgDebugEnabled())
+            LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL][SUPPRESS] bot={} proposal={} reason=already_accepted", botId, id);
+        return false;
+    }
+
+    if (!queuedLfgBot && (bot->IsInCombat() || bot->isDead()))
+    {
         WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
-        *packet << id << true;
+        *packet << id << false;
         bot->GetSession()->QueuePacket(packet);
-
-        if (RTG_IsQueuedLfgBot(bot))
-            return true;
-
-        botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
-        if (sRandomPlayerbotMgr.IsRandomBot(bot) && !bot->GetGroup())
-        {
-            sRandomPlayerbotMgr.Refresh(bot);
-            botAI->ResetStrategies();
-        }
-
-        botAI->Reset();
+        clearStoredProposal();
         return true;
     }
 
-    // If we get the proposal packet, cache the proposal id immediately and accept.
-    // In 3.3.5a the proposal id is the leading uint32 in SMSG_LFG_PROPOSAL_UPDATE.
-    if (!event.getPacket().empty())
+    if (queuedLfgBot)
     {
-        WorldPacket p(event.getPacket());
-        if (p.rpos() + sizeof(uint32) > p.size())
-            return false;
-
-        p.rpos(0);
-        p >> id;
-        botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(id);
-
-        if (RTG_LfgDebugEnabled())
-            LOG_INFO("playerbots", "[RTGDBG][LFGPROPOSAL] bot={} proposal={} bytes={}", bot->GetGUID().GetCounter(), id, p.size());
-
-        if (id)
-        {
-            if (!RTG_IsQueuedLfgBot(bot) && (bot->IsInCombat() || bot->isDead()))
-            {
-                WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
-                *packet << id << false;
-                bot->GetSession()->QueuePacket(packet);
-                return true;
-            }
-            if (RTG_IsQueuedLfgBot(bot))
-            {
-                bot->CombatStop(true);
-                LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source=packet", bot->GetGUID().GetCounter(), id);
-                markQueuedProposalAccepted(id);
-            }
-
-            bot->ClearUnitState(UNIT_STATE_ALL_STATE);
-
-            WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
-            *packet << id << true;
-            bot->GetSession()->QueuePacket(packet);
-
-            if (RTG_IsQueuedLfgBot(bot))
-                return true;
-
-            botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
-            if (sRandomPlayerbotMgr.IsRandomBot(bot) && !bot->GetGroup())
-            {
-                sRandomPlayerbotMgr.Refresh(bot);
-                botAI->ResetStrategies();
-            }
-
-            botAI->Reset();
-            return true;
-        }
+        bot->CombatStop(true);
+        LOG_INFO("playerbots", "[RTG][RDF][ACCEPT] helper={} proposal={} source={}",
+            botId, id, havePacket ? "packet" : "stored");
+        markQueuedProposalAccepted(id);
     }
 
-    return false;
+    bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+
+    WorldPacket* packet = new WorldPacket(CMSG_LFG_PROPOSAL_RESULT);
+    *packet << id << true;
+    bot->GetSession()->QueuePacket(packet);
+
+    if (queuedLfgBot)
+        return true;
+
+    clearStoredProposal();
+    if (sRandomPlayerbotMgr.IsRandomBot(bot) && !bot->GetGroup())
+    {
+        sRandomPlayerbotMgr.Refresh(bot);
+        botAI->ResetStrategies();
+    }
+
+    botAI->Reset();
+    return true;
 }
 
 bool LfgLeaveAction::Execute(Event event)

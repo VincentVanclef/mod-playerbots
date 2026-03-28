@@ -457,11 +457,13 @@ namespace
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_teleport_sent");
     }
 
+
     static void RTG_ClearProposalLifecycle(uint32 botId, Player* bot = nullptr)
     {
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", 0, 0);
         if (bot)
         {
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
@@ -1078,6 +1080,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
     SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
+    SetEventValue(bot, "rtg_lfg_accept_proposal", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -1678,7 +1681,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 if (!proposalLockId)
                     SetEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
-                // Packet-driven accept in PlayerbotAI owns the actual Enter Dungeon button path.
+                // Proposal packet updates populate AI state; one-shot acceptance is guarded in LfgAcceptAction.
                 continue;
             }
 
@@ -6710,6 +6713,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
     SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
+    SetEventValue(bot, "rtg_lfg_accept_proposal", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     currentBots.remove(bot);

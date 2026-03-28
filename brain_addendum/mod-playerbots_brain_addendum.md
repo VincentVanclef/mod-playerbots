@@ -255,3 +255,67 @@ This pass therefore tightens the authority boundary instead of broadening queue 
 - Confirmed acquire-side phase mapping had drifted away from planner truth. This was a quiet multi-queue bug because wrong phase ordering/suppression can make one lane appear “dominant” while others remain starved.
 - Confirmed one shared-surplus RDF suppression guard still existed despite prior starvation-recovery intent.
 - Repaired all three surgically and expanded breadcrumbs only at the proving surfaces: RDF join/accept/fail, BG multi-queue/assign, Arena form/pop, and generic dispatch success/failure reasons.
+
+## 2026-03-28 — RDF proposal loop containment and true final-dialog seam correction
+
+### Runtime failure that forced rollback
+The last RDF proposal patch had to be reverted after live testing showed a catastrophic repeat loop:
+- pressing the final Dungeon Finder ready/enter flow caused the same proposal-related packet path to fire repeatedly
+- player session traffic spiraled hard enough to destabilize worldserver
+- host pressure became large enough that the website/domain on the same machine also became unresponsive
+
+### What was assumed incorrectly
+Two assumptions were wrong at the same time:
+1. The proposal packet could be safely acted on immediately from the raw outgoing-packet hook.
+2. Repeated `SMSG_LFG_PROPOSAL_UPDATE` packets could be treated like fresh accept commands instead of proposal-state refreshes.
+
+Those assumptions created a dangerous architecture seam: packet observation and proposal consumption were happening in more than one place, with no one-shot guard per proposal id.
+
+### Real core-side owner seam
+AzerothCore LFG still owns proposal resolution. The bot layer should only:
+- parse/store the active proposal truth
+- send `CMSG_LFG_PROPOSAL_RESULT` once for a given proposal id while the proposal state is still `LFG_PROPOSAL_INITIATING`
+- then stand down until core advances proposal state
+
+That means proposal handling must be split cleanly:
+- `PlayerbotAI` packet hook = observe/cache state only
+- `LfgAcceptAction` = one guarded acceptance path only
+- RTG queue manager = wait/suppress replacement churn while proposal is unresolved
+
+### Manual repair applied in this pass
+- `PlayerbotAI.cpp`
+  - stopped directly sending `CMSG_LFG_PROPOSAL_RESULT` from the outgoing packet hook
+  - now parses the real packet layout (`dungeonEntry`, `state`, `proposalId`, `encounters`, `silent`, `groupSize`)
+  - caches proposal id only while state is `LFG_PROPOSAL_INITIATING`
+  - clears cached proposal state on non-initiating updates
+  - clears RTG proposal lifecycle markers on explicit proposal failure
+- `LfgActions.cpp`
+  - added safe manual parsing for `SMSG_LFG_PROPOSAL_UPDATE`
+  - moved acceptance to a single guarded path
+  - added `rtg_lfg_accept_proposal` marker so the same proposal id is only accepted once per helper
+  - suppresses repeated identical proposal updates instead of re-sending accept forever
+  - only accepts while proposal state is still `INITIATING`
+- `RandomPlayerbotMgr.cpp`
+  - queue helper lifecycle cleanup now also clears `rtg_lfg_accept_proposal`
+  - login-error / helper-state cleanup clears the same guard so stale helpers do not poison later proposals
+  - comment/doctrine updated so packet observation no longer pretends to own the Enter Dungeon button path
+
+### Why this is the safer architecture
+This pass does **not** broaden RTG ownership. It removes duplicate ownership.
+
+RTG should not press proposal accept from both the packet hook and the action layer. That double-surface is what made repeated proposal updates dangerous. By collapsing acceptance into one guarded action and leaving packet hook code as observer-only, repeated update packets become informational instead of destructive.
+
+### Proof signals required next
+A healthy live test should now show:
+- one `[RTG][RDF][ACCEPT]` per helper per proposal id
+- repeated `SMSG_LFG_PROPOSAL_UPDATE` lines may still appear, but they should produce only `[SUPPRESS]` breadcrumbs for already-handled proposal ids
+- no packet flood after the ready dialog appears
+- no host-wide overload when the final RDF dialog stage occurs
+- no extra helper acquisition while proposal is still actively resolving
+
+### Failure signals to watch for immediately
+Abort and rollback if any of the following reappear:
+- repeated accept lines for the same helper/proposal id
+- the same proposal packet logged continuously with no state change
+- worldserver CPU or log rate spikes immediately after proposal update / enter-dungeon stage
+- replacement helper acquisition beginning before proposal failure is explicit

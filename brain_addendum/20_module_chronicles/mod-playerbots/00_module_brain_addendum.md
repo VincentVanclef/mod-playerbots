@@ -593,3 +593,25 @@ RDF helper acquisition could emit the correct number of `[RTG][ACQUIRE][REQUEST]
 - RDF helper requests and dispatch/login now stay in the same control cycle much more reliably
 - fewer false `DISPATCH][STALL]` cases for the last helper in a fresh RDF lane
 - less misleading follow-on acquisition pressure caused by stale pre-acquire dispatch views
+
+## 2026-03-28 — RDF proposal loop containment and one-shot acceptance guard
+
+### Symptom that forced this pass
+A previous RDF proposal fix created a live repeat loop: entering the final Dungeon Finder stage caused the same proposal path to fire repeatedly, destabilizing worldserver and starving the colocated website stack.
+
+### Corrected owner seam
+- packet hook observes proposal state only
+- `LfgAcceptAction` owns the single guarded accept send
+- RTG manager waits while proposal is unresolved instead of guessing finalization
+
+### Manual changes
+- removed direct accept send from `PlayerbotAI` packet hook
+- parse real `SMSG_LFG_PROPOSAL_UPDATE` field order before acting
+- accept only while proposal state is `LFG_PROPOSAL_INITIATING`
+- added `rtg_lfg_accept_proposal` one-shot guard so helpers do not re-accept the same proposal id forever
+- helper cleanup/login-error cleanup now clears this guard too
+
+### Proof to demand next
+- exactly one accept per helper per proposal id
+- repeated proposal update packets only produce suppression/debug breadcrumbs
+- no packet flood, no host overload, no premature replacement acquisition
