@@ -705,3 +705,42 @@ This pass does **not** open the floodgates for every hybrid spec to multi-queue.
 - a feral helper already in a valid feral spec should **not** be forcibly respecced to balance merely because the current request is DPS
 - join logs for the feral helper should show `roleMask=10` and role text `TANK/DPS`
 - no regression in healer-only specs or strict single-role specs
+
+## 2026-03-28 — RDF transition protection, stale-instance recovery, and immediate proposal consumption
+
+### Live findings that drove this pass
+- RDF proposal safety held and no longer flooded the server, but helpers still showed three practical failure modes:
+  - LFG groups could form and then some helpers would still fail to enter, after which they appeared to leave party or disappear from the run.
+  - Some helpers were being re-selected while still physically sitting inside an old dungeon map from a prior run, which made them look available to RTG even though they could not actually queue.
+  - Proposal acceptance still felt sluggish in live testing even when the ready dialog was valid and safe to consume.
+- The new logs also showed a false regression seam after `rdf_teleport` success:
+  - helpers reached `group_ready`
+  - then later emitted `WAIT_READY` / `proposal_not_resolved`
+  - then rejoined as though proposal had never advanced
+- Repeated `join_dispatch_failed ... dead=1` lines proved that dead helpers could keep getting shoved back through RDF join attempts instead of being recovered first.
+
+### Incorrect assumptions corrected
+1. We had an RTG group-dissolve policy that only considered an LFG group "allowed" once the helper was already inside an instance map. That is too strict for the real RDF transition window because a healthy LFG group can exist briefly outside the map while the core-side enter-dungeon handoff is still resolving.
+2. We were still carrying proposal-accept markers forward even after the helper had already reached the later `group_ready` / teleport stage. That let an already-advanced helper get misclassified later as `proposal_not_resolved`.
+3. We were treating old-dungeon sitters and dead helpers as ordinary queue candidates, which allowed repeated queue churn instead of recovery.
+4. We were relying too heavily on packet-trigger timing for accept, even though the manager already had safe one-shot guards and could consume a visible proposal immediately once cached.
+
+### Manual repair applied
+- `RandomPlayerbotMgr.cpp`
+  - added `RTG_HasActiveLfgTransitionState()` so RTG recognizes an active RDF transition window using proposal, teleport, pending, and dungeon-active markers
+  - relaxed the anti-group policy for LFG groups outside the dungeon map **only** while that transition window is active, preventing helpers from being forced out of a healthy RDF party during the last-mile handoff
+  - added `RTG_ClearProposalAcceptState()` so proposal-lock / accept markers are cleared as soon as a helper reaches `groupReadyForTeleport`, preventing later false `proposal_not_resolved` failure on an already-advanced helper
+  - added `RTG_RecoverQueuedDungeonHelper()` to manually recover stale helpers before requeue:
+    - resurrect dead helper if needed
+    - clear combat/unit state
+    - leave non-LFG groups if stuck in one
+    - call `TeleportToEntryPoint()` when the helper is still sitting inside an old instance map
+  - added a bounded fast path so when manager sees a cached live proposal id and no accept has been sent yet, it immediately calls the guarded `lfg accept` action (`reason=proposal_visible`) instead of waiting around for slower ambient action cadence
+  - dead or stale-instance helpers are now recovered first and **not** pushed straight back into join dispatch the same tick
+
+### Proof signals required next
+- no helpers should silently leave or lose party simply because they are in an LFG group outside the map for a short transition window
+- after `rdf_teleport reason=group_ready`, the same helper should **not** later fall back into `proposal_not_resolved` for that same advanced transition
+- stale old-dungeon helpers should log `[RTG][RDF][RECOVER] ... reason=stale_instance` instead of waiting forever unavailable inside an old instance map
+- dead helpers should log `[RTG][RDF][RECOVER] ... reason=dead_before_join` and stop spamming repeated `join_dispatch_failed ... dead=1`
+- proposal acceptance should occur faster, with manager-side success breadcrumbs like `lane=rdf_accept reason=proposal_visible`, but still no packet storm

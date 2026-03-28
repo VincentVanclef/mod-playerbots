@@ -480,6 +480,70 @@ namespace
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_group_ready_since");
     }
 
+    static bool RTG_HasActiveLfgTransitionState(uint32 botId)
+    {
+        return RTG_GetProposalLock(botId) ||
+               RTG_GetProposalAcceptSentAt(botId) ||
+               RTG_GetTeleportSentAt(botId) ||
+               RTG_GetTeleportAttempts(botId) ||
+               RTG_GetGroupReadySince(botId) ||
+               sRandomPlayerbotMgr.GetEventValue(botId, "rtg_lfg_pending") ||
+               sRandomPlayerbotMgr.GetEventValue(botId, "rtg_dungeon_active");
+    }
+
+    static void RTG_ClearProposalAcceptState(uint32 botId, std::string const& addData = "")
+    {
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", 0, 0, addData);
+
+        if (Player* bot = ObjectAccessor::FindPlayer(ObjectGuid(HighGuid::Player, botId)))
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                botAI->GetAiObjectContext()->GetValue<uint32>("lfg proposal")->Set(0);
+    }
+
+    static bool RTG_RecoverQueuedDungeonHelper(Player* bot, uint32 botId, char const* reason)
+    {
+        if (!bot)
+            return false;
+
+        bool changed = false;
+        if (bot->isDead())
+        {
+            bot->ResurrectPlayer(1.0f, false);
+            bot->SpawnCorpseBones();
+            bot->SetFullHealth();
+            changed = true;
+        }
+
+        bot->CombatStop(true);
+        bot->ClearUnitState(UNIT_STATE_ALL_STATE);
+
+        Group* group = bot->GetGroup();
+        if (group && !group->isLFGGroup())
+        {
+            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+                botAI->LeaveOrDisbandGroup();
+            changed = true;
+        }
+
+        Map* map = bot->GetMap();
+        if (map && map->Instanceable())
+        {
+            bot->TeleportToEntryPoint();
+            changed = true;
+        }
+
+        if (changed)
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][RECOVER] helper={} reason={} dead={} map={} lfgState={}",
+                botId, reason ? reason : "recovery",
+                bot->isDead() ? 1 : 0,
+                map ? map->GetId() : 0,
+                uint32(sLFGMgr->GetState(bot->GetGUID()))));
+
+        return changed;
+    }
+
     static bool RTG_TryNormalizeLfgHelperOwnerToGroup(Player* bot, Group* group, uint32 desiredTeam, uint32 desiredLevel, uint32 desiredRole, uint32 desiredOwner)
     {
         if (!bot || !group || !group->isLFGGroup())
@@ -1753,6 +1817,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     groupReadySince = nowTs;
                 }
 
+                RTG_ClearProposalAcceptState(botId, addData);
                 SetEventValue(botId, "rtg_dungeon_active", nowTs, 7200);
                 SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
 
@@ -1801,7 +1866,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 if (!proposalLockId)
                     SetEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
-                // Proposal packet updates populate AI state; one-shot acceptance is guarded in LfgAcceptAction.
+
+                if (!acceptSentAt)
+                    RTG_DispatchImmediateLfgAccept(bot, "proposal_visible");
+
                 continue;
             }
 
@@ -1825,6 +1893,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (state == lfg::LFG_STATE_NONE)
             {
+                Map* currentMap = bot->GetMap();
+                bool staleInstanceState = (currentMap && currentMap->Instanceable()) || bot->isDead();
+                if (staleInstanceState)
+                {
+                    RTG_RecoverQueuedDungeonHelper(bot, botId, currentMap && currentMap->Instanceable() ? "stale_instance" : "dead_before_join");
+                    continue;
+                }
+
                 if (desiredRole)
                 {
                     RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "dispatch_prepare");
@@ -1900,7 +1976,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool isBgGroup = group->isBGGroup();
             bool isLfgGroup = group->isLFGGroup();
 
-            bool allowedHere = (isBgGroup && inBg) || (isLfgGroup && inInstance);
+            bool lfgTransitionProtected = isLfgGroup && (!inInstance) && RTG_HasActiveLfgTransitionState(botId);
+            bool allowedHere = (isBgGroup && inBg) || (isLfgGroup && (inInstance || lfgTransitionProtected));
 
             // Any non-LFG / non-BG grouping is forbidden.
             if ((!isBgGroup && !isLfgGroup) || !allowedHere)
