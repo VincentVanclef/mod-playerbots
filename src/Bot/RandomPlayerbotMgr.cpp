@@ -487,8 +487,8 @@ namespace
                RTG_GetTeleportSentAt(botId) ||
                RTG_GetTeleportAttempts(botId) ||
                RTG_GetGroupReadySince(botId) ||
-               sRandomPlayerbotMgr.GetEventValue(botId, "rtg_lfg_pending") ||
-               sRandomPlayerbotMgr.GetEventValue(botId, "rtg_dungeon_active");
+               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
+               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
     }
 
     static void RTG_ClearProposalAcceptState(uint32 botId, std::string const& addData = "")
