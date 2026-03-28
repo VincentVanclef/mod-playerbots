@@ -655,3 +655,53 @@ This pass still keeps core LFG as the owner of actual group materialization and 
 - no packet storm, no repeated unbounded teleport spam, no host overload
 - refill acquisition should stop overcounting missing roles merely because existing helpers are still tagged to the obsolete pre-group owner id
 - if a helper truly cannot enter after the bounded recovery window, the logs should now end in explicit `reason=teleport_not_resolved` rather than silently drifting into bad role math
+
+## 2026-03-28 — RDF flex-role doctrine for ambiguous specs (safe feral dual-role pass)
+
+### Live findings that drove this pass
+- RDF queue safety improved enough to reach actual group formation and dungeon entry without the earlier proposal packet storm.
+- New testing exposed a quieter but important queue-definition seam: a feral druid helper could be a valid tank or DPS choice for Wrath RDF, but RTG role resolution still tended to collapse that spec into a single role identity.
+- That single-role collapse can hurt both acquisition and dispatch:
+  - known feral offline specs can be skipped when DPS is requested because the resolver treated feral as tank-only
+  - already-online feral helpers can be unnecessarily respecced away from feral for a DPS request even though feral already satisfies both tank and damage viability
+  - queue join packets can advertise only one role even when the current spec is safely valid for more than one
+
+### Incorrect assumptions corrected
+1. We previously treated `RoleForClassSpecTab()` as sufficient for RDF queue viability. That is safe for single-role specs, but not for truly ambiguous specs like feral druid where one spec can legitimately queue as both tank and DPS.
+2. We previously used `currentRole != desiredRole` as the respec trigger in helper preparation. That wrongly treats a valid flex-capable spec as a mismatch when the desired role is one of the spec's valid roles.
+3. We previously treated a cached/known offline role as one exact lane rather than a capability mask. That meant known feral helpers could disappear from DPS candidate searches.
+
+### Manual repair applied
+- `RtgRdfRoleResolver.h/.cpp`
+  - added explicit role-mask doctrine helpers:
+    - `RoleMaskForClassSpecTab()`
+    - `GetOfflineSpecRoleMask()`
+    - `GetActualSpecRoleMask()`
+  - codified the first safe flex-role rule narrowly and intentionally:
+    - **druid feral = tank | damage**
+    - restoration remains healer-only
+    - balance remains damage-only
+    - other classes/specs remain conservative single-role until proven safe with gear/spec doctrine
+- `RandomPlayerbotMgr.cpp`
+  - helper preparation now checks **role capability mask** instead of exact single-role equality before forcing a respec
+  - known offline/cached candidates are now matched by `roleMask & desiredRole` instead of exact-role equality
+  - runtime cache now stores both:
+    - `rtg_runtime_lfg_role`
+    - `rtg_runtime_lfg_role_mask`
+  - dispatch mismatch breadcrumbs now report both `actualRole` and `actualMask`
+- `LfgActions.cpp`
+  - assigned RDF helpers whose current spec safely covers more than one role now queue with the safe role mask instead of an unnecessary single-role collapse
+  - current feral helpers can therefore advertise `TANK|DPS` while still satisfying an explicit desired-role request
+  - role breadcrumbs now include `actualMask` and a new `verdict=flex_mask_override` path
+
+### Why this is the safer doctrine
+This pass does **not** open the floodgates for every hybrid spec to multi-queue. It only formalizes the flex case that current live testing actually exposed and that fits the user's explicit doctrine:
+- **feral druid can queue as tank and DPS without a spec swap**
+- specs that normally require a true spec/gear identity change remain single-role for now
+
+### Proof signals required next
+- when a feral druid helper is chosen for RDF, logs should show capability breadcrumbs containing `actualMask=10` (`TANK|DPS`) rather than treating feral as tank-only
+- a known offline feral druid should now be selectable when RTG needs either a tank helper or a DPS helper
+- a feral helper already in a valid feral spec should **not** be forcibly respecced to balance merely because the current request is DPS
+- join logs for the feral helper should show `roleMask=10` and role text `TANK/DPS`
+- no regression in healer-only specs or strict single-role specs

@@ -150,6 +150,44 @@ static bool SpecTabCanPerformRole(uint8 cls, uint8 specTab, uint32 role)
     }
 }
 
+uint32 RoleMaskForClassSpecTab(uint8 cls, uint8 specTab)
+{
+    switch (cls)
+    {
+        case CLASS_DRUID:
+            // Conservative flex doctrine for RTG RDF:
+            // Feral can queue as both tank and damage without a spec swap.
+            // Balance remains damage-only and Restoration remains healer-only.
+            if (specTab == 1)
+                return lfg::PLAYER_ROLE_TANK | lfg::PLAYER_ROLE_DAMAGE;
+            if (specTab == 2)
+                return lfg::PLAYER_ROLE_HEALER;
+            return lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_PALADIN:
+            if (specTab == 0)
+                return lfg::PLAYER_ROLE_HEALER;
+            if (specTab == 1)
+                return lfg::PLAYER_ROLE_TANK;
+            return lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_PRIEST:
+            return (specTab == 2) ? lfg::PLAYER_ROLE_DAMAGE : lfg::PLAYER_ROLE_HEALER;
+
+        case CLASS_SHAMAN:
+            return (specTab == 2) ? lfg::PLAYER_ROLE_HEALER : lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_WARRIOR:
+            return (specTab == 2) ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+
+        case CLASS_DEATH_KNIGHT:
+            return (specTab == 0) ? lfg::PLAYER_ROLE_TANK : lfg::PLAYER_ROLE_DAMAGE;
+
+        default:
+            return lfg::PLAYER_ROLE_DAMAGE;
+    }
+}
+
 uint32 RoleForClassSpecTab(uint8 cls, uint8 specTab)
 {
     switch (cls)
@@ -284,6 +322,13 @@ uint32 GetOfflineSpecRole(ObjectGuid::LowType guid, uint8 cls)
     return RoleForClassSpecTab(cls, specTab);
 }
 
+uint32 GetOfflineSpecRoleMask(ObjectGuid::LowType guid, uint8 cls)
+{
+    uint8 specTab = 0;
+    GetOfflineSpecTab(guid, cls, specTab);
+    return RoleMaskForClassSpecTab(cls, specTab);
+}
+
 bool OfflineSpecCanPerformRole(ObjectGuid::LowType guid, uint8 cls, uint32 role)
 {
     uint8 specTab = 0;
@@ -297,6 +342,14 @@ uint32 GetActualSpecRole(Player* bot)
         return lfg::PLAYER_ROLE_DAMAGE;
 
     return RoleForClassSpecTab(bot->getClass(), static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot)));
+}
+
+uint32 GetActualSpecRoleMask(Player* bot)
+{
+    if (!bot)
+        return lfg::PLAYER_ROLE_DAMAGE;
+
+    return RoleMaskForClassSpecTab(bot->getClass(), static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot)));
 }
 
 bool ActualSpecCanPerformRole(Player* bot, uint32 role)

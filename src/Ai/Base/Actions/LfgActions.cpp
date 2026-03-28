@@ -77,6 +77,11 @@ namespace
         return RTG::ActualRoleForBot(bot);
     }
 
+    static uint32 RTG_ActualSpecRoleMask(Player* bot)
+    {
+        return RTG::GetActualSpecRoleMask(bot);
+    }
+
     static bool RTG_ActualSpecCanPerformRole(Player* bot, uint32 role)
     {
         return RTG::ActualSpecCanPerformRole(bot, role);
@@ -221,6 +226,7 @@ uint32 LfgJoinAction::GetRoles()
     }
 
     uint32 actualRole = RTG_ActualRoleForBot(bot);
+    uint32 actualRoleMask = RTG_ActualSpecRoleMask(bot);
     uint32 botId = bot->GetGUID().GetCounter();
 
     if (sPlayerbotAIConfig.rtgEventDriven)
@@ -238,24 +244,30 @@ uint32 LfgJoinAction::GetRoles()
 
             if (!RTG::ActualSpecCanPerformRole(bot, desiredRole))
             {
-                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=runtime_incompatible_usingActualRole", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} actualMask={} class={} specTab={} verdict=runtime_incompatible_usingActualRole", botId, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
                 return actualRole;
+            }
+
+            if (actualRoleMask && actualRoleMask != desiredRole && (actualRoleMask & desiredRole) == desiredRole)
+            {
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} actualMask={} class={} specTab={} verdict=flex_mask_override", botId, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                return actualRoleMask;
             }
 
             if (desiredRole != actualRole)
             {
-                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=planner_role_override", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} actualMask={} class={} specTab={} verdict=planner_role_override", botId, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
             }
             else if (RTG_LfgDebugEnabled())
             {
-                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} class={} specTab={} verdict=aligned", botId, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} actualMask={} class={} specTab={} verdict=aligned", botId, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
             }
 
             return desiredRole;
         }
     }
 
-    return actualRole;
+    return actualRoleMask ? actualRoleMask : actualRole;
 }
 
 bool LfgJoinAction::JoinLFG()
@@ -426,14 +438,14 @@ bool LfgJoinAction::JoinLFG()
     // check role for console msg
     std::string _roles = "multiple roles";
     uint32 roleMask = GetRoles();
-    if (roleMask & lfg::PLAYER_ROLE_TANK)
+    if (roleMask == lfg::PLAYER_ROLE_TANK)
         _roles = "TANK";
-
-    if (roleMask & lfg::PLAYER_ROLE_HEALER)
+    else if (roleMask == lfg::PLAYER_ROLE_HEALER)
         _roles = "HEAL";
-
-    if (roleMask & lfg::PLAYER_ROLE_DAMAGE)
+    else if (roleMask == lfg::PLAYER_ROLE_DAMAGE)
         _roles = "DPS";
+    else if (roleMask == (lfg::PLAYER_ROLE_TANK | lfg::PLAYER_ROLE_DAMAGE))
+        _roles = "TANK/DPS";
 
     RTG_ClearDungeonQueuePenalties(bot);
 

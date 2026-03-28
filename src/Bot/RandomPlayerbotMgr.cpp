@@ -123,12 +123,25 @@ namespace
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_runtime_lfg_role");
     }
 
+    static uint32 RTG_GetCachedRuntimeLfgRoleMask(ObjectGuid::LowType botId)
+    {
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_runtime_lfg_role_mask");
+    }
+
     static void RTG_SetCachedRuntimeLfgRole(ObjectGuid::LowType botId, uint32 actualRole, uint32 ttlSeconds = 86400u)
     {
         if (!botId || !actualRole)
             return;
 
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_runtime_lfg_role", actualRole, ttlSeconds);
+    }
+
+    static void RTG_SetCachedRuntimeLfgRoleMask(ObjectGuid::LowType botId, uint32 roleMask, uint32 ttlSeconds = 86400u)
+    {
+        if (!botId || !roleMask)
+            return;
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_runtime_lfg_role_mask", roleMask, ttlSeconds);
     }
 
     static void RTG_BlockBotForDesiredLfgRole(ObjectGuid::LowType botId, uint32 desiredRole, uint32 ttlSeconds = 900u)
@@ -555,9 +568,19 @@ namespace
         return RTG::GetOfflineSpecRole(guid, cls);
     }
 
+    static uint32 RTG_GetOfflineSpecRoleMask(ObjectGuid::LowType guid, uint8 cls)
+    {
+        return RTG::GetOfflineSpecRoleMask(guid, cls);
+    }
+
     static uint32 RTG_GetActualSpecRole(Player* bot)
     {
         return RTG::GetActualSpecRole(bot);
+    }
+
+    static uint32 RTG_GetActualSpecRoleMask(Player* bot)
+    {
+        return RTG::GetActualSpecRoleMask(bot);
     }
 
     static uint32 RTG_NormalizeQueuedRoleMask(uint32 roleMask)
@@ -595,8 +618,8 @@ namespace
 
         bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
         bool missingTalents = !RTG_HasMeaningfulTalents(bot);
-        uint32 currentRole = RTG_ActualRoleForBot(bot);
-        bool roleMismatch = currentRole != desiredRole;
+        uint32 currentRoleMask = RTG_GetActualSpecRoleMask(bot);
+        bool roleMismatch = (currentRoleMask & desiredRole) == 0;
 
         if (!levelMismatch && !missingTalents && !roleMismatch)
             return false;
@@ -629,12 +652,14 @@ namespace
             botAI->ResetStrategies(false);
 
         uint32 preparedRole = RTG_ActualRoleForBot(bot);
+        uint32 preparedRoleMask = RTG_GetActualSpecRoleMask(bot);
         RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), preparedRole);
+        RTG_SetCachedRuntimeLfgRoleMask(bot->GetGUID().GetCounter(), preparedRoleMask);
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} level={} preparedRole={} hadTalents={} roleMismatch={} levelMismatch={}",
-                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(desiredSpecTab), bot->GetLevel(), preparedRole,
+            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(desiredSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
                 missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0);
         }
 
@@ -1805,11 +1830,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "dispatch_prepare");
 
                     uint32 actualRole = RTG_ActualRoleForBot(bot);
-                    if (actualRole != desiredRole)
+                    uint32 actualRoleMask = RTG_GetActualSpecRoleMask(bot);
+                    if ((actualRoleMask & desiredRole) == 0)
                     {
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} class={} specTab={}",
-                            botId, desiredOwner, desiredRole, actualRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={}",
+                            botId, desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
                         RTG_SetCachedRuntimeLfgRole(botId, actualRole);
+                        RTG_SetCachedRuntimeLfgRoleMask(botId, actualRoleMask);
                         RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
                         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                         SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
@@ -3262,13 +3289,20 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             return count;
         };
 
-        auto getPreferredOfflineLfgRole = [&](CharacterInfo const& charInfo, bool& roleKnown) -> uint32
+        auto getOfflineLfgRoleMask = [&](CharacterInfo const& charInfo, bool& roleKnown) -> uint32
         {
             uint8 specTab = 0;
             if (RTG::HasOfflineSpecData(charInfo.guid, charInfo.rClass, &specTab))
             {
                 roleKnown = true;
-                return RTG_RoleForClassSpecTab(charInfo.rClass, specTab);
+                return RTG_GetOfflineSpecRoleMask(charInfo.guid, charInfo.rClass);
+            }
+
+            uint32 cachedMask = RTG_GetCachedRuntimeLfgRoleMask(charInfo.guid);
+            if (cachedMask)
+            {
+                roleKnown = true;
+                return cachedMask;
             }
 
             uint32 cachedRole = RTG_GetCachedRuntimeLfgRole(charInfo.guid);
@@ -3295,10 +3329,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
 
                 bool roleKnown = false;
-                uint32 preferredRole = getPreferredOfflineLfgRole(charInfo, roleKnown);
+                uint32 roleMask = getOfflineLfgRoleMask(charInfo, roleKnown);
                 if (roleKnown)
                 {
-                    if (preferredRole != desiredRole)
+                    if ((roleMask & desiredRole) == 0)
                         continue;
                 }
                 else if (!RTG::ClassCanRole(charInfo.rClass, desiredRole))
@@ -3882,10 +3916,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             continue;
 
                         bool roleKnown = false;
-                        uint32 preferredRole = getPreferredOfflineLfgRole(charInfo, roleKnown);
+                        uint32 roleMask = getOfflineLfgRoleMask(charInfo, roleKnown);
                         if (pass == 0)
                         {
-                            if (!roleKnown || preferredRole != desiredRole)
+                            if (!roleKnown || (roleMask & desiredRole) == 0)
                                 continue;
                         }
                         else
@@ -3898,7 +3932,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             continue;
 
                         LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {}) source={}",
-                            charInfo.guid, bucket.owner, desiredRole, charInfo.rClass, pass == 0 ? "known_role" : "bootstrap_fallback");
+                            charInfo.guid, bucket.owner, desiredRole, charInfo.rClass, pass == 0 ? "known_spec_capable" : "bootstrap_fallback");
 
                         ++rtgLfgLogged;
                         --capacity;
@@ -6652,6 +6686,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
             RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), RTG_ActualRoleForBot(bot));
+            RTG_SetCachedRuntimeLfgRoleMask(bot->GetGUID().GetCounter(), RTG_GetActualSpecRoleMask(bot));
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={} role={} owner={}",
                 bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel(), desiredRole, desiredOwner));
         }
