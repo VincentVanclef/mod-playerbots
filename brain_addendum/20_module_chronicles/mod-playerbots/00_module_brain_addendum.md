@@ -744,3 +744,19 @@ This pass does **not** open the floodgates for every hybrid spec to multi-queue.
 - stale old-dungeon helpers should log `[RTG][RDF][RECOVER] ... reason=stale_instance` instead of waiting forever unavailable inside an old instance map
 - dead helpers should log `[RTG][RDF][RECOVER] ... reason=dead_before_join` and stop spamming repeated `join_dispatch_failed ... dead=1`
 - proposal acceptance should occur faster, with manager-side success breadcrumbs like `lane=rdf_accept reason=proposal_visible`, but still no packet storm
+
+### Chapter 2026-03-28 — RDF orphan grace + priest main-tank shielding pass
+
+#### Summary
+The RDF entry pipeline is now materially healthier: the group formed quickly, accepted the ready dialog cleanly, and no helper left the party on entry. The next seam exposed by live play was post-run orphaning. When the real player left the dungeon early, helpers stayed online under normalized `owner=1` ownership and repeatedly attempted to rejoin RDF even though they were now just stragglers from a finished/abandoned run. Priest healing also still lagged behind tank damage intake.
+
+#### Resolution
+- Added a bounded `rtg_lfg_orphan_since` lifecycle marker and a 180-second orphan grace in `RandomPlayerbotMgr.cpp`.
+- Helpers that no longer have live real-player demand, are not grouped, and are no longer in the dungeon map now stop rejoining RDF and instead age toward a clean logout.
+- Stale queue sweeps ignore already-orphaned helpers to prevent repeated join/stale churn.
+- Priest shielding now explicitly prefers `main tank`, and heal-priest priorities were made more proactive so tank response begins earlier.
+
+#### Files touched
+- `mod-playerbots/src/Bot/RandomPlayerbotMgr.cpp`
+- `mod-playerbots/src/Ai/Class/Priest/Action/PriestActions.cpp`
+- `mod-playerbots/src/Ai/Class/Priest/Strategy/HealPriestStrategy.cpp`

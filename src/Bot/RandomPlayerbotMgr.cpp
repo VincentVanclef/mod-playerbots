@@ -480,6 +480,16 @@ namespace
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_group_ready_since");
     }
 
+    static uint32 RTG_GetOrphanedSince(uint32 botId)
+    {
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_orphan_since");
+    }
+
+    static void RTG_ClearOrphanedState(uint32 botId)
+    {
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_orphan_since", 0, 0);
+    }
+
     static bool RTG_HasActiveLfgTransitionState(uint32 botId)
     {
         return RTG_GetProposalLock(botId) ||
@@ -581,6 +591,7 @@ namespace
     static constexpr uint32 RTG_LFG_TELEPORT_RETRY_SECONDS = 8;
     static constexpr uint32 RTG_LFG_TELEPORT_RETRY_MAX_ATTEMPTS = 3;
     static constexpr uint32 RTG_LFG_TELEPORT_RESOLVE_GRACE_SECONDS = 60;
+    static constexpr uint32 RTG_LFG_ORPHAN_GRACE_SECONDS = 180;
 
     static void RTG_ClearProposalLifecycle(uint32 botId, Player* bot = nullptr)
     {
@@ -590,6 +601,7 @@ namespace
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_attempts", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_group_ready_since", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_orphan_since", 0, 0);
         if (bot)
         {
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
@@ -1221,6 +1233,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_accept_proposal", 0, 0);
     SetEventValue(bot, "rtg_lfg_teleport_attempts", 0, 0);
     SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
+    SetEventValue(bot, "rtg_lfg_orphan_since", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -1785,8 +1798,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
                 continue;
 
-            if (desiredOwner && !GetEventValue(desiredOwner, "rtg_lfg_real_demand") && !GetEventValue(botId, "rtg_dungeon_active"))
-                continue;
 
             if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsBeingTeleported())
                 continue;
@@ -1799,6 +1810,28 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool inDungeonRun = inDungeonMap || groupReadyForTeleport;
             if (group && group->isLFGGroup())
                 RTG_TryNormalizeLfgHelperOwnerToGroup(bot, group, desiredTeam, desiredLevel, desiredRole, desiredOwner);
+
+            bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
+            bool orphanCandidate = GetEventValue(botId, "rtg_dungeon_active") && !ownerHasRealDemand && !group && !inDungeonMap && state == lfg::LFG_STATE_NONE;
+            if (ownerHasRealDemand || group || inDungeonMap || state != lfg::LFG_STATE_NONE)
+                RTG_ClearOrphanedState(botId);
+            else if (orphanCandidate)
+            {
+                uint32 nowTs = uint32(time(nullptr));
+                uint32 orphanedSince = RTG_GetOrphanedSince(botId);
+                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
+                if (!orphanedSince)
+                {
+                    SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, RTG_LFG_ORPHAN_GRACE_SECONDS + 60, addData);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=real_owner_left grace={}s", botId, desiredOwner, RTG_LFG_ORPHAN_GRACE_SECONDS));
+                }
+                else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= RTG_LFG_ORPHAN_GRACE_SECONDS)
+                {
+                    RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
+                }
+                continue;
+            }
 
             if (inDungeonMap)
             {
@@ -2093,6 +2126,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				}
 			}
 
+			if (GetEventValue(botId, "rtg_lfg_orphan_since"))
+				continue;
+
 			Map* map = bot->GetMap();
 			if (map && (map->IsDungeon() || map->IsRaid()))
 				continue;
@@ -2252,6 +2288,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
 
 			if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+				continue;
+
+			if (GetEventValue(botId, "rtg_lfg_orphan_since"))
 				continue;
 
 			Group* grp = bot->GetGroup();
@@ -6923,6 +6962,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     SetEventValue(bot, "rtg_lfg_accept_proposal", 0, 0);
     SetEventValue(bot, "rtg_lfg_teleport_attempts", 0, 0);
     SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
+    SetEventValue(bot, "rtg_lfg_orphan_since", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     currentBots.remove(bot);

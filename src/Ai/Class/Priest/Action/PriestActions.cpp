@@ -20,6 +20,14 @@ bool CastRemoveShadowformAction::Execute(Event event)
 
 Unit* CastPowerWordShieldOnAlmostFullHealthBelowAction::GetTarget()
 {
+    if (Unit* mainTank = AI_VALUE(Unit*, "main tank"))
+    {
+        if (!mainTank->isDead() && mainTank->GetHealthPct() <= sPlayerbotAIConfig.almostFullHealth &&
+            mainTank->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
+            !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
+            return mainTank;
+    }
+
     Group* group = bot->GetGroup();
     for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
     {
@@ -49,6 +57,14 @@ Unit* CastPowerWordShieldOnAlmostFullHealthBelowAction::GetTarget()
 
 bool CastPowerWordShieldOnAlmostFullHealthBelowAction::isUseful()
 {
+    if (Unit* mainTank = AI_VALUE(Unit*, "main tank"))
+    {
+        if (!mainTank->isDead() && mainTank->GetHealthPct() <= sPlayerbotAIConfig.almostFullHealth &&
+            mainTank->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
+            !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
+            return true;
+    }
+
     Group* group = bot->GetGroup();
     for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
     {
@@ -78,6 +94,14 @@ bool CastPowerWordShieldOnAlmostFullHealthBelowAction::isUseful()
 
 Unit* CastPowerWordShieldOnNotFullAction::GetTarget()
 {
+    if (Unit* mainTank = AI_VALUE(Unit*, "main tank"))
+    {
+        if (!mainTank->isDead() && !mainTank->IsFullHealth() &&
+            mainTank->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
+            !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
+            return mainTank;
+    }
+
     Group* group = bot->GetGroup();
     MinValueCalculator calc(100);
     for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())

@@ -470,3 +470,31 @@ RTG only does four bounded things:
 - stale old-dungeon helpers should log `[RTG][RDF][RECOVER] ... reason=stale_instance` instead of waiting forever unavailable inside an old instance map
 - dead helpers should log `[RTG][RDF][RECOVER] ... reason=dead_before_join` and stop spamming repeated `join_dispatch_failed ... dead=1`
 - proposal acceptance should occur faster, with manager-side success breadcrumbs like `lane=rdf_accept reason=proposal_visible`, but still no packet storm
+
+## Chapter 2026-03-28 — RDF orphan grace + priest main-tank shielding pass
+
+### Situation
+A live test finally produced the desired fast RDF materialization and clean dungeon entry, but two follow-up seams appeared immediately afterward. First, when the real player left the dungeon partway through the run, helpers stayed online as stragglers and kept trying to rejoin RDF under the normalized group owner (`owner=1`), producing repeated `join_dispatch_failed` loops instead of retiring cleanly after the run ended. Second, priest healer behavior was still too passive for level-19 dungeon pacing: shields were inconsistent and direct heals often started too late on the tank.
+
+### Incorrect assumptions corrected
+1. Owner normalization to the live LFG group solved refill accounting, but it also meant helper ownership could outlive the real-player demand signal. Without a separate orphan-handling rule, RTG kept treating post-run stragglers as queue candidates.
+2. A helper that already completed an RDF run should not instantly be shoved back into join dispatch just because `rtg_dungeon_active` is still warm while the player has already left.
+3. Priest shielding logic was too generic; it needed explicit main-tank preference rather than hoping party-wide target selection would choose the tank early enough.
+
+### Manual repair applied
+- `RandomPlayerbotMgr.cpp`
+  - added `rtg_lfg_orphan_since` handling and a bounded 180-second orphan grace for helpers that are no longer in a group, no longer inside the instance, and no longer backed by live real-player RDF demand
+  - orphaned helpers now stop trying to rejoin RDF during that grace window and are logged out cleanly after the grace expires via `RTG_RequestSafeBotLogout(..., true)`
+  - stale queue sweeps now ignore helpers already marked orphaned so they do not churn through duplicate stale/idle retire paths while waiting out the grace period
+  - queue-helper and lifecycle cleanup now clears the orphan marker so stale state cannot poison future assignments
+- `PriestActions.cpp`
+  - `power word: shield on not full` and `power word: shield on almost full health below` now explicitly prefer the `main tank` target first when shielding is legal and useful
+- `HealPriestStrategy.cpp`
+  - default heal-priest behavior now opens more proactively with `power word: shield on not full`
+  - critical/low/medium party-health trigger priorities were shifted so shield, penance, and flash heal beat slower follow-up tools more often, improving first-response healing on tanks
+
+### Proof to demand next
+- after the real player leaves a successful RDF run, helpers should log an orphan breadcrumb and then idle out instead of rejoining RDF immediately
+- there should be no repeated `owner=1 ... join_dispatch_failed` loops during the orphan grace window
+- after roughly three minutes, straggler helpers should log out cleanly
+- priest healers should apply `Power Word: Shield` to the tank earlier and begin direct healing sooner under sustained pressure
