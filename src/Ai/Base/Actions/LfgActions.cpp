@@ -541,6 +541,8 @@ bool LfgAcceptAction::Execute(Event event)
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", 0, 0, addData);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_attempts", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_group_ready_since", 0, 0);
     };
 
     auto markQueuedProposalAccepted = [&](uint32 proposalId)
@@ -551,6 +553,8 @@ bool LfgAcceptAction::Execute(Event event)
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", nowTs, 90, addData);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", proposalId, 120, addData);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_attempts", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_group_ready_since", 0, 0);
     };
 
     RTG_LfgProposalPacketData packetData;
@@ -659,10 +663,12 @@ bool LfgTeleportAction::Execute(Event event)
         lfg::LfgState state = sLFGMgr->GetState(bot->GetGUID());
         if (!group || !group->isLFGGroup())
         {
-            LOG_INFO("playerbots", "[RTG][RDF][WAIT_GROUP] helper={} grouped=0 state={}",
-                     bot->GetGUID().GetCounter(), uint32(state));
+            LOG_INFO("playerbots", "[RTG][RDF][WAIT_GROUP] helper={} grouped={} state={}",
+                     bot->GetGUID().GetCounter(), group ? 1 : 0, uint32(state));
             return false;
         }
+
+        bot->CombatStop(true);
     }
 
     bot->ClearUnitState(UNIT_STATE_ALL_STATE);

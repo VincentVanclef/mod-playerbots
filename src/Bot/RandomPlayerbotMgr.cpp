@@ -457,6 +457,53 @@ namespace
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_teleport_sent");
     }
 
+    static uint32 RTG_GetTeleportAttempts(uint32 botId)
+    {
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_teleport_attempts");
+    }
+
+    static uint32 RTG_GetGroupReadySince(uint32 botId)
+    {
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_group_ready_since");
+    }
+
+    static bool RTG_TryNormalizeLfgHelperOwnerToGroup(Player* bot, Group* group, uint32 desiredTeam, uint32 desiredLevel, uint32 desiredRole, uint32 desiredOwner)
+    {
+        if (!bot || !group || !group->isLFGGroup())
+            return false;
+
+        bool hasRealPlayer = false;
+        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+        {
+            Player* member = ref->GetSource();
+            if (member && !GET_PLAYERBOT_AI(member))
+            {
+                hasRealPlayer = true;
+                break;
+            }
+        }
+
+        if (!hasRealPlayer)
+            return false;
+
+        uint32 botId = bot->GetGUID().GetCounter();
+        uint32 groupOwner = group->GetGUID().GetCounter();
+        if (!groupOwner || desiredOwner == groupOwner)
+            return false;
+
+        std::string normalizedAddData = RTG::MakeLfgAddData(desiredTeam, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, groupOwner);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "add", 1, 600, normalizedAddData);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 45, normalizedAddData);
+
+        LOG_INFO("playerbots", "[RTG][RDF][OWNER] helper={} oldOwner={} newOwner={} role={} reason=lfg_group_normalize",
+            botId, desiredOwner, groupOwner, desiredRole);
+        return true;
+    }
+
+    static constexpr uint32 RTG_LFG_PROPOSAL_RESOLVE_GRACE_SECONDS = 45;
+    static constexpr uint32 RTG_LFG_TELEPORT_RETRY_SECONDS = 8;
+    static constexpr uint32 RTG_LFG_TELEPORT_RETRY_MAX_ATTEMPTS = 3;
+    static constexpr uint32 RTG_LFG_TELEPORT_RESOLVE_GRACE_SECONDS = 60;
 
     static void RTG_ClearProposalLifecycle(uint32 botId, Player* bot = nullptr)
     {
@@ -464,6 +511,8 @@ namespace
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_attempts", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_group_ready_since", 0, 0);
         if (bot)
         {
             if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
@@ -1081,6 +1130,8 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
     SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_proposal", 0, 0);
+    SetEventValue(bot, "rtg_lfg_teleport_attempts", 0, 0);
+    SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -1657,17 +1708,61 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool groupReadyForTeleport = (group && group->isLFGGroup()) || (state == lfg::LFG_STATE_DUNGEON);
             bool inDungeonMap = map && (map->IsDungeon() || map->IsRaid());
             bool inDungeonRun = inDungeonMap || groupReadyForTeleport;
+            if (group && group->isLFGGroup())
+                RTG_TryNormalizeLfgHelperOwnerToGroup(bot, group, desiredTeam, desiredLevel, desiredRole, desiredOwner);
+
             if (inDungeonMap)
             {
-                if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId) || RTG_GetTeleportSentAt(botId))
+                if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId) || RTG_GetTeleportSentAt(botId) || RTG_GetTeleportAttempts(botId) || RTG_GetGroupReadySince(botId))
                     RTG_ClearProposalLifecycle(botId, bot);
                 continue;
             }
 
             if (groupReadyForTeleport)
             {
-                // Core LFG owns the post-accept finalization and teleport once the ready-dialog
-                // has been accepted by all members. RTG must not try to force teleport here.
+                uint32 nowTs = uint32(time(nullptr));
+                uint32 groupReadySince = RTG_GetGroupReadySince(botId);
+                if (!groupReadySince)
+                {
+                    SetEventValue(botId, "rtg_lfg_group_ready_since", nowTs, RTG_LFG_TELEPORT_RESOLVE_GRACE_SECONDS + 30, addData);
+                    groupReadySince = nowTs;
+                }
+
+                SetEventValue(botId, "rtg_dungeon_active", nowTs, 7200);
+                SetEventValue(botId, "rtg_lfg_pending", 1, 45, addData);
+
+                uint32 teleportSentAt = RTG_GetTeleportSentAt(botId);
+                uint32 teleportAttempts = RTG_GetTeleportAttempts(botId);
+                bool retryWindowOpen = !teleportSentAt || (nowTs > teleportSentAt && (nowTs - teleportSentAt) >= RTG_LFG_TELEPORT_RETRY_SECONDS);
+                bool canAttemptTeleport = retryWindowOpen && teleportAttempts < RTG_LFG_TELEPORT_RETRY_MAX_ATTEMPTS && !bot->IsBeingTeleported();
+
+                if (canAttemptTeleport)
+                {
+                    bool teleported = RTG_DispatchImmediateLfgTeleport(bot, teleportAttempts ? "group_ready_retry" : "group_ready");
+                    if (teleported)
+                    {
+                        SetEventValue(botId, "rtg_lfg_teleport_sent", nowTs, RTG_LFG_TELEPORT_RESOLVE_GRACE_SECONDS + 30, addData);
+                        SetEventValue(botId, "rtg_lfg_teleport_attempts", teleportAttempts + 1, RTG_LFG_TELEPORT_RESOLVE_GRACE_SECONDS + 30, addData);
+                    }
+                    else
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][WAIT_TELEPORT] helper={} owner={} state={} grouped={} attempts={} reason=dispatch_blocked",
+                            botId, desiredOwner, uint32(state), group ? 1 : 0, teleportAttempts));
+                    }
+                }
+                else
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][WAIT_TELEPORT] helper={} owner={} state={} grouped={} attempts={} reason=awaiting_core_or_retry",
+                        botId, desiredOwner, uint32(state), group ? 1 : 0, teleportAttempts));
+                }
+
+                if (nowTs > groupReadySince && (nowTs - groupReadySince) >= RTG_LFG_TELEPORT_RESOLVE_GRACE_SECONDS)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=teleport_not_resolved state={} attempts={} grouped={}",
+                        botId, desiredOwner, uint32(state), teleportAttempts, group ? 1 : 0));
+                    RTG_ClearProposalLifecycle(botId, bot);
+                }
+
                 continue;
             }
 
@@ -1687,7 +1782,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (proposalLockId || acceptSentAt)
             {
-                bool proposalFailed = acceptSentAt && nowTs > acceptSentAt && (nowTs - acceptSentAt) >= 20;
+                bool proposalFailed = acceptSentAt && nowTs > acceptSentAt && (nowTs - acceptSentAt) >= RTG_LFG_PROPOSAL_RESOLVE_GRACE_SECONDS;
                 bool staleLock = !acceptSentAt && proposalLockId;
                 if (proposalFailed || staleLock)
                 {
@@ -6714,6 +6809,8 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
     SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_proposal", 0, 0);
+    SetEventValue(bot, "rtg_lfg_teleport_attempts", 0, 0);
+    SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     currentBots.remove(bot);

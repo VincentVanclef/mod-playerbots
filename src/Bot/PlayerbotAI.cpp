@@ -1121,6 +1121,8 @@ void PlayerbotAI::HandleBotOutgoingPacket(WorldPacket const& packet)
                     sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_sent", 0, 0);
                     sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_sent", 0, 0);
                     sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_accept_proposal", 0, 0);
+                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_teleport_attempts", 0, 0);
+                    sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_group_ready_since", 0, 0);
                 }
             }
             break;

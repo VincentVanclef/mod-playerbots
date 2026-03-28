@@ -319,3 +319,43 @@ Abort and rollback if any of the following reappear:
 - the same proposal packet logged continuously with no state change
 - worldserver CPU or log rate spikes immediately after proposal update / enter-dungeon stage
 - replacement helper acquisition beginning before proposal failure is explicit
+
+## 2026-03-28 — RDF group-owner normalization + guarded post-group teleport recovery
+
+### Live test findings that drove this pass
+- proposal packet safety guards held: no repeat-packet storm, no worldserver/domain overload
+- RDF proposal still proved timing-sensitive and expired once before a successful second ready cycle
+- after successful group materialization, at least one healer and one DPS helper remained online but did not enter the dungeon
+- refill demand then began from a new owner key (`...owner=1`) while the original helpers were still carrying their old player-owner add-data (`...owner=6004`)
+
+### Incorrect assumptions corrected
+1. We treated `group->isLFGGroup()` as sufficient proof that helpers would complete the last-mile teleport on their own after proposal acceptance. In practice, helpers can miss the initial enter-dungeon moment and remain stranded online outside the dungeon.
+2. We treated helper ownership as stable from initial player queue ownership through live LFG group materialization. In practice, the demand planner pivots to the active LFG group GUID as owner, while already-assigned helpers were still tagged to the original player GUID. That owner split can make healthy helpers disappear from bucket accounting and provoke false replacement pressure.
+
+### Manual repair applied
+- `RandomPlayerbotMgr.cpp`
+  - added guarded normalization of RTG LFG helper `add` owner from original player owner to active LFG group owner once the helper is inside a real-player LFG group
+  - added guarded post-group teleport recovery window for helpers who reached `group->isLFGGroup()` / `LFG_STATE_DUNGEON` but are still outside the dungeon map
+  - teleport recovery is throttled with explicit one-shot/retry state:
+    - `rtg_lfg_group_ready_since`
+    - `rtg_lfg_teleport_sent`
+    - `rtg_lfg_teleport_attempts`
+  - capped automatic post-group teleport attempts and widened proposal-resolution patience so RTG does not immediately classify normal late transitions as failure
+- `LfgActions.cpp`
+  - proposal lifecycle cleanup now also clears the new post-group teleport markers
+  - queued RDF teleport action now hard-stops combat before issuing `CMSG_LFG_TELEPORT`
+- `PlayerbotAI.cpp`
+  - explicit proposal-failure cleanup now also clears the new post-group teleport markers
+
+### Why this owner/teleport pass is safer
+This pass still keeps core LFG as the owner of actual group materialization and dungeon transfer. RTG only does three tightly-bounded things:
+- keeps helper ownership aligned with the owner identity the demand planner is actually using
+- retries the same legitimate `lfg teleport` action in a throttled, finite way when a helper reached live LFG-group state but missed the initial enter-dungeon moment
+- suppresses stale replacement churn while that finite recovery window is active
+
+### Proof signals required next
+- after live RDF group formation, helpers should log `[RTG][RDF][OWNER] ... reason=lfg_group_normalize` when ownership migrates from player-owner to LFG-group-owner
+- stranded helpers should log at most a small bounded sequence of `[RTG][RDF][TELEPORT]` / `[WAIT_TELEPORT]` lines rather than silently remaining outside forever
+- no packet storm, no repeated unbounded teleport spam, no host overload
+- refill acquisition should stop overcounting missing roles merely because existing helpers are still tagged to the obsolete pre-group owner id
+- if a helper truly cannot enter after the bounded recovery window, the logs should now end in explicit `reason=teleport_not_resolved` rather than silently drifting into bad role math
