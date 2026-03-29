@@ -760,3 +760,25 @@ The RDF entry pipeline is now materially healthier: the group formed quickly, ac
 - `mod-playerbots/src/Bot/RandomPlayerbotMgr.cpp`
 - `mod-playerbots/src/Ai/Class/Priest/Action/PriestActions.cpp`
 - `mod-playerbots/src/Ai/Class/Priest/Strategy/HealPriestStrategy.cpp`
+
+## Chapter 2026-03-28E — Stable RDF owner identity and assigned-role join discipline
+
+### Situation
+Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon arrival, but later tests surfaced false owner identities (`1`, `2`) after LFG group materialization and refill instability around flex-role helpers.
+
+### Findings
+- The previous owner normalization path and real-player bucket discovery were still allowing LFG group GUID identity to leak into RTG ownership/accounting.
+- Flex-role join masks were useful for capability reasoning but too broad for already-assigned refill slots.
+- Discipline priest capability needed to be widened for RTG helper matching.
+
+### Changes
+- Replaced synthetic group-owner normalization with stable real-player owner selection.
+- Used stable real-player owner identity in real-player RDF demand bucket construction.
+- Kept flex capability for acquisition/prep but enforced assigned-role queue join discipline.
+- Treated Discipline as safe healer/dps flex for resolver capability.
+- Raised priest main-tank shielding pressure and corrected summon landing Z.
+
+### Proof targets
+- No more helper add-data / dispatcher churn under owner ids `1` or `2` for solo RDF tests.
+- Second initiating character gets clean helper acquisition.
+- Refill works without feral dual-mask blocking the remaining missing slot math.

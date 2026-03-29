@@ -554,36 +554,49 @@ namespace
         return changed;
     }
 
+    static ObjectGuid RTG_GetStableRealQueueOwnerGuid(Player* player, Group* group)
+    {
+        if (!player)
+            return ObjectGuid::Empty;
+
+        if (group)
+        {
+            ObjectGuid leaderGuid = group->GetLeaderGUID();
+            if (!leaderGuid.IsEmpty())
+            {
+                Player* leader = ObjectAccessor::FindPlayer(leaderGuid);
+                if (leader && !GET_PLAYERBOT_AI(leader))
+                    return leaderGuid;
+            }
+
+            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
+            {
+                Player* member = ref->GetSource();
+                if (member && !GET_PLAYERBOT_AI(member))
+                    return member->GetGUID();
+            }
+        }
+
+        return player->GetGUID();
+    }
+
     static bool RTG_TryNormalizeLfgHelperOwnerToGroup(Player* bot, Group* group, uint32 desiredTeam, uint32 desiredLevel, uint32 desiredRole, uint32 desiredOwner)
     {
         if (!bot || !group || !group->isLFGGroup())
             return false;
 
-        bool hasRealPlayer = false;
-        for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-        {
-            Player* member = ref->GetSource();
-            if (member && !GET_PLAYERBOT_AI(member))
-            {
-                hasRealPlayer = true;
-                break;
-            }
-        }
-
-        if (!hasRealPlayer)
+        ObjectGuid ownerGuid = RTG_GetStableRealQueueOwnerGuid(bot, group);
+        uint32 stableOwner = ownerGuid.GetCounter();
+        if (!stableOwner || desiredOwner == stableOwner)
             return false;
 
         uint32 botId = bot->GetGUID().GetCounter();
-        uint32 groupOwner = group->GetGUID().GetCounter();
-        if (!groupOwner || desiredOwner == groupOwner)
-            return false;
-
-        std::string normalizedAddData = RTG::MakeLfgAddData(desiredTeam, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, groupOwner);
+        std::string normalizedAddData = RTG::MakeLfgAddData(desiredTeam, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, stableOwner);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "add", 1, 600, normalizedAddData);
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 45, normalizedAddData);
 
         LOG_INFO("playerbots", "[RTG][RDF][OWNER] helper={} oldOwner={} newOwner={} role={} reason=lfg_group_normalize",
-            botId, desiredOwner, groupOwner, desiredRole);
+            botId, desiredOwner, stableOwner, desiredRole);
         return true;
     }
 
@@ -3555,14 +3568,18 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     continue;
 
                 Group* group = player->GetGroup();
-				ObjectGuid queueGuid = player->GetGUID();
+                ObjectGuid queueGuid = player->GetGUID();
+                ObjectGuid ownerGuid = player->GetGUID();
 
-				if (group)
-				{
-					lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
-					if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
-						queueGuid = group->GetGUID();
-				}
+                if (group)
+                {
+                    lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+                    if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+                    {
+                        queueGuid = group->GetGUID();
+                        ownerGuid = RTG_GetStableRealQueueOwnerGuid(player, group);
+                    }
+                }
                 lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
                 Map* map = player->GetMap();
                 bool queuedLfg = (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON);
@@ -3571,7 +3588,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                      (map && (map->IsDungeon() || map->IsRaid()) && group && group->isLFGGroup());
                 if (queuedLfg || activeDungeon)
                 {
-                    uint32 owner = queueGuid.GetCounter();
+                    uint32 owner = ownerGuid.GetCounter();
                     auto key = std::make_pair(owner, static_cast<uint32>(player->GetTeamId()));
                     RtgLfgBucket& bucket = lfgBuckets[key];
                     bucket.owner = owner;
@@ -4890,15 +4907,19 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         if (!player || !player->IsInWorld() || IsRandomBot(player))
             continue;
 
-		Group* group = player->GetGroup();
-		ObjectGuid queueGuid = player->GetGUID();
+        Group* group = player->GetGroup();
+        ObjectGuid queueGuid = player->GetGUID();
+        ObjectGuid ownerGuid = player->GetGUID();
 
-		if (group)
-		{
-			lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
-			if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
-				queueGuid = group->GetGUID();
-		}
+        if (group)
+        {
+            lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+            if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+            {
+                queueGuid = group->GetGUID();
+                ownerGuid = RTG_GetStableRealQueueOwnerGuid(player, group);
+            }
+        }
 
         lfg::LfgState gState = sLFGMgr->GetState(queueGuid);
         Map* map = player->GetMap();
@@ -4910,8 +4931,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             continue;
 
         anyRealLfgDemand = true;
-
-        uint32 owner = queueGuid.GetCounter();
+        uint32 owner = ownerGuid.GetCounter();
         RTG::RtgLfgQueueOwnerSnapshot& req = requests[owner];
         req.owner = owner;
         req.team = static_cast<uint32>(player->GetTeamId());

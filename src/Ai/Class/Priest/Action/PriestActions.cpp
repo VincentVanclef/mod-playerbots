@@ -96,7 +96,7 @@ Unit* CastPowerWordShieldOnNotFullAction::GetTarget()
 {
     if (Unit* mainTank = AI_VALUE(Unit*, "main tank"))
     {
-        if (!mainTank->isDead() && !mainTank->IsFullHealth() &&
+        if (!mainTank->isDead() &&
             mainTank->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
             !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
             return mainTank;
@@ -128,5 +128,13 @@ Unit* CastPowerWordShieldOnNotFullAction::GetTarget()
 
 bool CastPowerWordShieldOnNotFullAction::isUseful()
 {
+    if (Unit* mainTank = AI_VALUE(Unit*, "main tank"))
+    {
+        if (!mainTank->isDead() &&
+            mainTank->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
+            !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
+            return true;
+    }
+
     return GetTarget();
 }

@@ -78,7 +78,7 @@ bool PreferredSpecTabForClassRole(uint8 cls, uint32 role, uint8& specTab)
             specTab = 1;
             return role == lfg::PLAYER_ROLE_DAMAGE;
         case CLASS_PRIEST:
-            if (role == lfg::PLAYER_ROLE_HEALER) { specTab = 1; return true; }
+            if (role == lfg::PLAYER_ROLE_HEALER) { specTab = 0; return true; }
             if (role == lfg::PLAYER_ROLE_DAMAGE) { specTab = 2; return true; }
             return false;
         case CLASS_DEATH_KNIGHT:
@@ -128,6 +128,8 @@ static bool SpecTabCanPerformRole(uint8 cls, uint8 specTab, uint32 role)
         case CLASS_PRIEST:
             if (specTab == 2)
                 return role == lfg::PLAYER_ROLE_DAMAGE;
+            if (specTab == 0)
+                return role == lfg::PLAYER_ROLE_HEALER || role == lfg::PLAYER_ROLE_DAMAGE;
             return role == lfg::PLAYER_ROLE_HEALER;
 
         case CLASS_SHAMAN:
@@ -172,7 +174,11 @@ uint32 RoleMaskForClassSpecTab(uint8 cls, uint8 specTab)
             return lfg::PLAYER_ROLE_DAMAGE;
 
         case CLASS_PRIEST:
-            return (specTab == 2) ? lfg::PLAYER_ROLE_DAMAGE : lfg::PLAYER_ROLE_HEALER;
+            if (specTab == 2)
+                return lfg::PLAYER_ROLE_DAMAGE;
+            if (specTab == 0)
+                return lfg::PLAYER_ROLE_HEALER | lfg::PLAYER_ROLE_DAMAGE;
+            return lfg::PLAYER_ROLE_HEALER;
 
         case CLASS_SHAMAN:
             return (specTab == 2) ? lfg::PLAYER_ROLE_HEALER : lfg::PLAYER_ROLE_DAMAGE;

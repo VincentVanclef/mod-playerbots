@@ -250,8 +250,7 @@ uint32 LfgJoinAction::GetRoles()
 
             if (actualRoleMask && actualRoleMask != desiredRole && (actualRoleMask & desiredRole) == desiredRole)
             {
-                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} actualMask={} class={} specTab={} verdict=flex_mask_override", botId, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
-                return actualRoleMask;
+                LOG_INFO("playerbots", "[RTG][LFG][ROLE] helper={} desiredRole={} actualRole={} actualMask={} class={} specTab={} verdict=flex_capable_assigned_role", botId, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
             }
 
             if (desiredRole != actualRole)

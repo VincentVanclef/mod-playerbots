@@ -498,3 +498,28 @@ A live test finally produced the desired fast RDF materialization and clean dung
 - there should be no repeated `owner=1 ... join_dispatch_failed` loops during the orphan grace window
 - after roughly three minutes, straggler helpers should log out cleanly
 - priest healers should apply `Power Word: Shield` to the tank earlier and begin direct healing sooner under sustained pressure
+
+## Chapter 2026-03-28E — Stable RDF owner identity, assigned-role join discipline, disc flex doctrine, priest shielding, and summon-ground safety
+
+### Context
+After the successful RDF entry hardening pass, follow-up testing exposed a different family of seams: helpers could inherit synthetic owner ids such as `1` or `2` after LFG group materialization, second-character RDF tests could starve because demand/accounting no longer matched the initiating real player, flex-role feral join masks could interfere with refill behavior, Discipline priest capability still collapsed too conservatively, priests still under-used `Power Word: Shield`, and summon placement could land helpers below terrain when master-relative Z was unsafe.
+
+### Incorrect assumptions retired
+- LFG group GUID low values are **not** stable RTG queue owners.
+- A flex-capable spec should not automatically advertise every safe role at queue-join time once RTG has already assigned a specific slot.
+- Priest discipline should not be treated as healer-only for RTG helper capability matching.
+- Summon target Z should not assume the master's raw Z is safe terrain for the bot destination.
+
+### Manual changes
+1. Added a stable real-player owner resolver and used it for RDF owner normalization and real-player RDF bucket construction.
+2. Stopped flex-capable assigned helpers from advertising a multi-role join mask when RTG has already assigned a concrete role. Flex capability is still used for candidate selection/prep, but queue join now stays slot-disciplined.
+3. Extended Discipline priest role capability to `HEALER|DAMAGE` while keeping Holy healer-only and Shadow damage-only.
+4. Raised priest shielding pressure around main-tank protection and near-full-health pre-shield windows.
+5. Grounded summon destinations with terrain height updates before teleport.
+
+### Expected proof
+- No follow-up RDF helper accounting under owner ids `1` or `2` when the real queue owner should be the initiating real player.
+- Second-character RDF tests should acquire and dispatch under the correct player owner id.
+- Feral and Disc helpers can still satisfy either safe role during candidate selection, but once assigned they queue as the requested slot only.
+- Priests should begin shielding tanks much earlier, including pre-shield windows when `Weakened Soul` is absent.
+- Summoned helpers should stop falling below terrain from bad Z inheritance.
