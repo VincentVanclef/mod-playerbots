@@ -8,6 +8,24 @@
 #include "Event.h"
 #include "Playerbots.h"
 
+namespace
+{
+    static Unit* RTG_GetShieldPrioritySupportTarget(Player* bot, PlayerbotAI* botAI)
+    {
+        if (!bot || !botAI)
+            return nullptr;
+
+        if (Unit* master = AI_VALUE(Unit*, "master target"))
+        {
+            if (!master->isDead() && master != bot && master->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
+                !botAI->HasAnyAuraOf(master, "weakened soul", "power word: shield", nullptr))
+                return master;
+        }
+
+        return nullptr;
+    }
+}
+
 bool CastRemoveShadowformAction::isUseful() { return botAI->HasAura("shadowform", AI_VALUE(Unit*, "self target")); }
 
 bool CastRemoveShadowformAction::isPossible() { return true; }
@@ -26,6 +44,12 @@ Unit* CastPowerWordShieldOnAlmostFullHealthBelowAction::GetTarget()
             mainTank->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
             !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
             return mainTank;
+    }
+
+    if (Unit* supportTarget = RTG_GetShieldPrioritySupportTarget(bot, botAI))
+    {
+        if (supportTarget->GetHealthPct() <= sPlayerbotAIConfig.almostFullHealth)
+            return supportTarget;
     }
 
     Group* group = bot->GetGroup();
@@ -62,6 +86,12 @@ bool CastPowerWordShieldOnAlmostFullHealthBelowAction::isUseful()
         if (!mainTank->isDead() && mainTank->GetHealthPct() <= sPlayerbotAIConfig.almostFullHealth &&
             mainTank->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
             !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
+            return true;
+    }
+
+    if (Unit* supportTarget = RTG_GetShieldPrioritySupportTarget(bot, botAI))
+    {
+        if (supportTarget->GetHealthPct() <= sPlayerbotAIConfig.almostFullHealth)
             return true;
     }
 
@@ -102,6 +132,9 @@ Unit* CastPowerWordShieldOnNotFullAction::GetTarget()
             return mainTank;
     }
 
+    if (Unit* supportTarget = RTG_GetShieldPrioritySupportTarget(bot, botAI))
+        return supportTarget;
+
     Group* group = bot->GetGroup();
     MinValueCalculator calc(100);
     for (GroupReference* gref = group->GetFirstMember(); gref; gref = gref->next())
@@ -135,6 +168,9 @@ bool CastPowerWordShieldOnNotFullAction::isUseful()
             !botAI->HasAnyAuraOf(mainTank, "weakened soul", "power word: shield", nullptr))
             return true;
     }
+
+    if (RTG_GetShieldPrioritySupportTarget(bot, botAI))
+        return true;
 
     return GetTarget();
 }

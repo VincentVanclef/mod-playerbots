@@ -782,3 +782,17 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
 - No more helper add-data / dispatcher churn under owner ids `1` or `2` for solo RDF tests.
 - Second initiating character gets clean helper acquisition.
 - Refill works without feral dual-mask blocking the remaining missing slot math.
+
+## Chapter 2026-03-30-C — RDF owner drift pinning + strict paladin queue doctrine
+- Scope: mod-playerbots / RTG queue assistance / RDF helper lifecycle.
+- Findings:
+  - Live RDF success exposed a later regression path where helper work drifted onto low synthetic owners (`1`, `2`) during follow-up/refill flows.
+  - Holy paladin tanking is an unacceptable class-role breach and must be treated as a hard runtime mismatch, not a soft mismatch.
+- Delivery:
+  - queue helper ownership remains pinned to the initiating real player.
+  - paladins now require exact assigned-role/runtime-role agreement before RDF dispatch proceeds.
+  - priest shielding pressure was raised again so support feels more proactive.
+- Proof targets:
+  - no more helper acquisition or dispatch keyed to owner `1` / `2` unless that is the actual real player.
+  - holy paladin never survives a tank dispatch path.
+  - priest shield uptime improves on tank / supported player targets.

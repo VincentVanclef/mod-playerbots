@@ -523,3 +523,23 @@ After the successful RDF entry hardening pass, follow-up testing exposed a diffe
 - Feral and Disc helpers can still satisfy either safe role during candidate selection, but once assigned they queue as the requested slot only.
 - Priests should begin shielding tanks much earlier, including pre-shield windows when `Weakened Soul` is absent.
 - Summoned helpers should stop falling below terrain from bad Z inheritance.
+
+## Chapter 2026-03-30-C — RDF owner drift pinning + strict paladin queue doctrine
+- Context:
+  - Follow-up live RDF testing reported that a holy paladin still ended up in the tank slot, and a second-character RDF test later drifted into low synthetic owners like `1` / `2` instead of remaining attached to the initiating player.
+- Incorrect assumption retired:
+  - Normalizing helper ownership forward into the live LFG group would remain equivalent to the real player owner.
+  - In practice this polluted refill/orphan/account-capacity math and allowed later queue work to key off synthetic group ids.
+- Real seam:
+  - RTG helper add-data owner must stay pinned to the initiating real player.
+  - Live group state can inform transition handling, but it must not rewrite queue ownership identity.
+- Code changes:
+  - `RandomPlayerbotMgr.cpp`
+    - stopped rewriting RDF helper `add` ownership during LFG-group normalization; the system now retains the original real-player owner and only emits a breadcrumb.
+    - added a stricter runtime mismatch rule for paladins so assigned RDF role must equal actual runtime role before dispatch proceeds.
+  - `PriestActions.cpp` / `HealPriestStrategy.cpp`
+    - increased pre-emptive shielding priority and added a support-target preference path so priests protect the main tank/master sooner.
+- Intended proof:
+  - second-character RDF should continue to use the real player owner instead of drifting to `1` / `2`.
+  - holy paladins should no longer survive dispatch into a tank assignment; they should be rejected and recycled instead.
+  - priests should apply `Power Word: Shield` sooner, especially on main tank / supported player targets.

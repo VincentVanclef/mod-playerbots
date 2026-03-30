@@ -590,14 +590,14 @@ namespace
         if (!stableOwner || desiredOwner == stableOwner)
             return false;
 
+        // Queue ownership must remain pinned to the initiating real player.
+        // Rewriting helper add-data ownership to transient LFG group ids caused
+        // later RDF/refill/orphan churn under owners like 1 or 2. Keep the real
+        // player owner stable and only emit a breadcrumb for investigation.
         uint32 botId = bot->GetGUID().GetCounter();
-        std::string normalizedAddData = RTG::MakeLfgAddData(desiredTeam, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, stableOwner);
-        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "add", 1, 600, normalizedAddData);
-        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 1, 45, normalizedAddData);
-
-        LOG_INFO("playerbots", "[RTG][RDF][OWNER] helper={} oldOwner={} newOwner={} role={} reason=lfg_group_normalize",
+        LOG_INFO("playerbots", "[RTG][RDF][OWNER] helper={} oldOwner={} candidateOwner={} role={} reason=retain_real_owner",
             botId, desiredOwner, stableOwner, desiredRole);
-        return true;
+        return false;
     }
 
     static constexpr uint32 RTG_LFG_PROPOSAL_RESOLVE_GRACE_SECONDS = 45;
@@ -1953,10 +1953,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                     uint32 actualRole = RTG_ActualRoleForBot(bot);
                     uint32 actualRoleMask = RTG_GetActualSpecRoleMask(bot);
-                    if ((actualRoleMask & desiredRole) == 0)
+                    bool strictHybridMismatch = false;
+                    if (bot->getClass() == CLASS_PALADIN)
+                        strictHybridMismatch = (actualRole != desiredRole);
+
+                    if ((actualRoleMask & desiredRole) == 0 || strictHybridMismatch)
                     {
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={}",
-                            botId, desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={}",
+                            botId, desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u));
                         RTG_SetCachedRuntimeLfgRole(botId, actualRole);
                         RTG_SetCachedRuntimeLfgRoleMask(botId, actualRoleMask);
                         RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
