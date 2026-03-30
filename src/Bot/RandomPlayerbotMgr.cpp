@@ -1722,6 +1722,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         rtgBgDemand = (bgStart != 0) && (bgNeed != 0);
 
         uint32 trackedManaged = 0;
+        uint32 pendingManaged = 0;
+        uint32 activeManaged = 0;
         for (uint32 botId : currentBots)
         {
             if (!GetEventValue(botId, "add"))
@@ -1732,6 +1734,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
 
             ++trackedManaged;
+            if (GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId)))
+                ++activeManaged;
+            else
+                ++pendingManaged;
         }
 
         uint32 cappedLfgNeed = std::min<uint32>(lfgNeed, sPlayerbotAIConfig.rtgLfgMaxBots);
@@ -1740,6 +1746,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         uint32 eventTarget = std::min<uint32>(trackedManaged + unresolvedNeed, sPlayerbotAIConfig.rtgEventMaxBots);
         maxAllowedBotCount = baseWorld + eventTarget;
 
+        // Manual safety doctrine:
+        // once queue-managed helpers have already been requested, the online/login budget
+        // must never shrink below those already-tracked helpers just because the planner's
+        // global need snapshot has not caught up yet for a later owner/lane. Otherwise the
+        // first owner consumes the login budget and later owners stall forever in add-data.
+        uint32 managedFloor = baseWorld + std::min<uint32>(trackedManaged, sPlayerbotAIConfig.rtgEventMaxBots);
+        if (maxAllowedBotCount < managedFloor)
+            maxAllowedBotCount = managedFloor;
+
         if (!rtgLfgDemand && !rtgBgDemand && !sPlayerbotAIConfig.rtgKeepWorldBots)
             maxAllowedBotCount = 0;
 
@@ -1747,8 +1762,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} cappedLfgNeed={} cappedBgNeed={} eventTarget={} baseWorld={} maxAllowed={}",
-                trackedManaged, unresolvedNeed, lfgNeed, bgNeed, cappedLfgNeed, cappedBgNeed, eventTarget, baseWorld, maxAllowedBotCount);
+            LOG_INFO("playerbots", "[RTG][CONTROL][TARGET] trackedManaged={} activeManaged={} pendingManaged={} unresolvedNeed={} lfgNeed={} bgNeed={} cappedLfgNeed={} cappedBgNeed={} eventTarget={} baseWorld={} managedFloor={} maxAllowed={}",
+                trackedManaged, activeManaged, pendingManaged, unresolvedNeed, lfgNeed, bgNeed, cappedLfgNeed, cappedBgNeed, eventTarget, baseWorld, managedFloor, maxAllowedBotCount);
         }
 
         static bool rtgStandaloneLogged = false;

@@ -543,3 +543,9 @@ After the successful RDF entry hardening pass, follow-up testing exposed a diffe
   - second-character RDF should continue to use the real player owner instead of drifting to `1` / `2`.
   - holy paladins should no longer survive dispatch into a tank assignment; they should be rejected and recycled instead.
   - priests should apply `Power Word: Shield` sooner, especially on main tank / supported player targets.
+
+## Chapter 2026-03-30 — Multi-owner dispatch floor
+- Situation: first owner could receive helper requests and logins, while later owners/lane requests stayed stuck in add-data and emitted repeated DISPATCH STALL lines.
+- Finding: RTG queue-managed helpers already present in currentBots could outpace the planner's global need snapshot, letting the online/login budget fall below already-requested queue helpers.
+- Correction: added a managed-floor rule in RandomPlayerbotMgr so rtgEventDriven maxAllowedBotCount never drops below the number of already-tracked queue-managed helpers.
+- Proof target: second and later RDF/BG owners should now produce DISPATCH ADD / LOGIN instead of stalling forever behind the first owner.

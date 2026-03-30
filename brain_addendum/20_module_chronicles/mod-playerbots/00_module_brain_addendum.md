@@ -796,3 +796,9 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
   - no more helper acquisition or dispatch keyed to owner `1` / `2` unless that is the actual real player.
   - holy paladin never survives a tank dispatch path.
   - priest shield uptime improves on tank / supported player targets.
+
+## Chapter 2026-03-30 — Multi-owner dispatch floor
+- Situation: later owners/lane requests were stalling behind the first owner even though helper acquire requests were being created.
+- Root seam: login budget relied on a planner snapshot that could lag behind already-requested queue-managed helpers.
+- Correction: the RTG target now respects a managed helper floor so already-requested queue helpers preserve enough login headroom to connect.
+- Watchpoints: verify concurrent RDF owners plus BG demand can all emit DISPATCH ADD / LOGIN without synthetic account starvation.
