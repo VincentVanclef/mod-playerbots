@@ -2169,6 +2169,18 @@ int32 PlayerbotAI::GetMeleeIndex(Player* player)
 bool PlayerbotAI::IsTank(Player* player, bool bySpec)
 {
     PlayerbotAI* botAi = GET_PLAYERBOT_AI(player);
+    if (!bySpec && player)
+    {
+        if (Group* group = player->GetGroup())
+        {
+            if (group->isLFGGroup())
+            {
+                uint32 roles = sLFGMgr->GetRoles(player->GetGUID());
+                if (roles)
+                    return (roles & lfg::PLAYER_ROLE_TANK) != 0;
+            }
+        }
+    }
     if (!bySpec && botAi)
         return botAi->ContainsStrategy(STRATEGY_TYPE_TANK);
 
@@ -2207,6 +2219,18 @@ bool PlayerbotAI::IsTank(Player* player, bool bySpec)
 bool PlayerbotAI::IsHeal(Player* player, bool bySpec)
 {
     PlayerbotAI* botAi = GET_PLAYERBOT_AI(player);
+    if (!bySpec && player)
+    {
+        if (Group* group = player->GetGroup())
+        {
+            if (group->isLFGGroup())
+            {
+                uint32 roles = sLFGMgr->GetRoles(player->GetGUID());
+                if (roles)
+                    return (roles & lfg::PLAYER_ROLE_HEALER) != 0;
+            }
+        }
+    }
     if (!bySpec && botAi)
         return botAi->ContainsStrategy(STRATEGY_TYPE_HEAL);
 
@@ -2244,6 +2268,18 @@ bool PlayerbotAI::IsHeal(Player* player, bool bySpec)
 bool PlayerbotAI::IsDps(Player* player, bool bySpec)
 {
     PlayerbotAI* botAi = GET_PLAYERBOT_AI(player);
+    if (!bySpec && player)
+    {
+        if (Group* group = player->GetGroup())
+        {
+            if (group->isLFGGroup())
+            {
+                uint32 roles = sLFGMgr->GetRoles(player->GetGUID());
+                if (roles)
+                    return (roles & lfg::PLAYER_ROLE_DAMAGE) != 0;
+            }
+        }
+    }
     if (!bySpec && botAi)
         return botAi->ContainsStrategy(STRATEGY_TYPE_DPS);
 

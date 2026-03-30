@@ -396,6 +396,7 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
     bool lfgRoleOverride = false;
     bool lfgTank = false;
     bool lfgHealer = false;
+    bool lfgDamage = false;
 
     if (Group* group = player->GetGroup())
     {
@@ -406,7 +407,8 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
             uint32 roles = sLFGMgr->GetRoles(player->GetGUID());
             lfgTank = (roles & 0x02) != 0;
             lfgHealer = (roles & 0x04) != 0;
-            lfgRoleOverride = lfgTank || lfgHealer;
+            lfgDamage = (roles & 0x08) != 0;
+            lfgRoleOverride = lfgTank || lfgHealer || lfgDamage;
         }
     }
 
@@ -454,6 +456,53 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
             }
 
             engine->addStrategy("tank face", false);
+        }
+
+        if (lfgDamage)
+        {
+            engine->removeStrategy("heal", false);
+            engine->removeStrategy("holy heal", false);
+            engine->removeStrategy("resto", false);
+            engine->removeStrategy("save mana", false);
+            engine->removeStrategy("healer dps", false);
+            engine->removeStrategy("tank", false);
+            engine->removeStrategy("bear", false);
+            engine->removeStrategy("blood", false);
+            engine->removeStrategy("tank assist", false);
+            engine->removeStrategy("tank face", false);
+
+            switch (player->getClass())
+            {
+                case CLASS_PRIEST:
+                    if (tab == PRIEST_TAB_SHADOW)
+                        engine->addStrategiesNoInit("dps", "shadow debuff", "shadow aoe", "dps assist", nullptr);
+                    else
+                        engine->addStrategiesNoInit("holy dps", "shadow debuff", "shadow aoe", "dps assist", nullptr);
+                    break;
+                case CLASS_SHAMAN:
+                    if (tab == SHAMAN_TAB_ENHANCEMENT)
+                        engine->addStrategiesNoInit("enh", "strength of earth", "magma", "windfury", "dps assist", "aoe", nullptr);
+                    else
+                        engine->addStrategiesNoInit("caster", "caster aoe", "bmana", "dps assist", "aoe", nullptr);
+                    break;
+                case CLASS_DRUID:
+                    if (tab == DRUID_TAB_FERAL)
+                        engine->addStrategiesNoInit("cat", "dps assist", nullptr);
+                    else
+                    {
+                        engine->addStrategiesNoInit("caster", "caster aoe", "dps assist", nullptr);
+                        engine->addStrategy("caster debuff", false);
+                    }
+                    break;
+                case CLASS_PALADIN:
+                    engine->addStrategiesNoInit("dps", "dps assist", "baoe", nullptr);
+                    break;
+                default:
+                    engine->addStrategy("dps", false);
+                    engine->addStrategy("dps assist", false);
+                    engine->addStrategy("aoe", false);
+                    break;
+            }
         }
     }
 

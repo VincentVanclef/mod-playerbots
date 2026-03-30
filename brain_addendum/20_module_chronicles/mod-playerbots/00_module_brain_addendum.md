@@ -813,3 +813,11 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
 - Locked druid RDF offline-role resolution to strict spec doctrine when spec data exists: Balance = DPS only, Feral = Tank/DPS, Restoration = Healer only.
 - Added a conservative fallback for druids when offline talent/spec truth is unavailable: fallback advertises Balance/DPS only instead of allowing stale runtime caches to surface tank or healer capability.
 - Purpose: stop Restoration druids from ever being selected into RDF tank duty due to unknown/offline-role ambiguity.
+
+
+## Queue follow-up: spec-role doctrine and combat-role override
+- Locked RDF role doctrine to the user-specified class/spec map for current resolver assumptions: priest disc=heal/dps, holy=heal, shadow=dps; warlock/mage/rogue/hunter always dps; druid resto=heal, feral=tank/dps, balance=dps; warrior prot=tank arms/fury=dps; paladin holy=heal prot=tank ret=dps; shaman resto=heal ele/enh=dps.
+- Identified a second seam after queue-role fixes: combat behavior was still driven mainly by spec-default strategies, especially for ambiguous specs like Discipline priest and any bad runtime cases where a healer spec slipped into a DPS queue role.
+- Added LFG role-aware combat override so bots in live LFG groups derive tank/heal/dps behavior from the assigned RDF role first, rather than only the default spec strategy.
+- Extended default combat strategy override to support LFG damage roles explicitly, including Disc priest DPS, healer-spec fallback DPS behavior, and removal of healer/tank strategy residue when the assigned role is damage.
+- Proof target: a Disc priest assigned DPS should behave as DPS in the dungeon; a healer-spec bot that somehow reaches a DPS slot should still contribute damage instead of standing in healer behavior.
