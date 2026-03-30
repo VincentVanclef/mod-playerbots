@@ -10,6 +10,7 @@ namespace RTG
 bool ClassCanRole(uint8 cls, uint32 role);
 uint32 DefaultRoleForClass(uint8 cls);
 uint8 DefaultSpecTabForClass(uint8 cls);
+uint32 ConservativeFallbackRoleMaskForClass(uint8 cls);
 uint32 RoleMaskForClassSpecTab(uint8 cls, uint8 specTab);
 uint32 RoleForClassSpecTab(uint8 cls, uint8 specTab);
 bool PreferredSpecTabForClassRole(uint8 cls, uint32 role, uint8& specTab);

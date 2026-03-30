@@ -555,3 +555,9 @@ After the successful RDF entry hardening pass, follow-up testing exposed a diffe
 - Finding: the login stage still budgeted against visible online helpers strongly enough that already-requested pending helpers were not guaranteed dispatch/login room while earlier groups remained active.
 - Correction: reserve login headroom for `pendingQueuedLogins` by forcing `maxAllowedBotCount >= onlineBotCount + pendingQueuedLogins` during RTG event-driven dispatch budgeting.
 - Proof target: after two active RDF groups exist, a third queue should move from `ACQUIRE][REQUEST]` to `DISPATCH][ADD]` / `LFG][LOGIN]` instead of accumulating `DISPATCH][STALL]`.
+
+
+### 2026-03-30 — RDF druid spec-role hardening
+- Locked druid RDF offline-role resolution to strict spec doctrine when spec data exists: Balance = DPS only, Feral = Tank/DPS, Restoration = Healer only.
+- Added a conservative fallback for druids when offline talent/spec truth is unavailable: fallback advertises Balance/DPS only instead of allowing stale runtime caches to surface tank or healer capability.
+- Purpose: stop Restoration druids from ever being selected into RDF tank duty due to unknown/offline-role ambiguity.

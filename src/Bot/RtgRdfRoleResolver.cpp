@@ -59,6 +59,12 @@ uint8 DefaultSpecTabForClass(uint8 cls)
 }
 
 
+
+uint32 ConservativeFallbackRoleMaskForClass(uint8 cls)
+{
+    return RoleMaskForClassSpecTab(cls, DefaultSpecTabForClass(cls));
+}
+
 bool PreferredSpecTabForClassRole(uint8 cls, uint32 role, uint8& specTab)
 {
     switch (cls)

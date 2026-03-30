@@ -807,3 +807,9 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
 - Symptom: first two simultaneous RDF runs filled; third run only produced helper requests and later `DISPATCH][STALL]`, with false account-capacity messages.
 - Root seam: requested helpers in `currentBots`/add-data were not guaranteed enough login budget while earlier owner groups stayed online.
 - Fix: during RTG event-driven login budgeting, preserve `online + pendingQueuedLogins` as the minimum live target so requested helpers can actually connect.
+
+
+### 2026-03-30 — RDF druid spec-role hardening
+- Locked druid RDF offline-role resolution to strict spec doctrine when spec data exists: Balance = DPS only, Feral = Tank/DPS, Restoration = Healer only.
+- Added a conservative fallback for druids when offline talent/spec truth is unavailable: fallback advertises Balance/DPS only instead of allowing stale runtime caches to surface tank or healer capability.
+- Purpose: stop Restoration druids from ever being selected into RDF tank duty due to unknown/offline-role ambiguity.

@@ -3458,6 +3458,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return RTG_GetOfflineSpecRoleMask(charInfo.guid, charInfo.rClass);
             }
 
+            // Conservative doctrine for druids: when we do not have reliable offline spec data,
+            // do not let stale runtime role caches advertise tank/healer capability.
+            // Default druid fallback remains Balance-only DPS until actual spec truth is known.
+            if (charInfo.rClass == CLASS_DRUID)
+            {
+                roleKnown = true;
+                return RTG::ConservativeFallbackRoleMaskForClass(charInfo.rClass);
+            }
+
             uint32 cachedMask = RTG_GetCachedRuntimeLfgRoleMask(charInfo.guid);
             if (cachedMask)
             {
