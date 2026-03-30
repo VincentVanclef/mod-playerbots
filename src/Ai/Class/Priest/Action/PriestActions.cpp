@@ -15,7 +15,7 @@ namespace
         if (!bot || !botAI)
             return nullptr;
 
-        if (Unit* master = AI_VALUE(Unit*, "master target"))
+        if (Unit* master = botAI->GetAiObjectContext()->GetValue<Unit*>("master target")->Get())
         {
             if (!master->isDead() && master != bot && master->GetDistance2d(bot) <= sPlayerbotAIConfig.spellDistance &&
                 !botAI->HasAnyAuraOf(master, "weakened soul", "power word: shield", nullptr))
