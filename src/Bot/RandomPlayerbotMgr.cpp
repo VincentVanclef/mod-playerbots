@@ -2908,7 +2908,19 @@ for (auto const& c : candidates)
         }
 
         if (pendingQueuedLogins)
+        {
+            // RTG multi-owner doctrine:
+            // once helper requests already exist in add-data/currentBots, the login budget
+            // must explicitly reserve room to bring those pending helpers online.
+            // Otherwise two already-materialized RDF groups can consume the visible online
+            // target and a third queue's requested helpers will sit in pending state until
+            // dispatch-stall cleanup, even though there is ample configured helper capacity.
+            uint32 pendingAwareTarget = onlineBotCount + pendingQueuedLogins;
+            if (maxAllowedBotCount < pendingAwareTarget)
+                maxAllowedBotCount = pendingAwareTarget;
+
             intervalCap = std::max(intervalCap, pendingQueuedLogins);
+        }
     }
 
     uint32 updateBots = intervalCap * onlineBotFocus / 100;

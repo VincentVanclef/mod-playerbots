@@ -802,3 +802,8 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
 - Root seam: login budget relied on a planner snapshot that could lag behind already-requested queue-managed helpers.
 - Correction: the RTG target now respects a managed helper floor so already-requested queue helpers preserve enough login headroom to connect.
 - Watchpoints: verify concurrent RDF owners plus BG demand can all emit DISPATCH ADD / LOGIN without synthetic account starvation.
+
+## Chapter — Pending login floor for simultaneous RDF lanes
+- Symptom: first two simultaneous RDF runs filled; third run only produced helper requests and later `DISPATCH][STALL]`, with false account-capacity messages.
+- Root seam: requested helpers in `currentBots`/add-data were not guaranteed enough login budget while earlier owner groups stayed online.
+- Fix: during RTG event-driven login budgeting, preserve `online + pendingQueuedLogins` as the minimum live target so requested helpers can actually connect.

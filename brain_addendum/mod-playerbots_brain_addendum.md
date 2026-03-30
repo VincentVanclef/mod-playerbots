@@ -549,3 +549,9 @@ After the successful RDF entry hardening pass, follow-up testing exposed a diffe
 - Finding: RTG queue-managed helpers already present in currentBots could outpace the planner's global need snapshot, letting the online/login budget fall below already-requested queue helpers.
 - Correction: added a managed-floor rule in RandomPlayerbotMgr so rtgEventDriven maxAllowedBotCount never drops below the number of already-tracked queue-managed helpers.
 - Proof target: second and later RDF/BG owners should now produce DISPATCH ADD / LOGIN instead of stalling forever behind the first owner.
+
+## Chapter — Multi-owner pending-login floor
+- Situation: two RDF groups could materialize at the same time, but a third queue would only reach `ACQUIRE][REQUEST]` and then stall in pending/add-data for 40+ seconds.
+- Finding: the login stage still budgeted against visible online helpers strongly enough that already-requested pending helpers were not guaranteed dispatch/login room while earlier groups remained active.
+- Correction: reserve login headroom for `pendingQueuedLogins` by forcing `maxAllowedBotCount >= onlineBotCount + pendingQueuedLogins` during RTG event-driven dispatch budgeting.
+- Proof target: after two active RDF groups exist, a third queue should move from `ACQUIRE][REQUEST]` to `DISPATCH][ADD]` / `LFG][LOGIN]` instead of accumulating `DISPATCH][STALL]`.
