@@ -715,14 +715,14 @@ namespace
         if (!liveRole)
             return;
 
-        uint32 appliedRole = GetEventValue(botId, "rtg_lfg_strategy_role");
+        uint32 appliedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
         if (appliedRole == liveRole)
             return;
 
         if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
             botAI->ResetStrategies(false);
 
-        SetEventValue(botId, "rtg_lfg_strategy_role", liveRole, 1800, addData);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_strategy_role", liveRole, 1800, addData);
 
         if (RTG_QueueDebugEnabled())
         {
