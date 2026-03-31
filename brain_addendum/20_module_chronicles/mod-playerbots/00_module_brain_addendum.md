@@ -821,3 +821,15 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
 - Added LFG role-aware combat override so bots in live LFG groups derive tank/heal/dps behavior from the assigned RDF role first, rather than only the default spec strategy.
 - Extended default combat strategy override to support LFG damage roles explicitly, including Disc priest DPS, healer-spec fallback DPS behavior, and removal of healer/tank strategy residue when the assigned role is damage.
 - Proof target: a Disc priest assigned DPS should behave as DPS in the dungeon; a healer-spec bot that somehow reaches a DPS slot should still contribute damage instead of standing in healer behavior.
+
+## Chapter — RDF demand must subtract already-assigned helpers
+- Situation: two simultaneous RDF groups could form, but a third owner stalled in `ACQUIRE][REQUEST]` / `DISPATCH][STALL]` while the planner kept claiming more accounts were needed.
+- Root seam: global RDF demand was still computed from real-player role counts only. Already-assigned/queued RTG helpers for active owners were not subtracted from owner demand, so completed/active runs still contributed phantom helper need.
+- Correction: owner snapshots now include queued vs assigned helper role counts from current managed helper add-data, and the RDF planner subtracts those counts before publishing `rtg_lfg_need_*` / `rtg_lfg_need_total`.
+- Proof target: after two live RDF groups exist, a third owner should only request its own four helpers instead of inheriting phantom demand from the already-filled runs.
+
+## Chapter — Live LFG role strategy reset
+- Situation: bots could queue into the correct RDF role but still fight like their previous healer-spec strategy after the live LFG group formed.
+- Root seam: strategy overrides were present, but some helpers never rebuilt combat strategies after the final LFG role became visible on the live LFG group.
+- Correction: once a helper is inside a live LFG group / proposal-visible / teleport-ready state, RTG now resets strategies one time per live role change and stores `rtg_lfg_strategy_role` so healer residue does not persist into a DPS assignment.
+- Proof target: Disc priest DPS should switch into damage behavior once the live LFG role is visible; healer-spec residue should not survive into a DPS slot.

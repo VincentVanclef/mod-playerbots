@@ -700,6 +700,37 @@ namespace
         return totalPoints > 0;
     }
 
+    static void RTG_ApplyLiveLfgRoleStrategies(Player* bot, uint32 botId, uint32 fallbackRole, std::string const& addData)
+    {
+        if (!bot)
+            return;
+
+        Group* group = bot->GetGroup();
+        if (!group || !group->isLFGGroup())
+            return;
+
+        uint32 liveRole = RTG_NormalizeQueuedRoleMask(sLFGMgr->GetRoles(bot->GetGUID()));
+        if (!liveRole)
+            liveRole = fallbackRole;
+        if (!liveRole)
+            return;
+
+        uint32 appliedRole = GetEventValue(botId, "rtg_lfg_strategy_role");
+        if (appliedRole == liveRole)
+            return;
+
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            botAI->ResetStrategies(false);
+
+        SetEventValue(botId, "rtg_lfg_strategy_role", liveRole, 1800, addData);
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][RDF][STRATEGY] helper={} liveRole={} fallbackRole={} class={} specTab={}",
+                     botId, liveRole, fallbackRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+        }
+    }
+
     static bool RTG_PrepareLfgHelperForDesiredRole(Player* bot, uint32 desiredLevel, uint32 desiredRole, char const* reason)
     {
         if (!bot || !desiredRole || !RTG::ClassCanRole(bot->getClass(), desiredRole))
@@ -1863,6 +1894,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (inDungeonMap)
             {
+                RTG_ApplyLiveLfgRoleStrategies(bot, botId, desiredRole, addData);
                 if (RTG_GetProposalLock(botId) || RTG_GetProposalAcceptSentAt(botId) || RTG_GetTeleportSentAt(botId) || RTG_GetTeleportAttempts(botId) || RTG_GetGroupReadySince(botId))
                     RTG_ClearProposalLifecycle(botId, bot);
                 continue;
@@ -1870,6 +1902,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (groupReadyForTeleport)
             {
+                RTG_ApplyLiveLfgRoleStrategies(bot, botId, desiredRole, addData);
                 uint32 nowTs = uint32(time(nullptr));
                 uint32 groupReadySince = RTG_GetGroupReadySince(botId);
                 if (!groupReadySince)
@@ -1925,6 +1958,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             if (proposalId)
             {
+                RTG_ApplyLiveLfgRoleStrategies(bot, botId, desiredRole, addData);
                 if (!proposalLockId)
                     SetEventValue(botId, "rtg_lfg_proposal_lock", proposalId, 90, addData);
 
@@ -5007,6 +5041,53 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         }
     }
 	
+    for (uint32 botId : currentBots)
+    {
+        if (!GetEventValue(botId, "add"))
+            continue;
+
+        std::string addData = GetEventData(botId, "add");
+        uint32 dataTeam = 0;
+        uint32 dataLevel = 0;
+        uint32 desiredRole = 0;
+        uint32 ownerId = 0;
+        if (!RTG::ParseLfgAddData(addData, dataTeam, dataLevel, &desiredRole, &ownerId))
+            continue;
+
+        auto it = requests.find(ownerId);
+        if (it == requests.end())
+            continue;
+
+        RTG::RtgLfgQueueOwnerSnapshot& req = it->second;
+        Player* managedBot = GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(botId));
+        bool countsInQueuedState = false;
+        if (managedBot && managedBot->IsInWorld())
+        {
+            lfg::LfgState botState = sLFGMgr->GetState(managedBot->GetGUID());
+            countsInQueuedState = (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON);
+        }
+
+        uint32 roleToCount = desiredRole ? desiredRole : lfg::PLAYER_ROLE_DAMAGE;
+        if (countsInQueuedState)
+        {
+            if (roleToCount == lfg::PLAYER_ROLE_TANK)
+                ++req.helperQueuedTank;
+            else if (roleToCount == lfg::PLAYER_ROLE_HEALER)
+                ++req.helperQueuedHeal;
+            else
+                ++req.helperQueuedDps;
+        }
+        else
+        {
+            if (roleToCount == lfg::PLAYER_ROLE_TANK)
+                ++req.helperAssignedTank;
+            else if (roleToCount == lfg::PLAYER_ROLE_HEALER)
+                ++req.helperAssignedHeal;
+            else
+                ++req.helperAssignedDps;
+        }
+    }
+
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         RTG::RtgRdfQueuePlanner rdfPlanner;

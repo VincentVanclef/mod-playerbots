@@ -38,9 +38,13 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, ownerAddData);
         mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, ownerAddData);
 
-        uint32 needTank = req.realTank >= 1 ? 0u : 1u;
-        uint32 needHeal = req.realHeal >= 1 ? 0u : 1u;
-        uint32 needDps = req.realDps >= 3 ? 0u : (3u - req.realDps);
+        uint32 presentTank = req.realTank + req.helperQueuedTank + req.helperAssignedTank;
+        uint32 presentHeal = req.realHeal + req.helperQueuedHeal + req.helperAssignedHeal;
+        uint32 presentDps = req.realDps + req.helperQueuedDps + req.helperAssignedDps;
+
+        uint32 needTank = presentTank >= 1 ? 0u : 1u;
+        uint32 needHeal = presentHeal >= 1 ? 0u : 1u;
+        uint32 needDps = presentDps >= 3 ? 0u : (3u - presentDps);
         uint32 helperNeed = needTank + needHeal + needDps;
 
         desiredHelperTotal += helperNeed;
@@ -90,9 +94,11 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         if (sPlayerbotAIConfig.rtgEventDebug || helperNeed)
         {
             LOG_INFO("playerbots",
-                "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} needT={} needH={} needD={} startTs={}",
+                "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} helperQueuedT={} helperQueuedH={} helperQueuedD={} helperAssignedT={} helperAssignedH={} helperAssignedD={} needT={} needH={} needD={} startTs={}",
                 req.owner, req.team, req.level,
                 req.realQueued, req.realActive,
+                req.helperQueuedTank, req.helperQueuedHeal, req.helperQueuedDps,
+                req.helperAssignedTank, req.helperAssignedHeal, req.helperAssignedDps,
                 needTank, needHeal, needDps, startTs);
         }
 

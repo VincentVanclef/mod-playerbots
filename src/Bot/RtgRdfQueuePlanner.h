@@ -18,6 +18,12 @@ struct RtgLfgQueueOwnerSnapshot
     uint32 realDps = 0;
     uint32 realQueued = 0;
     uint32 realActive = 0;
+    uint32 helperQueuedTank = 0;
+    uint32 helperQueuedHeal = 0;
+    uint32 helperQueuedDps = 0;
+    uint32 helperAssignedTank = 0;
+    uint32 helperAssignedHeal = 0;
+    uint32 helperAssignedDps = 0;
     bool activeDungeon = false;
 };
 
