@@ -36,7 +36,6 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         std::string ownerAddData = RTG::MakeLfgAddData(req.team, req.level, 0, req.owner);
 
         mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, ownerAddData);
-        mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_real_demand", 1u, ownerTtl, ownerAddData);
 
         uint32 presentTank = req.realTank + req.helperQueuedTank + req.helperAssignedTank;
         uint32 presentHeal = req.realHeal + req.helperQueuedHeal + req.helperAssignedHeal;
@@ -47,7 +46,16 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         uint32 needDps = presentDps >= 3 ? 0u : (3u - presentDps);
         uint32 helperNeed = needTank + needHeal + needDps;
 
-        desiredHelperTotal += helperNeed;
+        // Once an owner's RDF group is already materialized inside a live dungeon map,
+        // that owner must stop holding open a global helper request lane. The helpers can
+        // stay online for the active run, but the planner should close that owner's queue
+        // request so later owners can open fresh RDF lanes without being blocked by the
+        // older active dungeon run.
+        bool requestClosed = req.activeDungeon || helperNeed == 0u;
+        mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_real_demand", requestClosed ? 0u : 1u, requestClosed ? 0u : ownerTtl, ownerAddData);
+
+        if (!requestClosed)
+            desiredHelperTotal += helperNeed;
 
         if (needTank)
         {
@@ -91,21 +99,24 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_need_dps", 0, 0);
         }
 
-        if (sPlayerbotAIConfig.rtgEventDebug || helperNeed)
+        if (sPlayerbotAIConfig.rtgEventDebug || helperNeed || requestClosed)
         {
             LOG_INFO("playerbots",
-                "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} helperQueuedT={} helperQueuedH={} helperQueuedD={} helperAssignedT={} helperAssignedH={} helperAssignedD={} needT={} needH={} needD={} startTs={}",
+                "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} helperQueuedT={} helperQueuedH={} helperQueuedD={} helperAssignedT={} helperAssignedH={} helperAssignedD={} needT={} needH={} needD={} startTs={} requestClosed={}",
                 req.owner, req.team, req.level,
                 req.realQueued, req.realActive,
                 req.helperQueuedTank, req.helperQueuedHeal, req.helperQueuedDps,
                 req.helperAssignedTank, req.helperAssignedHeal, req.helperAssignedDps,
-                needTank, needHeal, needDps, startTs);
+                needTank, needHeal, needDps, startTs, requestClosed ? 1u : 0u);
         }
 
-        if (req.activeDungeon || now >= startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
-            anyReady = true;
-        else if (!oldestPendingStart || startTs < oldestPendingStart)
-            oldestPendingStart = startTs;
+        if (!requestClosed)
+        {
+            if (req.activeDungeon || now >= startTs + sPlayerbotAIConfig.rtgQueueGraceSeconds)
+                anyReady = true;
+            else if (!oldestPendingStart || startTs < oldestPendingStart)
+                oldestPendingStart = startTs;
+        }
     }
 
     if (anyRealLfgDemand && desiredHelperTotal)

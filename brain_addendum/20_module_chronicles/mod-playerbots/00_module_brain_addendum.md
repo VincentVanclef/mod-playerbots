@@ -833,3 +833,10 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
 - Root seam: strategy overrides were present, but some helpers never rebuilt combat strategies after the final LFG role became visible on the live LFG group.
 - Correction: once a helper is inside a live LFG group / proposal-visible / teleport-ready state, RTG now resets strategies one time per live role change and stores `rtg_lfg_strategy_role` so healer residue does not persist into a DPS assignment.
 - Proof target: Disc priest DPS should switch into damage behavior once the live LFG role is visible; healer-spec residue should not survive into a DPS slot.
+
+
+## Chapter 2026-03-31 — RDF Owner Lane Closure
+- Symptom: active RDF runs continued to own the shared helper lane, blocking new owners from opening later RDF fills unless all queued together.
+- Root seam: planner demand still counted active dungeon owners as open RDF helper requests.
+- Correction: close RDF request ownership once the run is filled/materialized, while leaving active helpers online for the dungeon itself.
+- Next proof: queue owner A, let the run fill and enter, then queue owner B afterward and confirm B reaches ACQUIRE -> ADD -> LOGIN without waiting for A to end.
