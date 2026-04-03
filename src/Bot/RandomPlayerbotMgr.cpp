@@ -709,26 +709,13 @@ namespace
         if (appliedRole == role)
             return;
 
+        // RTG doctrine: queue-role enforcement must not erase spec identity.
+        // We publish the assigned role into bot event state so IsTank/IsHeal/IsDps
+        // can honor it during queued/pending dungeon states, but we avoid broad
+        // generic strategy rewrites here because they can override class/spec
+        // combat packages (for example Balance drifting into melee/bear behavior).
         if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-        {
             botAI->ResetStrategies(false);
-
-            switch (role)
-            {
-                case lfg::PLAYER_ROLE_TANK:
-                    botAI->ChangeStrategy("-heal,-offheal,-healer dps,-dps,+tank", BOT_STATE_COMBAT);
-                    break;
-                case lfg::PLAYER_ROLE_HEALER:
-                    botAI->ChangeStrategy("-tank,-dps,+heal", BOT_STATE_COMBAT);
-                    botAI->EvaluateHealerDpsStrategy();
-                    break;
-                case lfg::PLAYER_ROLE_DAMAGE:
-                    botAI->ChangeStrategy("-tank,-heal,-offheal,-healer dps,+dps", BOT_STATE_COMBAT);
-                    break;
-                default:
-                    break;
-            }
-        }
 
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_strategy_role", role, 1800, addData);
 
@@ -1910,9 +1897,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 uint32 nowTs = uint32(time(nullptr));
                 uint32 orphanedSince = RTG_GetOrphanedSince(botId);
+                bool disposedFromDungeon = bot->HasAura(26013) || bot->HasAura(71041);
                 SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                 SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
-                if (!orphanedSince)
+                if (disposedFromDungeon)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=disposed_from_dungeon immediateLogout=1", botId, desiredOwner));
+                    RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_disposed", true);
+                }
+                else if (!orphanedSince)
                 {
                     SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, RTG_LFG_ORPHAN_GRACE_SECONDS + 60, addData);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=real_owner_left grace={}s", botId, desiredOwner, RTG_LFG_ORPHAN_GRACE_SECONDS));
@@ -3555,13 +3548,21 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return RTG_GetOfflineSpecRoleMask(charInfo.guid, charInfo.rClass);
             }
 
-            // Conservative doctrine for druids: when we do not have reliable offline spec data,
-            // do not let stale runtime role caches advertise tank/healer capability.
-            // Default druid fallback remains Balance-only DPS until actual spec truth is known.
-            if (charInfo.rClass == CLASS_DRUID)
+            // Conservative doctrine for hybrid classes: when we do not have reliable offline
+            // spec data, do not trust stale runtime role caches to advertise tank/healer capability.
+            // Fall back to the class default spec mask until actual spec truth is known.
+            switch (charInfo.rClass)
             {
-                roleKnown = true;
-                return RTG::ConservativeFallbackRoleMaskForClass(charInfo.rClass);
+                case CLASS_DRUID:
+                case CLASS_PALADIN:
+                case CLASS_PRIEST:
+                case CLASS_SHAMAN:
+                case CLASS_WARRIOR:
+                case CLASS_DEATH_KNIGHT:
+                    roleKnown = true;
+                    return RTG::ConservativeFallbackRoleMaskForClass(charInfo.rClass);
+                default:
+                    break;
             }
 
             uint32 cachedMask = RTG_GetCachedRuntimeLfgRoleMask(charInfo.guid);

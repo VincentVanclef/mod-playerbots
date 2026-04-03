@@ -891,3 +891,17 @@ The owner's RDF lane remains open until queued/live coverage is complete and no 
 - Change: Added login-time RDF role enforcement in `RandomPlayerbotMgr::OnBotLoginInternal` and extended `PlayerbotAI::IsTank/IsHeal/IsDps` to honor `rtg_lfg_strategy_role` while `rtg_lfg_pending` or `rtg_dungeon_active` is set.
 - Effect: Assigned RDF roles now influence AI identity immediately at login and remain aligned through pending/active dungeon states instead of falling back to healer/spec defaults.
 - Proof target: Logs should show `[RTG][RDF][ROLE_APPLY]` at login and bots in RDF DPS slots should stop acting like healers before or during queue materialization.
+
+## Chapter: Conservative hybrid fallback and orphan disposal tightening
+- Context: Sequential RDF owners started forming, but some later groups still surfaced obviously wrong hybrid assignments (for example fury-style tanks or enhancement-style healers), and disposed dungeon helpers could linger after the real player had already left and taken deserter.
+- Finding: The remaining ambiguity lived in two seams. First, when offline spec truth was unavailable, hybrid candidate selection could still consult stale runtime caches and advertise tank/healer capability that should not be trusted. Second, orphan cleanup used a grace window even for helpers already disposed from a dungeon run.
+- Change: Hardened offline hybrid fallback so druids, paladins, priests, shamans, warriors, and death knights now fall back to the conservative class-default spec mask instead of stale runtime caches when offline spec truth is unavailable. Also changed orphan cleanup so disposed helpers with deserter/dungeon-deserter immediately log out instead of waiting through orphan grace.
+- Effect: Hybrid helpers should stop surfacing into obviously wrong queue roles when spec truth is uncertain, and disposed dungeon helpers should no longer linger after the real player has already abandoned the run.
+- Proof target: Future bad-group scenarios should stop showing obvious role/spec contradictions for hybrid fillers, and logs should show immediate `rtg_lfg_disposed` logout after owner departure/deserter disposal.
+
+## Chapter: Queue-role enforcement without generic strategy drift
+- Context: Login-time RDF role enforcement helped bind assigned queue role into AI identity, but broad generic strategy rewrites could override class/spec combat packages and produce odd combat expression (for example Balance drifting into melee/bear-style behavior).
+- Finding: The durable value was the queued-role event state itself (`rtg_lfg_strategy_role`) plus `PlayerbotAI::IsTank/IsHeal/IsDps` honoring it during pending/active dungeon states. The generic `+tank/+heal/+dps` rewrites were the risky part.
+- Change: Role enforcement now preserves the queued-role event bridge and resets strategies, but no longer injects broad generic strategy swaps that can erase class/spec-specific combat logic.
+- Effect: Queue role still propagates into AI identity, while class/spec combat packages remain intact instead of being replaced by overly generic role strategies.
+- Proof target: Balance druids in RDF DPS roles should stop defaulting into bear/melee expression while still remaining classified as DPS for queue-role logic.
