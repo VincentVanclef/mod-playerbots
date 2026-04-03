@@ -37,32 +37,44 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
 
         mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_start", startTs, ownerTtl, ownerAddData);
 
-        uint32 presentTank = req.realTank + req.helperQueuedTank + req.helperAssignedTank;
-        uint32 presentHeal = req.realHeal + req.helperQueuedHeal + req.helperAssignedHeal;
-        uint32 presentDps = req.realDps + req.helperQueuedDps + req.helperAssignedDps;
+        // Split RDF accounting into two truths:
+        // 1) acquireNeed*: how many new helpers must still be acquired/logged in
+        //    after counting already-assigned helpers.
+        // 2) laneNeed*: whether the owner's RDF request lane must remain open so
+        //    already-assigned helpers are still allowed to complete their queue join.
+        uint32 presentAcquireTank = req.realTank + req.helperQueuedTank + req.helperAssignedTank;
+        uint32 presentAcquireHeal = req.realHeal + req.helperQueuedHeal + req.helperAssignedHeal;
+        uint32 presentAcquireDps = req.realDps + req.helperQueuedDps + req.helperAssignedDps;
 
-        uint32 needTank = presentTank >= 1 ? 0u : 1u;
-        uint32 needHeal = presentHeal >= 1 ? 0u : 1u;
-        uint32 needDps = presentDps >= 3 ? 0u : (3u - presentDps);
-        uint32 helperNeed = needTank + needHeal + needDps;
+        uint32 acquireNeedTank = presentAcquireTank >= 1 ? 0u : 1u;
+        uint32 acquireNeedHeal = presentAcquireHeal >= 1 ? 0u : 1u;
+        uint32 acquireNeedDps = presentAcquireDps >= 3 ? 0u : (3u - presentAcquireDps);
+        uint32 acquireHelperNeed = acquireNeedTank + acquireNeedHeal + acquireNeedDps;
 
-        // Once an owner's RDF group is already materialized inside a live dungeon map,
-        // that owner must stop holding open a global helper request lane. The helpers can
-        // stay online for the active run, but the planner should close that owner's queue
-        // request so later owners can open fresh RDF lanes without being blocked by the
-        // older active dungeon run.
-        bool requestClosed = req.activeDungeon || helperNeed == 0u;
+        uint32 presentLaneTank = req.realTank + req.helperQueuedTank;
+        uint32 presentLaneHeal = req.realHeal + req.helperQueuedHeal;
+        uint32 presentLaneDps = req.realDps + req.helperQueuedDps;
+
+        uint32 laneNeedTank = presentLaneTank >= 1 ? 0u : 1u;
+        uint32 laneNeedHeal = presentLaneHeal >= 1 ? 0u : 1u;
+        uint32 laneNeedDps = presentLaneDps >= 3 ? 0u : (3u - presentLaneDps);
+        uint32 outstandingAssigned = req.helperAssignedTank + req.helperAssignedHeal + req.helperAssignedDps;
+
+        // Close the owner's request lane only when the run is truly active in-dungeon,
+        // or when no queued/live deficit remains and there are no offline assigned
+        // helpers still expected to finish the join path.
+        bool requestClosed = req.activeDungeon || ((laneNeedTank + laneNeedHeal + laneNeedDps) == 0u && outstandingAssigned == 0u);
         mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_real_demand", requestClosed ? 0u : 1u, requestClosed ? 0u : ownerTtl, ownerAddData);
 
         if (!requestClosed)
-            desiredHelperTotal += helperNeed;
+            desiredHelperTotal += acquireHelperNeed;
 
-        if (needTank)
+        if (acquireNeedTank)
         {
             mgr.RTG_SetBotEventValue(
                 req.owner,
                 "rtg_lfg_need_tank",
-                needTank,
+                acquireNeedTank,
                 ownerTtl,
                 RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_TANK, req.owner));
         }
@@ -71,12 +83,12 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_need_tank", 0, 0);
         }
 
-        if (needHeal)
+        if (acquireNeedHeal)
         {
             mgr.RTG_SetBotEventValue(
                 req.owner,
                 "rtg_lfg_need_heal",
-                needHeal,
+                acquireNeedHeal,
                 ownerTtl,
                 RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_HEALER, req.owner));
         }
@@ -85,12 +97,12 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_need_heal", 0, 0);
         }
 
-        if (needDps)
+        if (acquireNeedDps)
         {
             mgr.RTG_SetBotEventValue(
                 req.owner,
                 "rtg_lfg_need_dps",
-                needDps,
+                acquireNeedDps,
                 ownerTtl,
                 RTG::MakeLfgAddData(req.team, req.level, lfg::PLAYER_ROLE_DAMAGE, req.owner));
         }
@@ -107,7 +119,7 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
                 req.realQueued, req.realActive,
                 req.helperQueuedTank, req.helperQueuedHeal, req.helperQueuedDps,
                 req.helperAssignedTank, req.helperAssignedHeal, req.helperAssignedDps,
-                needTank, needHeal, needDps, startTs, requestClosed ? 1u : 0u);
+                acquireNeedTank, acquireNeedHeal, acquireNeedDps, startTs, requestClosed ? 1u : 0u);
         }
 
         if (!requestClosed)

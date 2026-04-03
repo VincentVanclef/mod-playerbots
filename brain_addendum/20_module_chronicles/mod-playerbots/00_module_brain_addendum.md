@@ -854,3 +854,32 @@ Updated the login phase in `RandomPlayerbotMgr.cpp` to process offline queue-man
 
 **Why this matters**
 This makes RDF, BG, and arena helper service truly owner-driven instead of timing-window-driven.
+
+--------------------------------
+
+## Chapter — RDF Assigned-Helper Lane Closure Correction
+
+### Context
+A live Owner A test showed a deeper RDF request-lane error before multi-owner overlap could even be trusted. Helpers were acquired, added, and logged in successfully, but then repeatedly failed `join_dispatch_failed` while staying in `LFG_STATE_NONE`.
+
+### Incorrect Assumption
+The planner had treated `helperAssigned*` counts as sufficient to close the owner's request lane. That was too early. Assigned helpers are not yet queued/live helpers; they are merely owed queue-join work.
+
+### Real Owner Seam
+RDF planning needs two different views of role coverage:
+- **acquisition coverage** for preventing over-requesting new helpers
+- **lane coverage** for deciding whether the owner's active RDF request is still open
+
+Closing the lane from assigned-helper counts alone caused `rtg_lfg_real_demand` to drop before the assigned helpers finished joining, which then blocked the join path inside `LfgJoinAction`.
+
+### What Changed
+`RtgRdfQueuePlanner` now computes:
+- `acquireNeed*` from real + helperQueued + helperAssigned
+- `laneNeed*` from real + helperQueued only
+
+The owner's RDF lane remains open until queued/live coverage is complete and no offline assigned helpers remain outstanding, or until the run is already active in-dungeon.
+
+### Proof To Look For
+- Owner A helpers should progress from login into actual RDF join instead of repeated `join_dispatch_failed`
+- `rtg_lfg_real_demand` should remain live while assigned helpers are still offline/not queued
+- helper acquisition should still avoid duplication because `acquireNeed*` continues subtracting assigned helpers

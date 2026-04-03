@@ -595,3 +595,28 @@ After the successful RDF entry hardening pass, follow-up testing exposed a diffe
 - **Root cause:** The login phase was only iterating `availableBots`. Queue-managed helpers already acquired into `currentBots` with add-data were not guaranteed to still be present in `availableBots`, so later-owner helpers could sit offline until dispatch-stall cleanup.
 - **Correction:** Process offline queue-managed `currentBots` first during the login phase, then fall back to `availableBots`. This preserves multi-owner service across sequential RDF/BG/arena requests while earlier owners remain active.
 - **Proof target:** Owner A can already have active helpers online, and Owner B/Owner C can still move from `ACQUIRE][REQUEST]` to `DISPATCH][ADD]` and `LOGIN` without needing to queue inside the same initial timing window.
+
+## Patch focus
+
+This pass fixes an RDF planner seam where helpers that were already assigned to an owner could accidentally cause that owner's demand lane to close before those helpers had actually entered the queue.
+
+## Problem observed
+
+Owner A could acquire and log in all four helpers, but every helper still failed `lfg join` with `join_dispatch_failed` while remaining in `LFG_STATE_NONE`. The planner had already counted `helperAssigned*` as satisfying the owner's role need, so `rtg_lfg_real_demand` dropped to zero too early. Once that happened, `LfgJoinAction` treated the helper as having no active owner demand and blocked the queue join path, causing repeated retries and long activation delays.
+
+## Formula correction
+
+RDF owner accounting is now split into two truths:
+
+1. **acquire need** = what still must be newly acquired/logged in after counting assigned helpers.
+2. **lane need** = whether the owner's live RDF request must remain open so already-assigned offline helpers can still finish joining.
+
+The owner lane now stays open until either:
+- the run is already active in-dungeon, or
+- queued/live role coverage is complete **and** there are no offline assigned helpers still outstanding.
+
+## Intent
+
+- keep owner demand alive long enough for assigned helpers to actually queue
+- stop `helperAssigned` from prematurely closing the owner's request lane
+- preserve non-duplication of helper acquisition while fixing Owner A join starvation
