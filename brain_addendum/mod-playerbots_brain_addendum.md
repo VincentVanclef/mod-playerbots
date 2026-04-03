@@ -642,3 +642,9 @@ The owner lane now stays open until either:
 - Change: Role enforcement now preserves the queued-role event bridge and resets strategies, but no longer injects broad generic strategy swaps that can erase class/spec-specific combat logic.
 - Effect: Queue role still propagates into AI identity, while class/spec combat packages remain intact instead of being replaced by overly generic role strategies.
 - Proof target: Balance druids in RDF DPS roles should stop defaulting into bear/melee expression while still remaining classified as DPS for queue-role logic.
+
+
+## Chapter - Strict tank/healer acquisition and login-time role validation
+- Bootstrap fallback is now disabled for RDF tank/healer acquisition. Unknown offline-spec hybrids may still bootstrap into DPS, but tank and healer slots require reliable offline spec truth.
+- Added login-time role validation mirroring dispatch-time validation so bad spec/role matches are rejected before entering the queue lifecycle.
+- Extended exact-role doctrine to warrior, shaman, paladin, death knight, mage, warlock, hunter, and rogue. Druid flex remains feral only; priest flex remains discipline only.

@@ -2028,8 +2028,35 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     uint32 actualRole = RTG_ActualRoleForBot(bot);
                     uint32 actualRoleMask = RTG_GetActualSpecRoleMask(bot);
                     bool strictHybridMismatch = false;
-                    if (bot->getClass() == CLASS_PALADIN)
-                        strictHybridMismatch = (actualRole != desiredRole);
+                    switch (bot->getClass())
+                    {
+                        case CLASS_PALADIN:
+                        case CLASS_WARRIOR:
+                        case CLASS_SHAMAN:
+                        case CLASS_DEATH_KNIGHT:
+                        case CLASS_MAGE:
+                        case CLASS_WARLOCK:
+                        case CLASS_HUNTER:
+                        case CLASS_ROGUE:
+                            strictHybridMismatch = (actualRole != desiredRole);
+                            break;
+                        case CLASS_DRUID:
+                            // Feral is the only safe flex druid spec; all other druid specs are exact-role.
+                            if (actualRoleMask == (lfg::PLAYER_ROLE_TANK | lfg::PLAYER_ROLE_DAMAGE))
+                                strictHybridMismatch = false;
+                            else
+                                strictHybridMismatch = (actualRole != desiredRole);
+                            break;
+                        case CLASS_PRIEST:
+                            // Discipline is the only priest flex spec; Holy and Shadow are exact-role.
+                            if (actualRoleMask == (lfg::PLAYER_ROLE_HEALER | lfg::PLAYER_ROLE_DAMAGE))
+                                strictHybridMismatch = false;
+                            else
+                                strictHybridMismatch = (actualRole != desiredRole);
+                            break;
+                        default:
+                            break;
+                    }
 
                     if ((actualRoleMask & desiredRole) == 0 || strictHybridMismatch)
                     {
@@ -4195,7 +4222,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         }
                         else
                         {
-                            if (roleKnown || !RTG::ClassCanRole(charInfo.rClass, desiredRole))
+                            // Bootstrap fallback is allowed only for pure DPS fill.
+                            // Tank/healer lanes must come from reliable offline spec truth,
+                            // otherwise RTG can surface bad groups such as Fury/Arms tanks or
+                            // Enhancement healers.
+                            if (roleKnown || desiredRole != lfg::PLAYER_ROLE_DAMAGE || !RTG::ClassCanRole(charInfo.rClass, desiredRole))
                                 continue;
                         }
 
@@ -7004,7 +7035,53 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "login_prepare");
 
             if (desiredRole)
+            {
+                uint32 actualRole = RTG_ActualRoleForBot(bot);
+                uint32 actualRoleMask = RTG_GetActualSpecRoleMask(bot);
+                bool strictHybridMismatch = false;
+                switch (bot->getClass())
+                {
+                    case CLASS_PALADIN:
+                    case CLASS_WARRIOR:
+                    case CLASS_SHAMAN:
+                    case CLASS_DEATH_KNIGHT:
+                    case CLASS_MAGE:
+                    case CLASS_WARLOCK:
+                    case CLASS_HUNTER:
+                    case CLASS_ROGUE:
+                        strictHybridMismatch = (actualRole != desiredRole);
+                        break;
+                    case CLASS_DRUID:
+                        if (actualRoleMask == (lfg::PLAYER_ROLE_TANK | lfg::PLAYER_ROLE_DAMAGE))
+                            strictHybridMismatch = false;
+                        else
+                            strictHybridMismatch = (actualRole != desiredRole);
+                        break;
+                    case CLASS_PRIEST:
+                        if (actualRoleMask == (lfg::PLAYER_ROLE_HEALER | lfg::PLAYER_ROLE_DAMAGE))
+                            strictHybridMismatch = false;
+                        else
+                            strictHybridMismatch = (actualRole != desiredRole);
+                        break;
+                    default:
+                        break;
+                }
+
+                if ((actualRoleMask & desiredRole) == 0 || strictHybridMismatch)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={}",
+                        bot->GetGUID().GetCounter(), desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u));
+                    RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), actualRole);
+                    RTG_SetCachedRuntimeLfgRoleMask(bot->GetGUID().GetCounter(), actualRoleMask);
+                    RTG_BlockBotForDesiredLfgRole(bot->GetGUID().GetCounter(), desiredRole);
+                    SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
+                    RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
+                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_login_role_mismatch");
+                    return;
+                }
+
                 RTG_ForceQueuedLfgRoleStrategies(bot, bot->GetGUID().GetCounter(), desiredRole, addData, "login_role_enforce");
+            }
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
