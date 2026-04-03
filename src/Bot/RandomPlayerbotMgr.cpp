@@ -3577,10 +3577,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             // Conservative doctrine for hybrid classes: when we do not have reliable offline
             // spec data, do not trust stale runtime role caches to advertise tank/healer capability.
-            // Fall back to the class default spec mask until actual spec truth is known.
+            // Druids are treated most strictly here: without real offline spec truth, do not surface
+            // them for RDF role selection at all. This prevents Restoration druids from leaking into
+            // DPS selection through fallback ambiguity.
             switch (charInfo.rClass)
             {
                 case CLASS_DRUID:
+                    roleKnown = false;
+                    return 0u;
                 case CLASS_PALADIN:
                 case CLASS_PRIEST:
                 case CLASS_SHAMAN:

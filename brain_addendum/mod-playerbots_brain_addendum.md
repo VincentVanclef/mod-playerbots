@@ -648,3 +648,10 @@ The owner lane now stays open until either:
 - Bootstrap fallback is now disabled for RDF tank/healer acquisition. Unknown offline-spec hybrids may still bootstrap into DPS, but tank and healer slots require reliable offline spec truth.
 - Added login-time role validation mirroring dispatch-time validation so bad spec/role matches are rejected before entering the queue lifecycle.
 - Extended exact-role doctrine to warrior, shaman, paladin, death knight, mage, warlock, hunter, and rogue. Druid flex remains feral only; priest flex remains discipline only.
+
+
+## Chapter: Strict Druid Offline RDF Selection
+- Context: A remaining seam allowed some Restoration druids to appear in RDF DPS selection when offline spec truth was missing.
+- Finding: The conservative hybrid fallback still treated unknown offline druids through generic fallback logic, which is too permissive for production RDF role correctness.
+- Change: Druids now require real offline spec truth for RDF selection. If offline spec data is unavailable, they are not surfaced through fallback role masks or cached runtime role data.
+- Result: Restoration druids can no longer leak into RDF DPS selection through fallback ambiguity.
