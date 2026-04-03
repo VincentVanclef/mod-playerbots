@@ -111,16 +111,18 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             mgr.RTG_SetBotEventValue(req.owner, "rtg_lfg_need_dps", 0, 0);
         }
 
-        if (sPlayerbotAIConfig.rtgEventDebug || helperNeed || requestClosed)
-        {
-            LOG_INFO("playerbots",
-                "[RTG][LFG][PLAN] owner={} team={} level={} realQueued={} realActive={} helperQueuedT={} helperQueuedH={} helperQueuedD={} helperAssignedT={} helperAssignedH={} helperAssignedD={} needT={} needH={} needD={} startTs={} requestClosed={}",
-                req.owner, req.team, req.level,
-                req.realQueued, req.realActive,
-                req.helperQueuedTank, req.helperQueuedHeal, req.helperQueuedDps,
-                req.helperAssignedTank, req.helperAssignedHeal, req.helperAssignedDps,
-                acquireNeedTank, acquireNeedHeal, acquireNeedDps, startTs, requestClosed ? 1u : 0u);
-        }
+        uint32 needTotal = needTank + needHealer + needDps;
+
+		if (sPlayerbotAIConfig.rtgEventDebug || needTotal > 0 || requestClosed)
+		{
+			LOG_INFO("playerbots", "[RTG][RDF][PLAN] owner={} needT={} needH={} needD={} total={} closed={}",
+				ownerGuid.GetCounter(),
+				needTank,
+				needHealer,
+				needDps,
+				needTotal,
+				requestClosed ? 1 : 0);
+		}
 
         if (!requestClosed)
         {
