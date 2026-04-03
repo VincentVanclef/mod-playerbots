@@ -620,3 +620,11 @@ The owner lane now stays open until either:
 - keep owner demand alive long enough for assigned helpers to actually queue
 - stop `helperAssigned` from prematurely closing the owner's request lane
 - preserve non-duplication of helper acquisition while fixing Owner A join starvation
+
+
+## Chapter: RDF login role enforcement bridge
+- Context: Bots could enter RDF with correct assigned queue roles but still behave according to spec-default strategies until a live LFG group role became visible.
+- Finding: The missing seam was between login/assignment and combat-role application. `rtg_lfg_strategy_role` existed, but live enforcement only occurred after an LFG group materialized.
+- Change: Added login-time RDF role enforcement in `RandomPlayerbotMgr::OnBotLoginInternal` and extended `PlayerbotAI::IsTank/IsHeal/IsDps` to honor `rtg_lfg_strategy_role` while `rtg_lfg_pending` or `rtg_dungeon_active` is set.
+- Effect: Assigned RDF roles now influence AI identity immediately at login and remain aligned through pending/active dungeon states instead of falling back to healer/spec defaults.
+- Proof target: Logs should show `[RTG][RDF][ROLE_APPLY]` at login and bots in RDF DPS slots should stop acting like healers before or during queue materialization.

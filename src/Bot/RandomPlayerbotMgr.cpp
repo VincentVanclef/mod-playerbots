@@ -700,6 +700,45 @@ namespace
         return totalPoints > 0;
     }
 
+    static void RTG_ForceQueuedLfgRoleStrategies(Player* bot, uint32 botId, uint32 role, std::string const& addData, char const* reason)
+    {
+        if (!bot || !role)
+            return;
+
+        uint32 appliedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
+        if (appliedRole == role)
+            return;
+
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+        {
+            botAI->ResetStrategies(false);
+
+            switch (role)
+            {
+                case lfg::PLAYER_ROLE_TANK:
+                    botAI->ChangeStrategy("-heal,-offheal,-healer dps,-dps,+tank", BOT_STATE_COMBAT);
+                    break;
+                case lfg::PLAYER_ROLE_HEALER:
+                    botAI->ChangeStrategy("-tank,-dps,+heal", BOT_STATE_COMBAT);
+                    botAI->EvaluateHealerDpsStrategy();
+                    break;
+                case lfg::PLAYER_ROLE_DAMAGE:
+                    botAI->ChangeStrategy("-tank,-heal,-offheal,-healer dps,+dps", BOT_STATE_COMBAT);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_strategy_role", role, 1800, addData);
+
+        if (RTG_QueueDebugEnabled())
+        {
+            LOG_INFO("playerbots", "[RTG][RDF][ROLE_APPLY] helper={} role={} class={} specTab={} reason={}",
+                     botId, role, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), reason ? reason : "rtg");
+        }
+    }
+
     static void RTG_ApplyLiveLfgRoleStrategies(Player* bot, uint32 botId, uint32 fallbackRole, std::string const& addData)
     {
         if (!bot)
@@ -715,14 +754,7 @@ namespace
         if (!liveRole)
             return;
 
-        uint32 appliedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
-        if (appliedRole == liveRole)
-            return;
-
-        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-            botAI->ResetStrategies(false);
-
-        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_strategy_role", liveRole, 1800, addData);
+        RTG_ForceQueuedLfgRoleStrategies(bot, botId, liveRole, addData, "live_lfg_role");
 
         if (RTG_QueueDebugEnabled())
         {
@@ -6969,6 +7001,9 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             if (desiredRole)
                 RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "login_prepare");
+
+            if (desiredRole)
+                RTG_ForceQueuedLfgRoleStrategies(bot, bot->GetGUID().GetCounter(), desiredRole, addData, "login_role_enforce");
 
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 1, 45, addData);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);

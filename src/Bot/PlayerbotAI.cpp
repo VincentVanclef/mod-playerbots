@@ -2180,6 +2180,13 @@ bool PlayerbotAI::IsTank(Player* player, bool bySpec)
                     return (roles & lfg::PLAYER_ROLE_TANK) != 0;
             }
         }
+
+        ObjectGuid::LowType botId = player->GetGUID().GetCounter();
+        uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
+        bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
+                               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
+        if (queuedRole && queuedLfgActive)
+            return (queuedRole & lfg::PLAYER_ROLE_TANK) != 0;
     }
     if (!bySpec && botAi)
         return botAi->ContainsStrategy(STRATEGY_TYPE_TANK);
@@ -2230,6 +2237,13 @@ bool PlayerbotAI::IsHeal(Player* player, bool bySpec)
                     return (roles & lfg::PLAYER_ROLE_HEALER) != 0;
             }
         }
+
+        ObjectGuid::LowType botId = player->GetGUID().GetCounter();
+        uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
+        bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
+                               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
+        if (queuedRole && queuedLfgActive)
+            return (queuedRole & lfg::PLAYER_ROLE_HEALER) != 0;
     }
     if (!bySpec && botAi)
         return botAi->ContainsStrategy(STRATEGY_TYPE_HEAL);
@@ -2279,6 +2293,13 @@ bool PlayerbotAI::IsDps(Player* player, bool bySpec)
                     return (roles & lfg::PLAYER_ROLE_DAMAGE) != 0;
             }
         }
+
+        ObjectGuid::LowType botId = player->GetGUID().GetCounter();
+        uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
+        bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
+                               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
+        if (queuedRole && queuedLfgActive)
+            return (queuedRole & lfg::PLAYER_ROLE_DAMAGE) != 0;
     }
     if (!bySpec && botAi)
         return botAi->ContainsStrategy(STRATEGY_TYPE_DPS);
