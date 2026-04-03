@@ -840,3 +840,17 @@ Post-hardening RDF tests demonstrated healthy proposal acceptance and dungeon ar
 - Root seam: planner demand still counted active dungeon owners as open RDF helper requests.
 - Correction: close RDF request ownership once the run is filled/materialized, while leaving active helpers online for the dungeon itself.
 - Next proof: queue owner A, let the run fill and enter, then queue owner B afterward and confirm B reaches ACQUIRE -> ADD -> LOGIN without waiting for A to end.
+
+
+## Chapter 2026-04-03 — Multi-owner queue lane login starvation
+**Context**
+Sequential owners were still stalling even after previous planner/lane-closure passes.
+
+**Finding**
+The missing seam was not only owner demand accounting. Already-acquired queue helpers were sitting in `currentBots` with add-data, but the live login pass only iterated `availableBots`. That let the first owner get serviced while later owners aged into dispatch stalls.
+
+**Change**
+Updated the login phase in `RandomPlayerbotMgr.cpp` to process offline queue-managed `currentBots` before the normal `availableBots` pass.
+
+**Why this matters**
+This makes RDF, BG, and arena helper service truly owner-driven instead of timing-window-driven.

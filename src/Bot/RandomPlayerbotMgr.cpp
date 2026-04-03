@@ -3005,19 +3005,50 @@ for (auto const& c : candidates)
 
             LOG_DEBUG("playerbots", "{} new bots prepared to login", loginBots);
 
-            // Log in bots
-            for (auto bot : availableBots)
+            // RTG doctrine:
+            // queue-managed helpers that have already been acquired live in currentBots with add-data,
+            // but they are not guaranteed to still appear in availableBots on later ticks.
+            // If we only iterate availableBots here, owner A's initial batch can consume the login window
+            // and later owners' already-requested helpers will sit offline forever until dispatch stall cleanup.
+            // Process offline queue-managed currentBots first so newly requested RDF/BG/arena helpers can
+            // actually transition from acquired -> online even when earlier owners are still active.
+            std::vector<uint32> pendingManagedBots;
+            pendingManagedBots.reserve(currentBots.size());
+            for (uint32 bot : currentBots)
             {
                 if (GetPlayerBot(bot))
                     continue;
 
-                if (ProcessBot(bot))
-                {
-                    loginBots--;
-                }
+                if (!GetEventValue(bot, "add"))
+                    continue;
 
+                std::string addData = GetEventData(bot, "add");
+                if (!RTG::IsQueueManagedAddData(addData))
+                    continue;
+
+                pendingManagedBots.push_back(bot);
+            }
+
+            for (uint32 bot : pendingManagedBots)
+            {
                 if (!loginBots)
                     break;
+
+                if (ProcessBot(bot))
+                    --loginBots;
+            }
+
+            // Log in any remaining stock/idle candidates after queue-managed pending helpers.
+            for (auto bot : availableBots)
+            {
+                if (!loginBots)
+                    break;
+
+                if (GetPlayerBot(bot))
+                    continue;
+
+                if (ProcessBot(bot))
+                    --loginBots;
             }
 
             DelayLoginBotsTimer = 0;

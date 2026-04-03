@@ -588,3 +588,10 @@ After the successful RDF entry hardening pass, follow-up testing exposed a diffe
 - Finding: active dungeon owners were still contributing to global RDF helper demand even though their group was already filled and running.
 - Fix: close the owner request lane when the RDF group is already materialized (`activeDungeon`) or no helper roles remain needed. Keep helpers online for the run, but stop that owner from reserving future RDF fill capacity.
 - Proof target: after one owner enters a live dungeon, a later owner should be able to open a fresh RDF request and receive new helper logins.
+
+
+## Chapter 2026-04-03 — Queue lane login starvation seam
+- **Situation:** Later RDF/BG/arena owners could acquire helpers and write add-data, but those helpers never came online unless they were requested in the same initial timing window as the first owner.
+- **Root cause:** The login phase was only iterating `availableBots`. Queue-managed helpers already acquired into `currentBots` with add-data were not guaranteed to still be present in `availableBots`, so later-owner helpers could sit offline until dispatch-stall cleanup.
+- **Correction:** Process offline queue-managed `currentBots` first during the login phase, then fall back to `availableBots`. This preserves multi-owner service across sequential RDF/BG/arena requests while earlier owners remain active.
+- **Proof target:** Owner A can already have active helpers online, and Owner B/Owner C can still move from `ACQUIRE][REQUEST]` to `DISPATCH][ADD]` and `LOGIN` without needing to queue inside the same initial timing window.
