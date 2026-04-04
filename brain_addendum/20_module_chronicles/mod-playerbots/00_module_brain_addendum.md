@@ -985,3 +985,8 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 ### Expected proof
 - Protection warriors should no longer act as DPS due to queued-role override.
 - If the last real player leaves a BG, the match should stop being treated as real demand and helpers should begin leaving rather than sustaining a full bot-only game.
+
+### 2026-04-04 - Arena/BG arbitration and live-demand cleanup
+- Prioritized arena buckets over battleground refill buckets during shared RTG BG-lane acquisition so solo arena demand no longer loses repeatedly to battleground finish-fill.
+- Planner now derives real BG/arena demand from currently connected real players' live queue slots instead of trusting stale BattlegroundInfo queue counters after players leave or AFK out.
+- BG retirement now forces a bot-only battleground leave request once no real players remain, then clears queue helper state after detach.

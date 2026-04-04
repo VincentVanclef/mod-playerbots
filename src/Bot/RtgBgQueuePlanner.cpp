@@ -3,6 +3,7 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "DatabaseEnv.h"
+#include "Player.h"
 #include "PlayerbotAIConfig.h"
 #include "RandomPlayerbotMgr.h"
 
@@ -15,6 +16,12 @@
 
 namespace
 {
+    struct RTG_LiveBgDemand
+    {
+        uint32 queueAlliance = 0;
+        uint32 queueHorde = 0;
+    };
+
     struct RTG_BgTemplateBounds
     {
         uint32 minPerTeam = 0;
@@ -160,6 +167,38 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
     std::set<uint64> seenKeys;
     static std::set<uint64> sPrevSeenKeys;
 
+    std::map<std::pair<uint32, uint32>, RTG_LiveBgDemand> liveRealDemand;
+    for (Player* player : mgr.GetPlayers())
+    {
+        if (!player || !player->IsInWorld() || mgr.IsRandomBot(player))
+            continue;
+
+        for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+        {
+            BattlegroundQueueTypeId liveQueueType = player->GetBattlegroundQueueTypeId(queueSlot);
+            if (liveQueueType <= BATTLEGROUND_QUEUE_NONE || liveQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+                continue;
+
+            BattlegroundTypeId liveBgType = BattlegroundMgr::BGTemplateId(liveQueueType);
+            if (liveBgType == BATTLEGROUND_TYPE_NONE)
+                continue;
+
+            Battleground* liveTemplate = sBattlegroundMgr->GetBattlegroundTemplate(liveBgType);
+            if (!liveTemplate)
+                continue;
+
+            PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(liveTemplate->GetMapId(), player->GetLevel());
+            if (!pvpDiff)
+                continue;
+
+            auto &live = liveRealDemand[std::make_pair(uint32(liveQueueType), uint32(pvpDiff->GetBracketId()))];
+            if (player->GetTeamId() == TEAM_ALLIANCE)
+                ++live.queueAlliance;
+            else
+                ++live.queueHorde;
+        }
+    }
+
     for (auto const& queueTypePair : mgr.BattlegroundData)
     {
         BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueTypePair.first);
@@ -181,6 +220,13 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 botQueued = isRated ? bgInfo.ratedArenaBotCount : bgInfo.skirmishArenaBotCount;
                 uint32 realQueuedAlliance = isRated ? bgInfo.ratedArenaAlliancePlayerCount : bgInfo.skirmishArenaAlliancePlayerCount;
                 uint32 realQueuedHorde = isRated ? bgInfo.ratedArenaHordePlayerCount : bgInfo.skirmishArenaHordePlayerCount;
+                auto liveItr = liveRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
+                if (liveItr != liveRealDemand.end())
+                {
+                    realQueuedAlliance = liveItr->second.queueAlliance;
+                    realQueuedHorde = liveItr->second.queueHorde;
+                    realQueued = realQueuedAlliance + realQueuedHorde;
+                }
                 uint32 botQueuedAlliance = isRated ? bgInfo.ratedArenaAllianceBotCount : bgInfo.skirmishArenaAllianceBotCount;
                 uint32 botQueuedHorde = isRated ? bgInfo.ratedArenaHordeBotCount : bgInfo.skirmishArenaHordeBotCount;
                 uint32 currentQueuedAlliance = realQueuedAlliance + botQueuedAlliance;
@@ -260,6 +306,12 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
             uint32 queueRealAlliance = bgInfo.bgQueueAlliancePlayerCount;
             uint32 queueRealHorde = bgInfo.bgQueueHordePlayerCount;
+            auto liveItr = liveRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
+            if (liveItr != liveRealDemand.end())
+            {
+                queueRealAlliance = liveItr->second.queueAlliance;
+                queueRealHorde = liveItr->second.queueHorde;
+            }
             uint32 activeRealAlliance = bgInfo.bgActiveAlliancePlayerCount;
             uint32 activeRealHorde = bgInfo.bgActiveHordePlayerCount;
             uint32 queueCurrentAlliance = bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueAllianceBotCount;
