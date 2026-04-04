@@ -31,6 +31,10 @@ struct BattlegroundInfo
     // Bots (Arena)
     uint32 ratedArenaBotCount = 0;
     uint32 skirmishArenaBotCount = 0;
+    uint32 ratedArenaAllianceBotCount = 0;
+    uint32 ratedArenaHordeBotCount = 0;
+    uint32 skirmishArenaAllianceBotCount = 0;
+    uint32 skirmishArenaHordeBotCount = 0;
 
     // Bots (Battleground)
     uint32 bgHordeBotCount = 0;
@@ -39,6 +43,10 @@ struct BattlegroundInfo
     // Players (Arena)
     uint32 ratedArenaPlayerCount = 0;
     uint32 skirmishArenaPlayerCount = 0;
+    uint32 ratedArenaAlliancePlayerCount = 0;
+    uint32 ratedArenaHordePlayerCount = 0;
+    uint32 skirmishArenaAlliancePlayerCount = 0;
+    uint32 skirmishArenaHordePlayerCount = 0;
 
     // Players (Battleground)
     uint32 bgHordePlayerCount = 0;

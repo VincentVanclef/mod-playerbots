@@ -179,7 +179,13 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                                bgInfo.activeRatedArenaQueue || bgInfo.ratedArenaInstanceCount;
                 uint32 realQueued = isRated ? bgInfo.ratedArenaPlayerCount : bgInfo.skirmishArenaPlayerCount;
                 uint32 botQueued = isRated ? bgInfo.ratedArenaBotCount : bgInfo.skirmishArenaBotCount;
-                uint32 currentQueued = realQueued + botQueued;
+                uint32 realQueuedAlliance = isRated ? bgInfo.ratedArenaAlliancePlayerCount : bgInfo.skirmishArenaAlliancePlayerCount;
+                uint32 realQueuedHorde = isRated ? bgInfo.ratedArenaHordePlayerCount : bgInfo.skirmishArenaHordePlayerCount;
+                uint32 botQueuedAlliance = isRated ? bgInfo.ratedArenaAllianceBotCount : bgInfo.skirmishArenaAllianceBotCount;
+                uint32 botQueuedHorde = isRated ? bgInfo.ratedArenaHordeBotCount : bgInfo.skirmishArenaHordeBotCount;
+                uint32 currentQueuedAlliance = realQueuedAlliance + botQueuedAlliance;
+                uint32 currentQueuedHorde = realQueuedHorde + botQueuedHorde;
+                uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;
                 uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
                 bool hasRealDemand = realQueued > 0;
                 bool hasQueueSeed = currentQueued > 0;
@@ -190,8 +196,13 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
                 uint32 desiredTotal = arenaTeamSize * 2u;
                 uint32 totalNeed = desiredTotal > currentQueued ? (desiredTotal - currentQueued) : 0u;
-                uint32 allianceNeed = (totalNeed + 1u) / 2u;
-                uint32 hordeNeed = totalNeed / 2u;
+                uint32 allianceNeed = hasRealDemand ? (arenaTeamSize > currentQueuedAlliance ? (arenaTeamSize - currentQueuedAlliance) : 0u) : 0u;
+                uint32 hordeNeed = hasRealDemand ? (arenaTeamSize > currentQueuedHorde ? (arenaTeamSize - currentQueuedHorde) : 0u) : 0u;
+                if (allianceNeed + hordeNeed != totalNeed)
+                {
+                    allianceNeed = std::min(allianceNeed, totalNeed);
+                    hordeNeed = totalNeed > allianceNeed ? (totalNeed - allianceNeed) : 0u;
+                }
                 uint32 phase = 0u;
 
                 if (hasRealDemand)

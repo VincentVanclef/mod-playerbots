@@ -758,8 +758,16 @@ namespace
         bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
         bool missingTalents = !RTG_HasMeaningfulTalents(bot);
         uint8 currentSpecTab = static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot));
-        uint32 currentRoleMask = RTG_GetActualSpecRoleMask(bot);
-        bool roleMismatch = (currentRoleMask & desiredRole) == 0;
+        uint8 effectiveSpecTab = currentSpecTab;
+        if (missingTalents)
+        {
+            uint8 offlineSpecTab = currentSpecTab;
+            if (RTG::HasOfflineSpecData(bot->GetGUID().GetCounter(), bot->getClass(), &offlineSpecTab))
+                effectiveSpecTab = offlineSpecTab;
+        }
+
+        uint32 effectiveRoleMask = RTG::RoleMaskForClassSpecTab(bot->getClass(), effectiveSpecTab);
+        bool roleMismatch = (effectiveRoleMask & desiredRole) == 0;
 
         // Do not re-spec helpers to fit RDF demand. Queue role must derive from the bot's real spec.
         if (roleMismatch)
@@ -782,7 +790,7 @@ namespace
         }
 
         PlayerbotFactory factory(bot, desiredLevel ? desiredLevel : bot->GetLevel());
-        PlayerbotFactory::InitTalentsBySpecNo(bot, currentSpecTab, true);
+        PlayerbotFactory::InitTalentsBySpecNo(bot, effectiveSpecTab, true);
         factory.InitClassSpells();
         factory.InitAvailableSpells();
         factory.InitSpecialSpells();
@@ -798,8 +806,8 @@ namespace
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={}",
-                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(currentSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
+            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} effectiveSpecTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(currentSpecTab), uint32(effectiveSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
                 missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0);
         }
 
@@ -1906,13 +1914,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=disposed_from_dungeon immediateLogout=1", botId, desiredOwner));
                     RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_disposed", true);
                 }
-                else if (!orphanedSince)
+                else
                 {
-                    SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, RTG_LFG_ORPHAN_GRACE_SECONDS + 60, addData);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=real_owner_left grace={}s", botId, desiredOwner, RTG_LFG_ORPHAN_GRACE_SECONDS));
-                }
-                else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= RTG_LFG_ORPHAN_GRACE_SECONDS)
-                {
+                    if (!orphanedSince)
+                    {
+                        SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, 30, addData);
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=owner_done immediateLogout=1", botId, desiredOwner));
+                    }
                     RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
                 }
                 continue;
@@ -4762,9 +4770,21 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.maxLevel = maxLevel;
 
                 if (isRated)
+                {
                     ++arenaInfo.ratedArenaPlayerCount;
+                    if (teamId == TEAM_ALLIANCE)
+                        ++arenaInfo.ratedArenaAlliancePlayerCount;
+                    else
+                        ++arenaInfo.ratedArenaHordePlayerCount;
+                }
                 else
+                {
                     ++arenaInfo.skirmishArenaPlayerCount;
+                    if (teamId == TEAM_ALLIANCE)
+                        ++arenaInfo.skirmishArenaAlliancePlayerCount;
+                    else
+                        ++arenaInfo.skirmishArenaHordePlayerCount;
+                }
 
                 if (!player->IsInvitedForBattlegroundInstance() && !player->InBattleground())
                 {
@@ -4850,9 +4870,21 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.maxLevel = maxLevel;
 
                 if (isRated)
+                {
                     ++arenaInfo.ratedArenaBotCount;
+                    if (teamId == TEAM_ALLIANCE)
+                        ++arenaInfo.ratedArenaAllianceBotCount;
+                    else
+                        ++arenaInfo.ratedArenaHordeBotCount;
+                }
                 else
+                {
                     ++arenaInfo.skirmishArenaBotCount;
+                    if (teamId == TEAM_ALLIANCE)
+                        ++arenaInfo.skirmishArenaAllianceBotCount;
+                    else
+                        ++arenaInfo.skirmishArenaHordeBotCount;
+                }
 
                 if (bg)
                 {

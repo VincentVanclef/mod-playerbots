@@ -934,3 +934,9 @@ Queue role is now forced to derive from actual spec truth rather than the planne
 - Feral druid may surface as tank or DPS.
 - Discipline priest may surface as healer or DPS.
 - No queue helper should change spec solely because the planner wanted a different role.
+
+
+## 2026-04-03 - Queue production tightening pass
+- Hardened RDF prep so missing-talents rebuilds use offline spec truth when available instead of trusting runtime spec-tab guesses. This closes a remaining seam where Restoration druids could be rebuilt into a non-healer queue identity during helper preparation.
+- Added faction-split arena queue accounting for skirmish/rated arena participants and bots so solo 3v3 demand is computed from actual Alliance/Horde queue makeup instead of a symmetric split. This prevents an Alliance owner from being treated like Horde demand.
+- Tightened orphaned queue-helper disposal so helpers log out immediately once owner demand is gone and they are no longer active/enroute in RDF.
