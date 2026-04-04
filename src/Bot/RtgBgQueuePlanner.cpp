@@ -168,6 +168,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
     static std::set<uint64> sPrevSeenKeys;
 
     std::map<std::pair<uint32, uint32>, RTG_LiveBgDemand> liveRealDemand;
+    std::map<std::pair<uint32, uint32>, RTG_LiveBgDemand> liveBotDemand;
     for (Player* player : mgr.GetPlayers())
     {
         if (!player || !player->IsInWorld() || mgr.IsRandomBot(player))
@@ -193,6 +194,37 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
             auto &live = liveRealDemand[std::make_pair(uint32(liveQueueType), uint32(pvpDiff->GetBracketId()))];
             if (player->GetTeamId() == TEAM_ALLIANCE)
+                ++live.queueAlliance;
+            else
+                ++live.queueHorde;
+        }
+    }
+
+    for (Player* bot : mgr.GetPlayers())
+    {
+        if (!bot || !bot->IsInWorld() || !mgr.IsRandomBot(bot))
+            continue;
+
+        for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+        {
+            BattlegroundQueueTypeId liveQueueType = bot->GetBattlegroundQueueTypeId(queueSlot);
+            if (liveQueueType <= BATTLEGROUND_QUEUE_NONE || liveQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+                continue;
+
+            BattlegroundTypeId liveBgType = BattlegroundMgr::BGTemplateId(liveQueueType);
+            if (liveBgType == BATTLEGROUND_TYPE_NONE)
+                continue;
+
+            Battleground* liveTemplate = sBattlegroundMgr->GetBattlegroundTemplate(liveBgType);
+            if (!liveTemplate)
+                continue;
+
+            PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(liveTemplate->GetMapId(), bot->GetLevel());
+            if (!pvpDiff)
+                continue;
+
+            auto& live = liveBotDemand[std::make_pair(uint32(liveQueueType), uint32(pvpDiff->GetBracketId()))];
+            if (bot->GetTeamId() == TEAM_ALLIANCE)
                 ++live.queueAlliance;
             else
                 ++live.queueHorde;
@@ -227,8 +259,14 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                     realQueuedHorde = liveItr->second.queueHorde;
                     realQueued = realQueuedAlliance + realQueuedHorde;
                 }
-                uint32 botQueuedAlliance = isRated ? bgInfo.ratedArenaAllianceBotCount : bgInfo.skirmishArenaAllianceBotCount;
-                uint32 botQueuedHorde = isRated ? bgInfo.ratedArenaHordeBotCount : bgInfo.skirmishArenaHordeBotCount;
+                uint32 botQueuedAlliance = 0;
+                uint32 botQueuedHorde = 0;
+                auto liveBotItr = liveBotDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
+                if (liveBotItr != liveBotDemand.end())
+                {
+                    botQueuedAlliance = liveBotItr->second.queueAlliance;
+                    botQueuedHorde = liveBotItr->second.queueHorde;
+                }
                 uint32 currentQueuedAlliance = realQueuedAlliance + botQueuedAlliance;
                 uint32 currentQueuedHorde = realQueuedHorde + botQueuedHorde;
                 uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;

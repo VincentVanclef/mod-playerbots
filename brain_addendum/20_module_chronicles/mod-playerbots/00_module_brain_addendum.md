@@ -770,3 +770,23 @@ Mixed WSG + solo 3v3 testing still showed three production seams:
 - Chosen helpers should stop being prematurely replaced just because their login was already in flight.
 - Arena helpers should retire even while a battleground is still running, as soon as their own arena no longer has real-player demand.
 - Arena and battleground should feel separated enough that both can fill without obvious tug-of-war over the same final helper pool.
+
+## Chapter: Arena/BG lane overlap final seam — live arena queue demand vs stale arena lifecycle counts
+
+### Context
+Mixed WSG + solo 3v3 testing still showed residual overlap after major lane separation work. Operators observed arena helpers being retried with wrong-side replacements, arena demand continuing after the match had effectively ended, and extra arena helpers lingering after correction while battleground fill was delayed.
+
+### Findings
+The remaining overlap was not the high-level planner bucket split alone. Two lower seams remained:
+1. Arena demand math in `RtgBgQueuePlanner.cpp` still relied on aggregate arena bot/player counters from `BattlegroundData`, which include bots/players already inside arena lifecycle rather than only those still truly queued.
+2. BG/arena helper retirement in `RandomPlayerbotMgr.cpp` only requested immediate leave for helpers still inside a battleground/arena map, but not for helpers still stuck in queue/invite lifecycle after demand had already vanished.
+
+### Changes applied
+- Added live bot queue-slot demand tracking in `RtgBgQueuePlanner.cpp`.
+- Arena planner now uses live queue-slot alliance/horde bot counts for arena need math.
+- Census skips `STATUS_WAIT_LEAVE` lifecycle windows.
+- BG/arena cleanup now requests immediate leave for no-longer-needed queued/invited helpers too.
+- Arena alliance/horde aggregate counters are now filled for consistency.
+
+### Status
+Applied for validation.

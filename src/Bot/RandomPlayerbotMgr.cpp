@@ -2781,13 +2781,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (noLongerNeeded)
                 {
                     Battleground* currentBg = bot->GetBattleground();
+                    bool mayLeaveNow = false;
                     if ((currentBg || bot->InArena()) && !RTG_BattlegroundHasRealPlayers(currentBg))
+                        mayLeaveNow = true;
+                    else if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) || bot->IsInvitedForBattlegroundInstance())
+                        mayLeaveNow = true;
+
+                    if (mayLeaveNow && !GetEventValue(botId, "rtg_bg_leave_requested"))
                     {
-                        if (!GetEventValue(botId, "rtg_bg_leave_requested"))
-                        {
-                            if (RTG_RequestImmediateBgLeave(bot))
-                                SetEventValue(botId, "rtg_bg_leave_requested", 1, 15, addData);
-                        }
+                        if (RTG_RequestImmediateBgLeave(bot))
+                            SetEventValue(botId, "rtg_bg_leave_requested", 1, 15, addData);
                     }
                 }
 
@@ -5089,9 +5092,21 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.maxLevel = maxLevel;
 
                 if (isRated)
+                {
                     ++arenaInfo.ratedArenaPlayerCount;
+                    if (player->GetTeamId() == TEAM_ALLIANCE)
+                        ++arenaInfo.ratedArenaAlliancePlayerCount;
+                    else
+                        ++arenaInfo.ratedArenaHordePlayerCount;
+                }
                 else
+                {
                     ++arenaInfo.skirmishArenaPlayerCount;
+                    if (player->GetTeamId() == TEAM_ALLIANCE)
+                        ++arenaInfo.skirmishArenaAlliancePlayerCount;
+                    else
+                        ++arenaInfo.skirmishArenaHordePlayerCount;
+                }
 
                 if (!player->IsInvitedForBattlegroundInstance() && !player->InBattleground())
                 {
@@ -5177,9 +5192,21 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.maxLevel = maxLevel;
 
                 if (isRated)
+                {
                     ++arenaInfo.ratedArenaBotCount;
+                    if (bot->GetTeamId() == TEAM_ALLIANCE)
+                        ++arenaInfo.ratedArenaAllianceBotCount;
+                    else
+                        ++arenaInfo.ratedArenaHordeBotCount;
+                }
                 else
+                {
                     ++arenaInfo.skirmishArenaBotCount;
+                    if (bot->GetTeamId() == TEAM_ALLIANCE)
+                        ++arenaInfo.skirmishArenaAllianceBotCount;
+                    else
+                        ++arenaInfo.skirmishArenaHordeBotCount;
+                }
 
                 if (bg)
                 {
