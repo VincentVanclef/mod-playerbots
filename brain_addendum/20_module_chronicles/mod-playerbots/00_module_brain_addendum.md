@@ -946,3 +946,10 @@ Queue role is now forced to derive from actual spec truth rather than the planne
 - Change: `RTG_PrepareLfgHelperForDesiredRole()` now refuses RDF prep for hybrid classes (druid, paladin, priest, shaman, warrior, death knight) unless reliable offline spec truth exists, preventing exact-role hybrids from being rebuilt or admitted from ambiguous runtime fallback. Return-to-world RDF retirement now treats bot-only groups as detached, shortens `rtg_lfg_world_return_since` retirement to ~5 seconds, and finished-dungeon cleanup no longer treats a bot-only LFG group as an active run.
 - Effect: Paladins and other exact-role hybrids must derive RDF role from real offline spec truth rather than ambiguous runtime fallback, while helpers that return to the world without any real player still attached retire quickly instead of lingering online and being reused.
 - Proof target: Holy/Protection/Retribution paladins must queue only as healer/tank/dps respectively, and when a player leaves a dungeon early the remaining detached helpers should all retire shortly after world return even if they stay grouped among themselves.
+
+
+## 2026-04-04 — Compile-safe strict hybrid RDF spec-truth guard
+- Finding: a compile failure occurred because `RTG_PrepareLfgHelperForDesiredRole()` referenced `RTG_RequiresOfflineSpecTruthForRdf()` before any declaration was visible in `RandomPlayerbotMgr.cpp`. The intended strict hybrid doctrine was correct, but the helper itself was not defined early enough for this translation unit.
+- Change: added explicit local forward declarations for `RTG_IsPureDpsClass(uint8)` and `RTG_RequiresOfflineSpecTruthForRdf(uint8)` immediately before RDF helper prep usage, leaving the existing strict hybrid role logic intact.
+- Effect: the strict spec-derived RDF doctrine for druids, paladins, priests, shamans, and warriors remains in force without introducing compile errors or requiring broad rewrites.
+- Proof target: module should compile cleanly, while hybrid classes continue to require real offline spec truth before RDF role admission.

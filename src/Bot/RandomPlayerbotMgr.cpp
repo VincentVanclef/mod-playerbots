@@ -750,6 +750,9 @@ namespace
         }
     }
 
+    static bool RTG_IsPureDpsClass(uint8 cls);
+    static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
+
     static bool RTG_PrepareLfgHelperForDesiredRole(Player* bot, uint32 desiredLevel, uint32 desiredRole, char const* reason)
     {
         if (!bot || !desiredRole || !RTG::ClassCanRole(bot->getClass(), desiredRole))
