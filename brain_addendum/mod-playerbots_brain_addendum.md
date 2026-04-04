@@ -650,8 +650,24 @@ The owner lane now stays open until either:
 - Extended exact-role doctrine to warrior, shaman, paladin, death knight, mage, warlock, hunter, and rogue. Druid flex remains feral only; priest flex remains discipline only.
 
 
-## Chapter: Strict Druid Offline RDF Selection
-- Context: A remaining seam allowed some Restoration druids to appear in RDF DPS selection when offline spec truth was missing.
-- Finding: The conservative hybrid fallback still treated unknown offline druids through generic fallback logic, which is too permissive for production RDF role correctness.
-- Change: Druids now require real offline spec truth for RDF selection. If offline spec data is unavailable, they are not surfaced through fallback role masks or cached runtime role data.
-- Result: Restoration druids can no longer leak into RDF DPS selection through fallback ambiguity.
+## Chapter 44 — RDF role derivation doctrine hardening (2026-04-04)
+
+### Context
+Live RDF testing still showed severe role/spec mismatches, including Restoration druids surfacing as tank or DPS candidates. This proved the queue pipeline was still letting demand reshape bot specs instead of selecting bots whose real specs already matched the requested role.
+
+### Finding
+The main seam was `RTG_PrepareLfgHelperForDesiredRole()`. That function was still reinitializing talents/equipment to a preferred spec for the requested RDF role. In practice, that let the queue system coerce helpers into roles instead of treating queue role as a consequence of real spec truth. A second seam remained in offline selection: hybrid classes without offline spec truth could still be surfaced through fallback logic.
+
+### Change
+- Disabled hybrid fallback role exposure for RDF selection when offline spec truth is missing. Only pure DPS classes remain safe to expose without spec data.
+- Changed `RTG_PrepareLfgHelperForDesiredRole()` so it no longer re-specs bots to satisfy RDF demand. It now only rebuilds the bot in its current spec when talents/level are missing and returns failure immediately if the current spec cannot perform the requested role.
+
+### Result
+Queue role is now forced to derive from actual spec truth rather than the planner reshaping the helper to fit demand. This should eliminate cases like resto druids tanking or DPSing, fury warriors tanking, and enhancement shamans healing.
+
+### Next proof targets
+- Restoration druid must only ever surface as healer.
+- Balance druid must only ever surface as DPS.
+- Feral druid may surface as tank or DPS.
+- Discipline priest may surface as healer or DPS.
+- No queue helper should change spec solely because the planner wanted a different role.

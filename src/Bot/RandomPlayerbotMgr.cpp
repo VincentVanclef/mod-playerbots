@@ -757,14 +757,15 @@ namespace
 
         bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
         bool missingTalents = !RTG_HasMeaningfulTalents(bot);
+        uint8 currentSpecTab = static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot));
         uint32 currentRoleMask = RTG_GetActualSpecRoleMask(bot);
         bool roleMismatch = (currentRoleMask & desiredRole) == 0;
 
-        if (!levelMismatch && !missingTalents && !roleMismatch)
+        // Do not re-spec helpers to fit RDF demand. Queue role must derive from the bot's real spec.
+        if (roleMismatch)
             return false;
 
-        uint8 desiredSpecTab = 0;
-        if (!RTG::PreferredSpecTabForClassRole(bot->getClass(), desiredRole, desiredSpecTab))
+        if (!levelMismatch && !missingTalents)
             return false;
 
         if (desiredLevel && bot->GetLevel() != desiredLevel)
@@ -774,14 +775,14 @@ namespace
             bot->SetUInt32Value(PLAYER_XP, 0);
         }
 
-        if (missingTalents || roleMismatch || levelMismatch)
+        if (missingTalents || levelMismatch)
         {
             RTG_ClearQueueHelperBagItems(bot);
             RTG_PurgeQueueHelperMailbox(bot);
         }
 
         PlayerbotFactory factory(bot, desiredLevel ? desiredLevel : bot->GetLevel());
-        PlayerbotFactory::InitTalentsBySpecNo(bot, desiredSpecTab, true);
+        PlayerbotFactory::InitTalentsBySpecNo(bot, currentSpecTab, true);
         factory.InitClassSpells();
         factory.InitAvailableSpells();
         factory.InitSpecialSpells();
@@ -798,7 +799,7 @@ namespace
         if (RTG_QueueDebugEnabled())
         {
             LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={}",
-                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(desiredSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(currentSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
                 missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0);
         }
 
@@ -3575,39 +3576,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return RTG_GetOfflineSpecRoleMask(charInfo.guid, charInfo.rClass);
             }
 
-            // Conservative doctrine for hybrid classes: when we do not have reliable offline
-            // spec data, do not trust stale runtime role caches to advertise tank/healer capability.
-            // Druids are treated most strictly here: without real offline spec truth, do not surface
-            // them for RDF role selection at all. This prevents Restoration druids from leaking into
-            // DPS selection through fallback ambiguity.
+            // Strict doctrine for hybrid classes: if we do not have reliable offline spec truth,
+            // do not surface them for RDF role selection at all. Pure DPS classes remain safe to
+            // expose as damage-only without spec data.
             switch (charInfo.rClass)
             {
-                case CLASS_DRUID:
-                    roleKnown = false;
-                    return 0u;
-                case CLASS_PALADIN:
-                case CLASS_PRIEST:
-                case CLASS_SHAMAN:
-                case CLASS_WARRIOR:
-                case CLASS_DEATH_KNIGHT:
+                case CLASS_MAGE:
+                case CLASS_WARLOCK:
+                case CLASS_HUNTER:
+                case CLASS_ROGUE:
                     roleKnown = true;
-                    return RTG::ConservativeFallbackRoleMaskForClass(charInfo.rClass);
+                    return lfg::PLAYER_ROLE_DAMAGE;
                 default:
                     break;
-            }
-
-            uint32 cachedMask = RTG_GetCachedRuntimeLfgRoleMask(charInfo.guid);
-            if (cachedMask)
-            {
-                roleKnown = true;
-                return cachedMask;
-            }
-
-            uint32 cachedRole = RTG_GetCachedRuntimeLfgRole(charInfo.guid);
-            if (cachedRole)
-            {
-                roleKnown = true;
-                return cachedRole;
             }
 
             roleKnown = false;
