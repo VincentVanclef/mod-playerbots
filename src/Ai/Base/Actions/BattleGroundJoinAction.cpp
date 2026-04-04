@@ -194,7 +194,7 @@ namespace
         if (itr == sNoRealPlayerSince.end())
             itr = sNoRealPlayerSince.emplace(instanceId, nowSecs).first;
 
-        return nowSecs >= itr->second && (nowSecs - itr->second) >= 300u;
+        return nowSecs >= itr->second && (nowSecs - itr->second) >= 5u;
     }
 
     static bool RTG_DirectJoinArenaQueue(Player* bot, BattlegroundQueueTypeId queueTypeId, ArenaType arenaType, bool isRated)

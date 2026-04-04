@@ -962,3 +962,26 @@ Queue role is now forced to derive from actual spec truth rather than the planne
 - **Finding:** RDF prep was only rebuilding helpers when level or talents were missing. If offline spec truth disagreed with the helper's current runtime spec, prep could still accept the desired role without realigning the bot to the stored spec. Separately, retirement logic still treated bot-only groups as a reason to keep helpers online.
 - **Change:** Added `specMismatch` handling inside `RTG_PrepareLfgHelperForDesiredRole()` so offline spec truth now forces a rebuild when runtime spec tab differs. Added `RTG_LeaveBotOnlyGroup()` and used it before RDF/BG queue-helper logout so returned-to-world helpers can detach and retire cleanly.
 - **Expected proof:** No balance druid healer / resto druid tank leakage through runtime drift, and helpers returning to the world after RDF/BG completion or early player exit should actually log out instead of repeating `RETURN_WORLD`/orphan breadcrumbs while lingering online.
+
+## Chapter: Queue role override narrowed to true flex specs; bot-only BG matches treated as orphaned
+- **Date:** 2026-04-04
+- **Subsystem:** mod-playerbots / RDF role identity / BG retirement
+
+### Situation
+A recent RDF test was mostly correct, but one protection warrior could still behave as DPS when slotted into a DPS position. Separately, after a real player AFK-left WSG, the battleground continued as a full bot match and helpers remained active even though no real player still needed the match.
+
+### Root cause
+1. `rtg_lfg_strategy_role` was still being honored by `PlayerbotAI::IsTank/IsHeal/IsDps` for all classes during queued/pending RDF states. That is only safe for true flex specs such as feral druids and discipline priests. Exact-role classes (warrior, paladin, shaman, etc.) should never have their identity overridden by queued role state.
+2. BG planning still treated an active bot-only battleground as real demand if stale queue counts remained. Also, protected BG helpers were allowed to stay in a bot-only battleground for too long after the last real player left.
+
+### Fix
+- Narrowed queued-role override honoring in `PlayerbotAI` to only true flex specs:
+  - feral druid (tank/dps)
+  - discipline priest (heal/dps)
+- Exact-role classes now keep their spec-derived identity even while RDF queue state exists.
+- In `RtgBgQueuePlanner`, an active battleground with zero real active players is now treated as a bot-only orphaned match, clearing real demand even if stale queue counts linger.
+- In `BattleGroundJoinAction`, protected helpers may now leave bot-only battlegrounds quickly once no real players remain.
+
+### Expected proof
+- Protection warriors should no longer act as DPS due to queued-role override.
+- If the last real player leaves a BG, the match should stop being treated as real demand and helpers should begin leaving rather than sustaining a full bot-only game.

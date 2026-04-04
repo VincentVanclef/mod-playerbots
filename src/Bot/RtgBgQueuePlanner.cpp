@@ -273,6 +273,12 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             bool hasRealQueuedSeed = (queueRealAlliance || queueRealHorde);
             bool hasActiveMatch = (activeCurrentAlliance || activeCurrentHorde);
             bool hasRealActiveMatch = (activeRealAlliance || activeRealHorde);
+            bool orphanedBotOnlyMatch = hasActiveMatch && !hasRealActiveMatch;
+            if (orphanedBotOnlyMatch)
+            {
+                hasRealDemand = false;
+                hasRealQueuedSeed = false;
+            }
             bool orphanQueueResidue = !hasRealDemand && (queueCurrentAlliance || queueCurrentHorde || activeCurrentAlliance || activeCurrentHorde || bgInfo.activeBgQueue);
             bool queueOrMatchActive = sPlayerbotAIConfig.rtgSmartQueue ?
                 (hasRealActiveMatch || hasRealQueuedSeed) :
@@ -346,8 +352,9 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                     uint32& nextLogAt = sNextOrphanResidueLogAt[residueKey];
                     if (!nextLogAt || nowTs >= nextLogAt)
                     {
-                        RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason=orphan_queue_residue queueA={} queueH={} activeA={} activeH={}",
-                            uint32(queueTypeId), uint32(bracketId), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde);
+                        RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason={} queueA={} queueH={} activeA={} activeH={} realActiveA={} realActiveH={}",
+                            uint32(queueTypeId), uint32(bracketId), orphanedBotOnlyMatch ? "bot_only_match" : "orphan_queue_residue",
+                            queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde, activeRealAlliance, activeRealHorde);
                         nextLogAt = nowTs + 60;
                     }
 
