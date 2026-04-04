@@ -691,8 +691,8 @@ Queue role is now forced to derive from actual spec truth rather than the planne
 - Proof target: Holy/Protection/Retribution paladins must queue only as healer/tank/dps respectively, and when a player leaves a dungeon early the remaining detached helpers should all retire shortly after world return even if they stay grouped among themselves.
 
 
-## 2026-04-04 — Compile-safe strict hybrid RDF spec-truth guard
-- Finding: a compile failure occurred because `RTG_PrepareLfgHelperForDesiredRole()` referenced `RTG_RequiresOfflineSpecTruthForRdf()` before any declaration was visible in `RandomPlayerbotMgr.cpp`. The intended strict hybrid doctrine was correct, but the helper itself was not defined early enough for this translation unit.
-- Change: added explicit local forward declarations for `RTG_IsPureDpsClass(uint8)` and `RTG_RequiresOfflineSpecTruthForRdf(uint8)` immediately before RDF helper prep usage, leaving the existing strict hybrid role logic intact.
-- Effect: the strict spec-derived RDF doctrine for druids, paladins, priests, shamans, and warriors remains in force without introducing compile errors or requiring broad rewrites.
-- Proof target: module should compile cleanly, while hybrid classes continue to require real offline spec truth before RDF role admission.
+## Chapter: Hybrid prep mismatch enforcement + bot-only world-return retirement
+- Cause: `RTG_PrepareLfgHelperForDesiredRole()` could return false for hybrid spec mismatch or missing offline spec truth, but callers were not checking whether the failure meant "blocked" versus "no rebuild needed". This let exact-role hybrids still slip through queue prep.
+- Correction: added an explicit `blocked` out-flag so login and dispatch can reject the helper immediately when prep proves the requested role is incompatible with real spec truth.
+- Additional correction: detached RDF helpers that had returned to world could remain grouped only with other bots, which kept safe-retire evaluation too conservative. Before requesting logout, the code now removes the bot from a bot-only group and uses queue-helper logout with queue-state clearing.
+- Proof targets: no Fury/Arms warrior can survive as RDF tank, no Holy/Ret paladin can survive as wrong role, and all detached helpers retire promptly after return-to-world when no real player remains.

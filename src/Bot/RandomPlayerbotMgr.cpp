@@ -750,13 +750,17 @@ namespace
         }
     }
 
-    static bool RTG_IsPureDpsClass(uint8 cls);
-    static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
-
-    static bool RTG_PrepareLfgHelperForDesiredRole(Player* bot, uint32 desiredLevel, uint32 desiredRole, char const* reason)
+    static bool RTG_PrepareLfgHelperForDesiredRole(Player* bot, uint32 desiredLevel, uint32 desiredRole, char const* reason, bool* blocked = nullptr)
     {
+        if (blocked)
+            *blocked = false;
+
         if (!bot || !desiredRole || !RTG::ClassCanRole(bot->getClass(), desiredRole))
+        {
+            if (blocked)
+                *blocked = true;
             return false;
+        }
 
         bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
         bool missingTalents = !RTG_HasMeaningfulTalents(bot);
@@ -767,7 +771,11 @@ namespace
             currentSpecTab = resolvedSpecTab;
 
         if (RTG_RequiresOfflineSpecTruthForRdf(bot->getClass()) && !hasOfflineSpecTruth)
+        {
+            if (blocked)
+                *blocked = true;
             return false;
+        }
 
         uint32 currentRoleMask = hasOfflineSpecTruth
             ? RTG::RoleMaskForClassSpecTab(bot->getClass(), currentSpecTab)
@@ -777,7 +785,11 @@ namespace
 
         // Do not re-spec helpers to fit RDF demand. Queue role must derive from the bot's real spec.
         if (roleMismatch)
+        {
+            if (blocked)
+                *blocked = true;
             return false;
+        }
 
         if (!levelMismatch && !missingTalents)
             return false;
@@ -1953,8 +1965,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
                 if (disposedFromDungeon)
                 {
+                    if (group && !groupHasRealPlayer)
+                        group->RemoveMember(bot->GetGUID());
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=disposed_from_dungeon immediateLogout=1", botId, desiredOwner));
-                    RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_disposed", true);
+                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_disposed", true);
                 }
                 else if (!orphanedSince)
                 {
@@ -1966,7 +1980,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 }
                 else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= 5)
                 {
-                    RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
+                    if (group && !groupHasRealPlayer)
+                        group->RemoveMember(bot->GetGUID());
+                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
                 }
                 continue;
             }
@@ -1981,7 +1997,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 }
                 else if (nowTs > worldReturnSince && (nowTs - worldReturnSince) >= 5)
                 {
-                    RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_returned_world", true);
+                    if (group && !groupHasRealPlayer)
+                        group->RemoveMember(bot->GetGUID());
+                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_returned_world", true);
                 }
                 continue;
             }
@@ -2092,7 +2110,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                 if (desiredRole)
                 {
-                    RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "dispatch_prepare");
+                    bool prepBlocked = false;
+                    RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "dispatch_prepare", &prepBlocked);
+                    if (prepBlocked)
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=prepare_role_mismatch desiredRole={} class={} specTab={}",
+                            botId, desiredOwner, desiredRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                        RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
+                        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                        RTG_ClearQueueHelperState(botId);
+                        RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_prepare_role_mismatch");
+                        continue;
+                    }
 
                     uint32 actualRole = RTG_ActualRoleForBot(bot);
                     uint32 actualRoleMask = RTG_GetActualSpecRoleMask(bot);
@@ -7093,7 +7122,20 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             }
 
             if (desiredRole)
-                RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "login_prepare");
+            {
+                bool prepBlocked = false;
+                RTG_PrepareLfgHelperForDesiredRole(bot, desiredLevel ? desiredLevel : bot->GetLevel(), desiredRole, "login_prepare", &prepBlocked);
+                if (prepBlocked)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_prepare_role_mismatch desiredRole={} class={} specTab={}",
+                        bot->GetGUID().GetCounter(), desiredOwner, desiredRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                    RTG_BlockBotForDesiredLfgRole(bot->GetGUID().GetCounter(), desiredRole);
+                    SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
+                    RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
+                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_login_prepare_role_mismatch");
+                    return;
+                }
+            }
 
             if (desiredRole)
             {
