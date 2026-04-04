@@ -763,6 +763,9 @@ namespace
         if (hasOfflineSpecTruth)
             currentSpecTab = resolvedSpecTab;
 
+        if (RTG_RequiresOfflineSpecTruthForRdf(bot->getClass()) && !hasOfflineSpecTruth)
+            return false;
+
         uint32 currentRoleMask = hasOfflineSpecTruth
             ? RTG::RoleMaskForClassSpecTab(bot->getClass(), currentSpecTab)
             : RTG_GetActualSpecRoleMask(bot);
@@ -822,6 +825,22 @@ namespace
             case CLASS_WARLOCK:
             case CLASS_HUNTER:
             case CLASS_ROGUE:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls)
+    {
+        switch (cls)
+        {
+            case CLASS_DRUID:
+            case CLASS_PALADIN:
+            case CLASS_PRIEST:
+            case CLASS_SHAMAN:
+            case CLASS_WARRIOR:
+            case CLASS_DEATH_KNIGHT:
                 return true;
             default:
                 return false;
@@ -1913,9 +1932,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 RTG_TryNormalizeLfgHelperOwnerToGroup(bot, group, desiredTeam, desiredLevel, desiredRole, desiredOwner);
 
             bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
-            bool orphanCandidate = GetEventValue(botId, "rtg_dungeon_active") && !ownerHasRealDemand && !group && !inDungeonMap && state == lfg::LFG_STATE_NONE;
-            bool detachedFromRdf = !ownerHasRealDemand && !group && !inDungeonMap && state == lfg::LFG_STATE_NONE;
-            if (ownerHasRealDemand || group || inDungeonMap || state != lfg::LFG_STATE_NONE)
+            bool groupHasRealPlayer = RTG_GroupHasRealPlayer(group);
+            bool safeDetachedGroup = !group || !groupHasRealPlayer;
+            bool orphanCandidate = GetEventValue(botId, "rtg_dungeon_active") && !ownerHasRealDemand && safeDetachedGroup && !inDungeonMap && state == lfg::LFG_STATE_NONE;
+            bool detachedFromRdf = !ownerHasRealDemand && safeDetachedGroup && !inDungeonMap && state == lfg::LFG_STATE_NONE;
+            if (ownerHasRealDemand || inDungeonMap || state != lfg::LFG_STATE_NONE || (group && groupHasRealPlayer))
             {
                 RTG_ClearOrphanedState(botId);
                 SetEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
@@ -1955,7 +1976,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     SetEventValue(botId, "rtg_lfg_world_return_since", nowTs, 60, addData);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][RETURN_WORLD] helper={} owner={} retireSoon=1", botId, desiredOwner));
                 }
-                else if (nowTs > worldReturnSince && (nowTs - worldReturnSince) >= 10)
+                else if (nowTs > worldReturnSince && (nowTs - worldReturnSince) >= 5)
                 {
                     RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_returned_world", true);
                 }
@@ -2697,7 +2718,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
 			bool stillInRun =
 				(map && (map->IsDungeon() || map->IsRaid())) ||
-				(group && group->isLFGGroup()) ||
+				(group && group->isLFGGroup() && RTG_GroupHasRealPlayer(group)) ||
 				bot->isDead() ||
 				bot->GetCorpse() ||
 				bot->IsInCombat() ||
