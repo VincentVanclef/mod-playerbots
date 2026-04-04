@@ -898,11 +898,11 @@ namespace
 
         if (group->GetMembersCount() <= 1)
         {
-            group->RemoveMember(bot->GetGUID(), 0, GROUP_REMOVEMETHOD_LEAVE, bot->GetGUID(), nullptr);
+            group->RemoveMember(bot->GetGUID(), GROUP_REMOVEMETHOD_LEAVE, bot->GetGUID(), nullptr);
             return;
         }
 
-        group->RemoveMember(bot->GetGUID(), 0, GROUP_REMOVEMETHOD_LEAVE, bot->GetGUID(), nullptr);
+        group->RemoveMember(bot->GetGUID(), GROUP_REMOVEMETHOD_LEAVE, bot->GetGUID(), nullptr);
     }
 
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
