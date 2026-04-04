@@ -758,7 +758,15 @@ namespace
         bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
         bool missingTalents = !RTG_HasMeaningfulTalents(bot);
         uint8 currentSpecTab = static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot));
-        uint32 currentRoleMask = RTG_GetActualSpecRoleMask(bot);
+        uint8 resolvedSpecTab = currentSpecTab;
+        bool hasOfflineSpecTruth = RTG::HasOfflineSpecData(bot->GetGUID().GetCounter(), bot->getClass(), &resolvedSpecTab);
+        if (hasOfflineSpecTruth)
+            currentSpecTab = resolvedSpecTab;
+
+        uint32 currentRoleMask = hasOfflineSpecTruth
+            ? RTG::RoleMaskForClassSpecTab(bot->getClass(), currentSpecTab)
+            : RTG_GetActualSpecRoleMask(bot);
+
         bool roleMismatch = (currentRoleMask & desiredRole) == 0;
 
         // Do not re-spec helpers to fit RDF demand. Queue role must derive from the bot's real spec.
@@ -804,6 +812,20 @@ namespace
         }
 
         return true;
+    }
+
+    static bool RTG_IsPureDpsClass(uint8 cls)
+    {
+        switch (cls)
+        {
+            case CLASS_MAGE:
+            case CLASS_WARLOCK:
+            case CLASS_HUNTER:
+            case CLASS_ROGUE:
+                return true;
+            default:
+                return false;
+        }
     }
 
     static bool RTG_IsRealPlayer(Player* player)
@@ -1892,8 +1914,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
             bool orphanCandidate = GetEventValue(botId, "rtg_dungeon_active") && !ownerHasRealDemand && !group && !inDungeonMap && state == lfg::LFG_STATE_NONE;
+            bool detachedFromRdf = !ownerHasRealDemand && !group && !inDungeonMap && state == lfg::LFG_STATE_NONE;
             if (ownerHasRealDemand || group || inDungeonMap || state != lfg::LFG_STATE_NONE)
+            {
                 RTG_ClearOrphanedState(botId);
+                SetEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
+            }
             else if (orphanCandidate)
             {
                 uint32 nowTs = uint32(time(nullptr));
@@ -1917,6 +1943,21 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= 5)
                 {
                     RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
+                }
+                continue;
+            }
+            else if (detachedFromRdf)
+            {
+                uint32 nowTs = uint32(time(nullptr));
+                uint32 worldReturnSince = GetEventValue(botId, "rtg_lfg_world_return_since");
+                if (!worldReturnSince)
+                {
+                    SetEventValue(botId, "rtg_lfg_world_return_since", nowTs, 60, addData);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][RETURN_WORLD] helper={} owner={} retireSoon=1", botId, desiredOwner));
+                }
+                else if (nowTs > worldReturnSince && (nowTs - worldReturnSince) >= 10)
+                {
+                    RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_returned_world", true);
                 }
                 continue;
             }
@@ -3622,8 +3663,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if ((roleMask & desiredRole) == 0)
                         continue;
                 }
-                else if (!RTG::ClassCanRole(charInfo.rClass, desiredRole))
-                    continue;
+                else
+                {
+                    if (!RTG_IsPureDpsClass(charInfo.rClass) || desiredRole != lfg::PLAYER_ROLE_DAMAGE)
+                        continue;
+                }
 
                 ++count;
             }
@@ -4219,7 +4263,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             // Tank/healer lanes must come from reliable offline spec truth,
                             // otherwise RTG can surface bad groups such as Fury/Arms tanks or
                             // Enhancement healers.
-                            if (roleKnown || desiredRole != lfg::PLAYER_ROLE_DAMAGE || !RTG::ClassCanRole(charInfo.rClass, desiredRole))
+                            if (roleKnown || desiredRole != lfg::PLAYER_ROLE_DAMAGE || !RTG_IsPureDpsClass(charInfo.rClass))
                                 continue;
                         }
 
