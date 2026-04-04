@@ -936,7 +936,7 @@ Queue role is now forced to derive from actual spec truth rather than the planne
 - No queue helper should change spec solely because the planner wanted a different role.
 
 
-## 2026-04-03 - Queue production tightening pass
-- Hardened RDF prep so missing-talents rebuilds use offline spec truth when available instead of trusting runtime spec-tab guesses. This closes a remaining seam where Restoration druids could be rebuilt into a non-healer queue identity during helper preparation.
-- Added faction-split arena queue accounting for skirmish/rated arena participants and bots so solo 3v3 demand is computed from actual Alliance/Horde queue makeup instead of a symmetric split. This prevents an Alliance owner from being treated like Horde demand.
-- Tightened orphaned queue-helper disposal so helpers log out immediately once owner demand is gone and they are no longer active/enroute in RDF.
+## 2026-04-03 — Queue helper return-to-world retirement tightening
+- Finding: helpers were correctly serving RDF/BG/arena lanes, but after returning to the world they could linger online because retirement logic still applied long grace windows or generic ownership delays even after the lifecycle had ended.
+- Change: RDF orphan retirement after a real dungeon run returning to the world now retires in about 5 seconds instead of lingering for minutes. BG/arena helpers marked `rtg_bg_retire_when_safe` now retire immediately once they are back in the world and no longer in queue/invite/BG state. Finished dungeon cleanup was also reduced from 300 seconds to 5 seconds after world return.
+- Proof target: after an RDF/BG/arena completes and the player leaves the activity, helpers should log out almost immediately after returning to the world, while still avoiding disruption during initial login or active run stages.

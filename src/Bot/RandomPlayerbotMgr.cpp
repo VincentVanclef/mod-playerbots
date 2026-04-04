@@ -758,16 +758,8 @@ namespace
         bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
         bool missingTalents = !RTG_HasMeaningfulTalents(bot);
         uint8 currentSpecTab = static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot));
-        uint8 effectiveSpecTab = currentSpecTab;
-        if (missingTalents)
-        {
-            uint8 offlineSpecTab = currentSpecTab;
-            if (RTG::HasOfflineSpecData(bot->GetGUID().GetCounter(), bot->getClass(), &offlineSpecTab))
-                effectiveSpecTab = offlineSpecTab;
-        }
-
-        uint32 effectiveRoleMask = RTG::RoleMaskForClassSpecTab(bot->getClass(), effectiveSpecTab);
-        bool roleMismatch = (effectiveRoleMask & desiredRole) == 0;
+        uint32 currentRoleMask = RTG_GetActualSpecRoleMask(bot);
+        bool roleMismatch = (currentRoleMask & desiredRole) == 0;
 
         // Do not re-spec helpers to fit RDF demand. Queue role must derive from the bot's real spec.
         if (roleMismatch)
@@ -790,7 +782,7 @@ namespace
         }
 
         PlayerbotFactory factory(bot, desiredLevel ? desiredLevel : bot->GetLevel());
-        PlayerbotFactory::InitTalentsBySpecNo(bot, effectiveSpecTab, true);
+        PlayerbotFactory::InitTalentsBySpecNo(bot, currentSpecTab, true);
         factory.InitClassSpells();
         factory.InitAvailableSpells();
         factory.InitSpecialSpells();
@@ -806,8 +798,8 @@ namespace
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} effectiveSpecTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={}",
-                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(currentSpecTab), uint32(effectiveSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
+            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(currentSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
                 missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0);
         }
 
@@ -1914,13 +1906,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=disposed_from_dungeon immediateLogout=1", botId, desiredOwner));
                     RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_disposed", true);
                 }
-                else
+                else if (!orphanedSince)
                 {
-                    if (!orphanedSince)
-                    {
-                        SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, 30, addData);
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=owner_done immediateLogout=1", botId, desiredOwner));
-                    }
+                    // Once a helper has actually served a dungeon run and returned to the world,
+                    // do not keep it lingering behind the player. Mark the world-return moment
+                    // and retire it almost immediately unless it is still unsafe to logout.
+                    SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, 90, addData);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=returned_to_world retireSoon=1", botId, desiredOwner));
+                }
+                else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= 5)
+                {
                     RTG_RequestSafeBotLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
                 }
                 continue;
@@ -2600,7 +2595,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
 
-                if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                // Once a BG/arena helper has fully returned to the world and is marked for
+                // retirement, do not let generic ownership guards keep it lingering online.
+                // At this point the queue lifecycle has ended and the helper is no longer serving.
+                if (!retireWhenSafe && sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                 {
                     RTG::RtgLifecycleResult lifecycle = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
                     if (lifecycle.decision != RTG::RtgLifecycleDecision::Allow)
@@ -2612,7 +2610,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     }
                 }
 
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RETIRE] allowing helper={} queue={} noLongerNeeded={}", botId, desiredQueueType, noLongerNeeded ? 1 : 0));
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RETIRE] allowing helper={} queue={} noLongerNeeded={} retireWhenSafe={}", botId, desiredQueueType, noLongerNeeded ? 1 : 0, retireWhenSafe ? 1 : 0));
                 rtgBgLogout.push_back(botGuid);
                 continue;
             }
@@ -2632,8 +2630,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     }
 
 
-	// RTG: cleanup finished/abandoned dungeon-session bots only after they are
-	// truly out of the run for a while. This preserves bots through wipes.
+	// RTG: cleanup finished/abandoned dungeon-session bots after they have
+	// actually returned to the world. This should be quick once the run is over,
+	// but must not fire during initial helper login because rtg_dungeon_active is
+	// only set after a real dungeon lifecycle has begun.
 	if (sPlayerbotAIConfig.rtgEventDriven)
 	{
 		uint32 now = NowSeconds();
@@ -2669,7 +2669,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			if (now <= activeSince + 300)
+			if (now <= activeSince + 5)
 				continue;
 
 			SetEventValue(botId, "rtg_dungeon_active", 0, 0);
@@ -4770,21 +4770,9 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.maxLevel = maxLevel;
 
                 if (isRated)
-                {
                     ++arenaInfo.ratedArenaPlayerCount;
-                    if (teamId == TEAM_ALLIANCE)
-                        ++arenaInfo.ratedArenaAlliancePlayerCount;
-                    else
-                        ++arenaInfo.ratedArenaHordePlayerCount;
-                }
                 else
-                {
                     ++arenaInfo.skirmishArenaPlayerCount;
-                    if (teamId == TEAM_ALLIANCE)
-                        ++arenaInfo.skirmishArenaAlliancePlayerCount;
-                    else
-                        ++arenaInfo.skirmishArenaHordePlayerCount;
-                }
 
                 if (!player->IsInvitedForBattlegroundInstance() && !player->InBattleground())
                 {
@@ -4870,21 +4858,9 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.maxLevel = maxLevel;
 
                 if (isRated)
-                {
                     ++arenaInfo.ratedArenaBotCount;
-                    if (teamId == TEAM_ALLIANCE)
-                        ++arenaInfo.ratedArenaAllianceBotCount;
-                    else
-                        ++arenaInfo.ratedArenaHordeBotCount;
-                }
                 else
-                {
                     ++arenaInfo.skirmishArenaBotCount;
-                    if (teamId == TEAM_ALLIANCE)
-                        ++arenaInfo.skirmishArenaAllianceBotCount;
-                    else
-                        ++arenaInfo.skirmishArenaHordeBotCount;
-                }
 
                 if (bg)
                 {
