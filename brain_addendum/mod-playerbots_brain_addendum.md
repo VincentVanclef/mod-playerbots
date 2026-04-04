@@ -745,66 +745,26 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 
 **Expected proof:** Arena helpers should retire independently of an unrelated ongoing battleground. BG helpers should leave bot-only matches cleanly after the last real player is gone, without a final-wave server destabilization during logout cleanup.
 
-## Chapter: Queue Login Guard Reinterpretation, Live Per-Queue Demand Retirement, and Arena/BG Capacity Split
-- **Date:** 2026-04-04
-- **Subsystem:** mod-playerbots / queue login pipeline / BG-arena arbitration / post-lifecycle retirement
 
-### Situation
-Mixed WSG + solo 3v3 testing still showed three production seams:
-1. Helpers selected for queue service could appear to be replaced by additional helpers while the original chosen bots were still in login progress.
-2. Arena helpers could linger in the world after the arena was done if a battleground was still active elsewhere.
-3. BG and arena were still sharing the same assistance pool too loosely, so one lane could interfere with the other's fill progression.
-
-### Root cause
-- `bot_loading_guard` was being treated as a true login failure, which cleared queue-helper ownership state and caused reacquisition of replacement helpers even though the original helper was simply still loading.
-- BG/arena retirement in `RandomPlayerbotMgr` still depended on planner/global demand overlays rather than live per-queue real-player presence for the helper's own assigned queue.
-- Arena and battleground buckets were still sharing the same reserved BG lane too generically, with no explicit reserved split between arena queue demand and non-arena battleground demand.
-
-### Fix
-- Reinterpreted `bot_loading_guard` as an in-flight duplicate login attempt, not a real helper login failure. The helper now keeps its queue ownership state instead of being cleared and replaced.
-- Added live per-queue real-player demand detection for BG/arena retirement, so helpers retire based on whether their own assigned queue still has a real player attached, independent of unrelated queue activity.
-- Split reserved BG-lane acquisition into separate arena-reserved and battleground-reserved sub-capacities, then filled arena buckets and non-arena BG buckets independently before using any shared surplus.
-- Shared-surplus BG ordering now prefers arena buckets ahead of non-arena BG buckets, while still allowing battleground fill to proceed when reserved BG capacity remains.
-
-### Expected proof
-- Chosen helpers should stop being prematurely replaced just because their login was already in flight.
-- Arena helpers should retire even while a battleground is still running, as soon as their own arena no longer has real-player demand.
-- Arena and battleground should feel separated enough that both can fill without obvious tug-of-war over the same final helper pool.
-
-## Chapter: Arena/BG lane overlap final seam — live arena queue demand vs stale arena lifecycle counts
+## Chapter 2026-04-04-QS-ARENA-BG-LAST-OVERLAP
 
 ### Context
-Mixed WSG + solo 3v3 testing still showed residual overlap after major lane separation work. Operators observed arena helpers being retried with wrong-side replacements, arena demand continuing after the match had effectively ended, and extra arena helpers lingering after correction while battleground fill was delayed.
+Mixed WSG + solo 3v3 testing still showed final queue-lane overlap. The observed symptoms were: arena demand continuing during the post-match scoreboard window, battleground finish-fill being delayed while arena was already effectively complete, slow level-1 helper logins being treated like replacement-worthy failures, and occasional arena helper faction mismatches surviving until login.
 
 ### Findings
-The remaining overlap was not the high-level planner bucket split alone. Two lower seams remained:
-1. Arena demand math in `RtgBgQueuePlanner.cpp` still relied on aggregate arena bot/player counters from `BattlegroundData`, which include bots/players already inside arena lifecycle rather than only those still truly queued.
-2. BG/arena helper retirement in `RandomPlayerbotMgr.cpp` only requested immediate leave for helpers still inside a battleground/arena map, but not for helpers still stuck in queue/invite lifecycle after demand had already vanished.
+1. Arena planning was still treating active arena instances as live fill demand because queued counters and active-instance state were blended together.
+2. BG/arena helper retirement was still consulting generic live BG demand, and for arena this included active arena participation as if it were still queue-fill demand.
+3. `bot_loading_guard` was only being breadcrumbed, so slow helper initialization could still age into a dispatch-stall replacement cycle.
+4. BG/arena helper login lacked a final explicit team guard at login time.
 
-This allowed:
-- wrong-side arena retries due to stale queue composition
-- arena demand to persist during scoreboard / WAIT_LEAVE style end-state windows
-- extra arena queue helpers to remain anchored while battleground finish-fill waited behind them
+### Corrections
+- Arena planner now sets zero helper demand while an arena instance is active, even if queued counters linger during scoreboard time.
+- Live BG demand checks no longer treat active arena participation as fresh queue demand for queue 9 retirement logic.
+- `bot_loading_guard` now refreshes `rtg_add_requested` and the pending queue state instead of letting the original helper drift toward stall replacement.
+- BG/arena helper login now hard-fails and retires a helper if the logged-in faction does not match the requested team encoded in RTG add-data.
 
-### Corrective doctrine
-Arena demand must derive from live queue-slot truth, not broad lifecycle totals.
-Arena helpers that are no longer needed must be able to leave immediately whether they are:
-- in an active arena/bg map
-- invited
-- or still sitting in queue
-
-### Changes applied
-- Added live bot queue-slot demand tracking in `RtgBgQueuePlanner.cpp` alongside live real-player queue-slot demand.
-- Arena planner now uses live queue-slot alliance/horde bot counts instead of broad `BattlegroundData` aggregate bot counts for team-need math.
-- Real player and bot arena/battleground census now skips `STATUS_WAIT_LEAVE` lifecycle windows to avoid false continued demand after match end.
-- `RandomPlayerbotMgr.cpp` BG/arena retirement path now requests `bg leave` not only for active map lifecycle, but also for no-longer-needed helpers still in queue/invite state.
-- Arena alliance/horde aggregate counters in `BattlegroundData` were also filled for consistency/debug readability.
-
-### Expected proof
-- Arena team fill should stop re-rolling wrong-side helpers after stale counts disappear.
-- Arena demand should collapse as soon as the match is truly over instead of waiting for late scoreboard/leave churn.
-- Extra arena helpers should leave queue quickly and retire independently while WSG continues.
-- Battleground finish-fill should no longer be delayed by stale arena queue demand.
-
-### Status
-Applied for next operator validation pass.
+### Proof Target
+- Solo 3v3 should stop asking for fill the moment the arena instance is active and should not block WSG finish-fill during the post-match scoreboard window.
+- Arena helpers should retire independently after arena completion even if a battleground is still ongoing.
+- Slow level-1 helper logins should be allowed to finish rather than being replaced just because duplicate add attempts hit `bot_loading_guard`.
+- Wrong-faction arena helpers should be rejected immediately at login rather than surviving into queue retries.
