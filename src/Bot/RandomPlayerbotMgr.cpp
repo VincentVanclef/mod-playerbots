@@ -77,6 +77,10 @@ namespace
 	static uint32 RTG_GetProposalLock(uint32 botId);
 	static uint32 RTG_GetProposalAcceptSentAt(uint32 botId);
 	static void RTG_ClearProposalLifecycle(uint32 botId);
+
+	// --- RDF strict spec-role helper declarations ---
+	static bool RTG_IsPureDpsClass(uint8 cls);
+	static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
 	
     static bool RTG_QueueDebugEnabled()
     {
@@ -855,7 +859,6 @@ namespace
             case CLASS_PRIEST:
             case CLASS_SHAMAN:
             case CLASS_WARRIOR:
-            case CLASS_DEATH_KNIGHT:
                 return true;
             default:
                 return false;
