@@ -744,3 +744,29 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 **Changes:** `RTG_IsBgLifecycleOwned()` now ignores detached bot-only BG groups once the helper is no longer in queue/BG/arena/map lifecycle. BG/arena helpers now use a dedicated `rtg_bg_world_return_since` staging window before logout, and retirement is batched per tick rather than sweeping every helper at once.
 
 **Expected proof:** Arena helpers should retire independently of an unrelated ongoing battleground. BG helpers should leave bot-only matches cleanly after the last real player is gone, without a final-wave server destabilization during logout cleanup.
+
+## Chapter: Queue Login Guard Reinterpretation, Live Per-Queue Demand Retirement, and Arena/BG Capacity Split
+- **Date:** 2026-04-04
+- **Subsystem:** mod-playerbots / queue login pipeline / BG-arena arbitration / post-lifecycle retirement
+
+### Situation
+Mixed WSG + solo 3v3 testing still showed three production seams:
+1. Helpers selected for queue service could appear to be replaced by additional helpers while the original chosen bots were still in login progress.
+2. Arena helpers could linger in the world after the arena was done if a battleground was still active elsewhere.
+3. BG and arena were still sharing the same assistance pool too loosely, so one lane could interfere with the other's fill progression.
+
+### Root cause
+- `bot_loading_guard` was being treated as a true login failure, which cleared queue-helper ownership state and caused reacquisition of replacement helpers even though the original helper was simply still loading.
+- BG/arena retirement in `RandomPlayerbotMgr` still depended on planner/global demand overlays rather than live per-queue real-player presence for the helper's own assigned queue.
+- Arena and battleground buckets were still sharing the same reserved BG lane too generically, with no explicit reserved split between arena queue demand and non-arena battleground demand.
+
+### Fix
+- Reinterpreted `bot_loading_guard` as an in-flight duplicate login attempt, not a real helper login failure. The helper now keeps its queue ownership state instead of being cleared and replaced.
+- Added live per-queue real-player demand detection for BG/arena retirement, so helpers retire based on whether their own assigned queue still has a real player attached, independent of unrelated queue activity.
+- Split reserved BG-lane acquisition into separate arena-reserved and battleground-reserved sub-capacities, then filled arena buckets and non-arena BG buckets independently before using any shared surplus.
+- Shared-surplus BG ordering now prefers arena buckets ahead of non-arena BG buckets, while still allowing battleground fill to proceed when reserved BG capacity remains.
+
+### Expected proof
+- Chosen helpers should stop being prematurely replaced just because their login was already in flight.
+- Arena helpers should retire even while a battleground is still running, as soon as their own arena no longer has real-player demand.
+- Arena and battleground should feel separated enough that both can fill without obvious tug-of-war over the same final helper pool.

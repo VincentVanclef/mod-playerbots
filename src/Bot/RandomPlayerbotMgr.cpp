@@ -22,6 +22,7 @@
 #include <map>
 #include <tuple>
 #include <fmt/format.h>
+#include <cstring>
 
 #include "AccountMgr.h"
 #include "AiFactory.h"
@@ -905,6 +906,9 @@ namespace
         group->RemoveMember(bot->GetGUID(), GROUP_REMOVEMETHOD_LEAVE, bot->GetGUID(), nullptr);
     }
 
+    static bool RTG_GetBgQueueContext(BattlegroundQueueTypeId queueTypeId, uint32 level, BattlegroundBracketId& bracketId,
+                                        uint32& minLevel, uint32& maxLevel);
+
     static bool RTG_BattlegroundHasRealPlayers(Battleground* bg)
     {
         if (!bg || !bg->GetBgMap())
@@ -917,6 +921,53 @@ namespace
                 continue;
             if (RTG_IsRealPlayer(player))
                 return true;
+        }
+
+        return false;
+    }
+
+    static bool RTG_HasLiveRealBgDemandForQueue(RandomPlayerbotMgr& mgr, uint32 desiredQueueType, uint32 desiredLevel)
+    {
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+        if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return false;
+
+        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
+        if (desiredBgType == BATTLEGROUND_TYPE_NONE)
+            return false;
+
+        Battleground* bgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType);
+        if (!bgTemplate)
+            return false;
+
+        BattlegroundBracketId desiredBracketId = BG_BRACKET_ID_FIRST;
+        uint32 minLevel = desiredLevel;
+        uint32 maxLevel = desiredLevel;
+        if (!RTG_GetBgQueueContext(queueTypeId, desiredLevel, desiredBracketId, minLevel, maxLevel))
+            return false;
+
+        for (Player* player : mgr.GetPlayers())
+        {
+            if (!player || !player->IsInWorld() || mgr.IsRandomBot(player))
+                continue;
+
+            for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+            {
+                BattlegroundQueueTypeId liveQueueType = player->GetBattlegroundQueueTypeId(queueSlot);
+                if (liveQueueType != queueTypeId)
+                    continue;
+
+                PvPDifficultyEntry const* playerBracket = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
+                if (playerBracket && playerBracket->GetBracketId() == desiredBracketId)
+                    return true;
+            }
+
+            if ((player->InBattleground() || player->InArena()) && player->GetBattlegroundTypeId() == desiredBgType)
+            {
+                PvPDifficultyEntry const* playerBracket = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), player->GetLevel());
+                if (playerBracket && playerBracket->GetBracketId() == desiredBracketId)
+                    return true;
+            }
         }
 
         return false;
@@ -2685,19 +2736,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
                 continue;
 
-            bool bgHasRealDemand = false;
-            BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
-            if (desiredBgType != BATTLEGROUND_TYPE_NONE)
-            {
-                if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
-                {
-                    if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
-                        bgHasRealDemand = GetEventValue(0, RTG_MakeBgDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
-                }
-            }
+            bool bgHasRealDemand = RTG_HasLiveRealBgDemandForQueue(*this, desiredQueueType, desiredLevel ? desiredLevel : bot->GetLevel());
 
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
-            bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || wrongTeam;
+            bool noLongerNeeded = !bgHasRealDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
@@ -4590,7 +4632,40 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 return tryFillBgBucket(bucket, capacity);
             };
 
-            auto fillReservedBgLane = [&](uint32& capacity)
+            uint32 totalArenaNeed = 0;
+            uint32 totalNonArenaBgNeed = 0;
+            for (RtgBgBucket const& bucket : orderedBgBuckets)
+            {
+                if (!bucket.need)
+                    continue;
+                if (bucket.isArena)
+                    totalArenaNeed += bucket.need;
+                else
+                    totalNonArenaBgNeed += bucket.need;
+            }
+
+            uint32 reservedLfgCapacity = lfgCapacity;
+            uint32 reservedArenaCapacity = 0;
+            uint32 reservedBgCapacity = 0;
+            if (bgCapacity)
+            {
+                reservedArenaCapacity = std::min(bgCapacity, totalArenaNeed);
+                reservedBgCapacity = bgCapacity > reservedArenaCapacity ? (bgCapacity - reservedArenaCapacity) : 0u;
+                if (totalNonArenaBgNeed && !reservedBgCapacity && bgCapacity > 1 && reservedArenaCapacity > 0)
+                {
+                    --reservedArenaCapacity;
+                    reservedBgCapacity = 1;
+                }
+            }
+
+            uint32 laneDebugInitialLfg = reservedLfgCapacity;
+            uint32 laneDebugInitialArena = reservedArenaCapacity;
+            uint32 laneDebugInitialBg = reservedBgCapacity;
+            bool bgDemandActive = totalBgNeed > 0;
+
+            fillReservedLfgLane(reservedLfgCapacity, bgDemandActive);
+
+            auto fillSpecificBgLane = [&](uint32& capacity, bool arenasOnly)
             {
                 bool added = true;
                 while (capacity && remainingCapacity && added)
@@ -4600,6 +4675,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     {
                         if (!capacity || !remainingCapacity)
                             break;
+                        if (bucket.isArena != arenasOnly)
+                            continue;
                         if (arenaDemandActive && !bucket.isArena && bucket.phase >= 3)
                             continue;
                         if (suppressBgFinishFill && bucket.phase == 4)
@@ -4610,16 +4687,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             };
 
-            uint32 reservedLfgCapacity = lfgCapacity;
-            uint32 reservedBgCapacity = bgCapacity;
-            uint32 laneDebugInitialLfg = reservedLfgCapacity;
-            uint32 laneDebugInitialBg = reservedBgCapacity;
-            bool bgDemandActive = totalBgNeed > 0;
+            fillSpecificBgLane(reservedArenaCapacity, true);
+            fillSpecificBgLane(reservedBgCapacity, false);
 
-            fillReservedLfgLane(reservedLfgCapacity, bgDemandActive);
-            fillReservedBgLane(reservedBgCapacity);
-
-            uint32 sharedSurplus = reservedLfgCapacity + reservedBgCapacity;
+            uint32 sharedSurplus = reservedLfgCapacity + reservedArenaCapacity + reservedBgCapacity;
             lfgCapacity = 0;
             bgCapacity = 0;
 
@@ -4636,14 +4707,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     {
                         if (preferBg)
                         {
-                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            for (bool arenasOnly : {true, false})
                             {
-                                if (arenaDemandActive && !bucket.isArena && bucket.phase >= 3)
-                                    continue;
-                                if (suppressBgFinishFill && bucket.phase == 4)
-                                    continue;
-                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
-                                    return true;
+                                for (RtgBgBucket& bucket : orderedBgBuckets)
+                                {
+                                    if (bucket.isArena != arenasOnly)
+                                        continue;
+                                    if (arenaDemandActive && !bucket.isArena && bucket.phase >= 3)
+                                        continue;
+                                    if (suppressBgFinishFill && bucket.phase == 4)
+                                        continue;
+                                    if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                        return true;
+                                }
                             }
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
@@ -4658,14 +4734,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                 if (tryFillLfgBucketOnce(bucket, sharedSurplus))
                                     return true;
                             }
-                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            for (bool arenasOnly : {true, false})
                             {
-                                if (arenaDemandActive && !bucket.isArena && bucket.phase >= 3)
-                                    continue;
-                                if (suppressBgFinishFill && bucket.phase == 4)
-                                    continue;
-                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
-                                    return true;
+                                for (RtgBgBucket& bucket : orderedBgBuckets)
+                                {
+                                    if (bucket.isArena != arenasOnly)
+                                        continue;
+                                    if (arenaDemandActive && !bucket.isArena && bucket.phase >= 3)
+                                        continue;
+                                    if (suppressBgFinishFill && bucket.phase == 4)
+                                        continue;
+                                    if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                        return true;
+                                }
                             }
                         }
                         return false;
@@ -4683,10 +4764,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             if (RTG_QueueDebugEnabled())
             {
-                LOG_INFO("playerbots", "[RTG][ACQUIRE][LANES] lfgReserved={} bgReserved={} lfgUnused={} bgUnused={} sharedSurplus={} remainingCapacity={} bgDemandActive={}",
+                LOG_INFO("playerbots", "[RTG][ACQUIRE][LANES] lfgReserved={} arenaReserved={} bgReserved={} lfgUnused={} arenaUnused={} bgUnused={} sharedSurplus={} remainingCapacity={} bgDemandActive={}",
                          laneDebugInitialLfg,
+                         laneDebugInitialArena,
                          laneDebugInitialBg,
                          reservedLfgCapacity,
+                         reservedArenaCapacity,
                          reservedBgCapacity,
                          sharedSurplus,
                          remainingCapacity,
@@ -7477,6 +7560,13 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
 void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
 {
     std::string addData = GetEventData(bot, "add");
+
+    if (reason && std::strcmp(reason, "bot_loading_guard") == 0)
+    {
+        RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN][GUARD] helper={} add='{}' reason={}", bot, addData, reason));
+        return;
+    }
+
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
