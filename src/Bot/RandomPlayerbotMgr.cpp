@@ -934,6 +934,31 @@ namespace
         return botAI->DoSpecificAction("bg leave", Event(), true);
     }
 
+    static bool RTG_IsDetachedBotOnlyBgGroup(Player* bot)
+    {
+        if (!bot)
+            return false;
+
+        Group* group = bot->GetGroup();
+        if (!group || !group->isBGGroup())
+            return false;
+
+        if (RTG_GroupHasRealPlayer(group))
+            return false;
+
+        if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
+            return false;
+
+        Map* map = bot->GetMap();
+        if (map && map->IsBattlegroundOrArena())
+            return false;
+
+        return true;
+    }
+
+    static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 5u;
+    static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
+
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
@@ -1074,7 +1099,10 @@ namespace
         if (Group* group = bot->GetGroup())
         {
             if (group->isBGGroup())
-                return true;
+            {
+                if (!RTG_IsDetachedBotOnlyBgGroup(bot))
+                    return true;
+            }
         }
 
         Map* map = bot->GetMap();
@@ -1376,6 +1404,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+        SetEventValue(botId, "rtg_bg_world_return_since", 0, 0);
         SetEventValue(botId, "rtg_add_requested", 0, 0);
     }
 
@@ -1398,6 +1427,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_bg_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
@@ -2760,9 +2790,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
 
-                // Once a BG/arena helper has fully returned to the world and is marked for
-                // retirement, do not let generic ownership guards keep it lingering online.
-                // At this point the queue lifecycle has ended and the helper is no longer serving.
                 if (!retireWhenSafe && sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                 {
                     RTG::RtgLifecycleResult lifecycle = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
@@ -2775,11 +2802,29 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     }
                 }
 
+                uint32 worldReturnSince = GetEventValue(botId, "rtg_bg_world_return_since");
+                uint32 nowTs = uint32(time(nullptr));
+                if (!worldReturnSince)
+                {
+                    RTG_LeaveBotOnlyGroup(bot);
+                    SetEventValue(botId, "rtg_bg_world_return_since", nowTs, 60, addData);
+                    SetEventValue(botId, "rtg_bg_leave_requested", 0, 0);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][RETURN_WORLD] helper={} queue={} retireSoon=1", botId, desiredQueueType));
+                    continue;
+                }
+
+                if (nowTs <= worldReturnSince || (nowTs - worldReturnSince) < RTG_BG_RETURN_WORLD_RETIRE_SECONDS)
+                    continue;
+
                 RTG_LeaveBotOnlyGroup(bot);
                 SetEventValue(botId, "rtg_bg_leave_requested", 0, 0);
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][RETIRE] allowing helper={} queue={} noLongerNeeded={} retireWhenSafe={}", botId, desiredQueueType, noLongerNeeded ? 1 : 0, retireWhenSafe ? 1 : 0));
                 rtgBgLogout.push_back(botGuid);
                 continue;
+            }
+            else
+            {
+                SetEventValue(botId, "rtg_bg_world_return_since", 0, 0);
             }
 
             // Demand still exists and no battleground lifecycle currently owns this helper.
@@ -2792,8 +2837,14 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
         }
 
+        uint32 rtgBgRetireCount = 0;
         for (ObjectGuid const& botGuid : rtgBgLogout)
-            RTG_RequestQueueHelperLogout(botGuid, "rtg_bg_retire", true);
+        {
+            if (rtgBgRetireCount >= RTG_BG_RETIRE_LOGOUTS_PER_TICK)
+                break;
+            if (RTG_RequestQueueHelperLogout(botGuid, "rtg_bg_retire", true))
+                ++rtgBgRetireCount;
+        }
     }
 
 

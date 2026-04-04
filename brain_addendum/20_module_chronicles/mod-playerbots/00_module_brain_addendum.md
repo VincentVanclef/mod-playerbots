@@ -990,3 +990,14 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 - Prioritized arena buckets over battleground refill buckets during shared RTG BG-lane acquisition so solo arena demand no longer loses repeatedly to battleground finish-fill.
 - Planner now derives real BG/arena demand from currently connected real players' live queue slots instead of trusting stale BattlegroundInfo queue counters after players leave or AFK out.
 - BG retirement now forces a bot-only battleground leave request once no real players remain, then clears queue helper state after detach.
+
+
+## Chapter: Arena/BG Detach Finalization and Bot-Only BG Group Ownership Correction
+
+**Context:** Arena helpers were still lingering in the world after arena completion when battleground demand remained active, and final battleground retire waves risked destabilizing the server.
+
+**Findings:** The remaining coupling was not planner identity anymore but post-lifecycle ownership semantics. Arena/BG helpers could remain lifecycle-owned solely because a detached bot-only BG group still existed, even after they had already returned to the world. That blocked retirement. Separately, logging out every returned helper in one sweep increased risk during final cleanup waves.
+
+**Changes:** `RTG_IsBgLifecycleOwned()` now ignores detached bot-only BG groups once the helper is no longer in queue/BG/arena/map lifecycle. BG/arena helpers now use a dedicated `rtg_bg_world_return_since` staging window before logout, and retirement is batched per tick rather than sweeping every helper at once.
+
+**Expected proof:** Arena helpers should retire independently of an unrelated ongoing battleground. BG helpers should leave bot-only matches cleanly after the last real player is gone, without a final-wave server destabilization during logout cleanup.
