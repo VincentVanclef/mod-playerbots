@@ -768,11 +768,13 @@ namespace
 
         bool levelMismatch = desiredLevel && bot->GetLevel() != desiredLevel;
         bool missingTalents = !RTG_HasMeaningfulTalents(bot);
-        uint8 currentSpecTab = static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot));
+        uint8 runtimeSpecTab = static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot));
+        uint8 currentSpecTab = runtimeSpecTab;
         uint8 resolvedSpecTab = currentSpecTab;
         bool hasOfflineSpecTruth = RTG::HasOfflineSpecData(bot->GetGUID().GetCounter(), bot->getClass(), &resolvedSpecTab);
         if (hasOfflineSpecTruth)
             currentSpecTab = resolvedSpecTab;
+        bool specMismatch = hasOfflineSpecTruth && runtimeSpecTab != currentSpecTab;
 
         if (RTG_RequiresOfflineSpecTruthForRdf(bot->getClass()) && !hasOfflineSpecTruth)
         {
@@ -795,7 +797,7 @@ namespace
             return false;
         }
 
-        if (!levelMismatch && !missingTalents)
+        if (!levelMismatch && !missingTalents && !specMismatch)
             return false;
 
         if (desiredLevel && bot->GetLevel() != desiredLevel)
@@ -805,7 +807,7 @@ namespace
             bot->SetUInt32Value(PLAYER_XP, 0);
         }
 
-        if (missingTalents || levelMismatch)
+        if (missingTalents || levelMismatch || specMismatch)
         {
             RTG_ClearQueueHelperBagItems(bot);
             RTG_PurgeQueueHelperMailbox(bot);
@@ -828,9 +830,9 @@ namespace
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} specTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={}",
-                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(currentSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
-                missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0);
+            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} runtimeSpecTab={} resolvedSpecTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={} specMismatch={}",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(runtimeSpecTab), uint32(currentSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
+                missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0, specMismatch ? 1 : 0);
         }
 
         return true;
@@ -883,6 +885,24 @@ namespace
         }
 
         return false;
+    }
+
+    static void RTG_LeaveBotOnlyGroup(Player* bot)
+    {
+        if (!bot)
+            return;
+
+        Group* group = bot->GetGroup();
+        if (!group || RTG_GroupHasRealPlayer(group))
+            return;
+
+        if (group->GetMembersCount() <= 1)
+        {
+            group->RemoveMember(bot->GetGUID(), 0, GROUP_REMOVEMETHOD_LEAVE, bot->GetGUID(), nullptr);
+            return;
+        }
+
+        group->RemoveMember(bot->GetGUID(), 0, GROUP_REMOVEMETHOD_LEAVE, bot->GetGUID(), nullptr);
     }
 
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
@@ -1971,6 +1991,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     if (group && !groupHasRealPlayer)
                         group->RemoveMember(bot->GetGUID());
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=disposed_from_dungeon immediateLogout=1", botId, desiredOwner));
+                    RTG_LeaveBotOnlyGroup(bot);
                     RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_disposed", true);
                 }
                 else if (!orphanedSince)
@@ -1985,6 +2006,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 {
                     if (group && !groupHasRealPlayer)
                         group->RemoveMember(bot->GetGUID());
+                    RTG_LeaveBotOnlyGroup(bot);
                     RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
                 }
                 continue;
@@ -2002,6 +2024,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 {
                     if (group && !groupHasRealPlayer)
                         group->RemoveMember(bot->GetGUID());
+                    RTG_LeaveBotOnlyGroup(bot);
                     RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_returned_world", true);
                 }
                 continue;
@@ -2707,6 +2730,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     }
                 }
 
+                RTG_LeaveBotOnlyGroup(bot);
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][RETIRE] allowing helper={} queue={} noLongerNeeded={} retireWhenSafe={}", botId, desiredQueueType, noLongerNeeded ? 1 : 0, retireWhenSafe ? 1 : 0));
                 rtgBgLogout.push_back(botGuid);
                 continue;
@@ -2723,7 +2747,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         }
 
         for (ObjectGuid const& botGuid : rtgBgLogout)
-            RTG_RequestSafeBotLogout(botGuid, "rtg_bg_retire");
+            RTG_RequestQueueHelperLogout(botGuid, "rtg_bg_retire", true);
     }
 
 

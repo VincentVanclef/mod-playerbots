@@ -953,3 +953,12 @@ Queue role is now forced to derive from actual spec truth rather than the planne
 - Correction: added an explicit `blocked` out-flag so login and dispatch can reject the helper immediately when prep proves the requested role is incompatible with real spec truth.
 - Additional correction: detached RDF helpers that had returned to world could remain grouped only with other bots, which kept safe-retire evaluation too conservative. Before requesting logout, the code now removes the bot from a bot-only group and uses queue-helper logout with queue-state clearing.
 - Proof targets: no Fury/Arms warrior can survive as RDF tank, no Holy/Ret paladin can survive as wrong role, and all detached helpers retire promptly after return-to-world when no real player remains.
+
+
+## Chapter: Strict RDF spec prep correction and bot-only return-to-world retirement
+- **Date:** 2026-04-04
+- **Subsystem:** mod-playerbots / RTG queue service
+- **Context:** Live testing showed two remaining seams: (1) hybrid helpers, especially druids, could still enter wrong RDF roles when runtime spec drifted from offline spec truth; (2) BG/RDF helpers returning to the world after the player left often stayed online because they remained in bot-only groups and safe-retire never completed.
+- **Finding:** RDF prep was only rebuilding helpers when level or talents were missing. If offline spec truth disagreed with the helper's current runtime spec, prep could still accept the desired role without realigning the bot to the stored spec. Separately, retirement logic still treated bot-only groups as a reason to keep helpers online.
+- **Change:** Added `specMismatch` handling inside `RTG_PrepareLfgHelperForDesiredRole()` so offline spec truth now forces a rebuild when runtime spec tab differs. Added `RTG_LeaveBotOnlyGroup()` and used it before RDF/BG queue-helper logout so returned-to-world helpers can detach and retire cleanly.
+- **Expected proof:** No balance druid healer / resto druid tank leakage through runtime drift, and helpers returning to the world after RDF/BG completion or early player exit should actually log out instead of repeating `RETURN_WORLD`/orphan breadcrumbs while lingering online.
