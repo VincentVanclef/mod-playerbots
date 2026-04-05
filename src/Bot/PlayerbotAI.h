@@ -650,9 +650,11 @@ protected:
     bool inCombat = false;
     BotCheatMask cheatMask = BotCheatMask::none;
     Position jumpDestination = Position();
+    // === RTG LOS STABILIZATION ===
+    ObjectGuid rtg_lastTarget;
+    uint32 rtg_lastTargetSeenMs = 0;
+    uint32 rtg_pathCommitUntil = 0;
     uint32 nextTransportCheck = 0;
 };
 
 #endif
-
-// RTG LOS STABILIZATION (marker only, manual logic to be inserted as per instructions)

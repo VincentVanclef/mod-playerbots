@@ -35,10 +35,10 @@
 #include "MoveSplineInit.h"
 #include "NewRpgStrategy.h"
 #include "ObjectGuid.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "PerfMonitor.h"
 #include "Player.h"
-#include "RtgRdfRoleResolver.h"
 #include "PlayerbotAIConfig.h"
 #include "PlayerbotRepository.h"
 #include "PlayerbotMgr.h"
@@ -59,6 +59,21 @@
 #include "Vehicle.h"
 
 const int SPELL_TITAN_GRIP = 49152;
+
+namespace
+{
+static Unit* RTG_GetStickyTarget(Player* bot, ObjectGuid guid)
+{
+    if (!bot || !guid)
+        return nullptr;
+
+    Unit* unit = ObjectAccessor::GetUnit(*bot, guid);
+    if (!unit || !unit->IsInWorld() || unit->IsDuringRemoveFromWorld())
+        return nullptr;
+
+    return unit;
+}
+}
 
 std::vector<std::string> PlayerbotAI::dispel_whitelist = {
     "mutating injection",
@@ -1524,6 +1539,43 @@ void PlayerbotAI::DoNextAction(bool min)
             aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
         }
     }
+
+    uint32 rtgNowMs = static_cast<uint32>(GameTime::GetGameTimeMS().count());
+    Unit* currentTarget = aiObjectContext->GetValue<Unit*>("current target")->Get();
+
+    if (currentTarget)
+    {
+        rtg_lastTarget = currentTarget->GetGUID();
+        rtg_lastTargetSeenMs = rtgNowMs;
+
+        if (!bot->IsWithinLOSInMap(currentTarget))
+        {
+            if (rtgNowMs >= rtg_pathCommitUntil)
+            {
+                Position pos = currentTarget->GetPosition();
+                bot->GetMotionMaster()->MovePoint(0, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), FORCED_MOVEMENT_NONE, 0.0f, 0.0f, true, false);
+                rtg_pathCommitUntil = rtgNowMs + 1500;
+            }
+
+            if (rtg_lastTarget == currentTarget->GetGUID() && (rtgNowMs - rtg_lastTargetSeenMs) < 3000)
+            {
+                // Keep sticky target briefly while pathing to last known position.
+            }
+            else
+            {
+                aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
+            }
+        }
+    }
+    else if (!rtg_lastTarget.IsEmpty() && (rtgNowMs - rtg_lastTargetSeenMs) < 2000)
+    {
+        Unit* last = RTG_GetStickyTarget(bot, rtg_lastTarget);
+        if (last)
+            aiObjectContext->GetValue<Unit*>("current target")->Set(last);
+    }
+
+    if (bot->InArena())
+        bot->SetReactState(REACT_AGGRESSIVE);
 
     bool minimal = !this->AllowActivity();
 
@@ -6948,5 +7000,3 @@ void PlayerbotAI::EvaluateHealerDpsStrategy()
     else
         ChangeStrategy("+healer dps", BOT_STATE_COMBAT);
 }
-
-// RTG LOS STABILIZATION (marker only, manual logic to be inserted as per instructions)

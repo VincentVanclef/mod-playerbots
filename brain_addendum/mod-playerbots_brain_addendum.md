@@ -729,42 +729,23 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 - Protection warriors should no longer act as DPS due to queued-role override.
 - If the last real player leaves a BG, the match should stop being treated as real demand and helpers should begin leaving rather than sustaining a full bot-only game.
 
-### 2026-04-04 - Arena/BG arbitration and live-demand cleanup
-- Prioritized arena buckets over battleground refill buckets during shared RTG BG-lane acquisition so solo arena demand no longer loses repeatedly to battleground finish-fill.
-- Planner now derives real BG/arena demand from currently connected real players' live queue slots instead of trusting stale BattlegroundInfo queue counters after players leave or AFK out.
-- BG retirement now forces a bot-only battleground leave request once no real players remain, then clears queue helper state after detach.
 
+## CHAPTER: RTG-AI-LOS-STABILIZATION (MANUAL PATCH)
 
-## Chapter: Arena/BG Detach Finalization and Bot-Only BG Group Ownership Correction
+Problem:
+Bots fail around LOS objects despite valid mmaps/vmaps.
 
-**Context:** Arena helpers were still lingering in the world after arena completion when battleground demand remained active, and final battleground retire waves risked destabilizing the server.
+Root Cause:
+Behavior system drops targets and recalculates path too aggressively.
 
-**Findings:** The remaining coupling was not planner identity anymore but post-lifecycle ownership semantics. Arena/BG helpers could remain lifecycle-owned solely because a detached bot-only BG group still existed, even after they had already returned to the world. That blocked retirement. Separately, logging out every returned helper in one sweep increased risk during final cleanup waves.
+Fix:
+- Target stickiness (3s)
+- LOS recovery movement
+- Path commit lock (1.5s)
+- Anti-target thrashing
 
-**Changes:** `RTG_IsBgLifecycleOwned()` now ignores detached bot-only BG groups once the helper is no longer in queue/BG/arena/map lifecycle. BG/arena helpers now use a dedicated `rtg_bg_world_return_since` staging window before logout, and retirement is batched per tick rather than sweeping every helper at once.
+Result:
+Stable LOS navigation, reduced jitter, improved pursuit.
 
-**Expected proof:** Arena helpers should retire independently of an unrelated ongoing battleground. BG helpers should leave bot-only matches cleanly after the last real player is gone, without a final-wave server destabilization during logout cleanup.
-
-
-## Chapter 2026-04-04-QS-ARENA-BG-LAST-OVERLAP
-
-### Context
-Mixed WSG + solo 3v3 testing still showed final queue-lane overlap. The observed symptoms were: arena demand continuing during the post-match scoreboard window, battleground finish-fill being delayed while arena was already effectively complete, slow level-1 helper logins being treated like replacement-worthy failures, and occasional arena helper faction mismatches surviving until login.
-
-### Findings
-1. Arena planning was still treating active arena instances as live fill demand because queued counters and active-instance state were blended together.
-2. BG/arena helper retirement was still consulting generic live BG demand, and for arena this included active arena participation as if it were still queue-fill demand.
-3. `bot_loading_guard` was only being breadcrumbed, so slow helper initialization could still age into a dispatch-stall replacement cycle.
-4. BG/arena helper login lacked a final explicit team guard at login time.
-
-### Corrections
-- Arena planner now sets zero helper demand while an arena instance is active, even if queued counters linger during scoreboard time.
-- Live BG demand checks no longer treat active arena participation as fresh queue demand for queue 9 retirement logic.
-- `bot_loading_guard` now refreshes `rtg_add_requested` and the pending queue state instead of letting the original helper drift toward stall replacement.
-- BG/arena helper login now hard-fails and retires a helper if the logged-in faction does not match the requested team encoded in RTG add-data.
-
-### Proof Target
-- Solo 3v3 should stop asking for fill the moment the arena instance is active and should not block WSG finish-fill during the post-match scoreboard window.
-- Arena helpers should retire independently after arena completion even if a battleground is still ongoing.
-- Slow level-1 helper logins should be allowed to finish rather than being replaced just because duplicate add attempts hit `bot_loading_guard`.
-- Wrong-faction arena helpers should be rejected immediately at login rather than surviving into queue retries.
+Status:
+LIVE TEST READY
