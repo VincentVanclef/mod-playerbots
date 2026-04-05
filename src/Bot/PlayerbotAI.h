@@ -654,3 +654,5 @@ protected:
 };
 
 #endif
+
+// RTG LOS STABILIZATION (marker only, manual logic to be inserted as per instructions)

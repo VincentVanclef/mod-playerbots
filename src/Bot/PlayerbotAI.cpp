@@ -6948,3 +6948,5 @@ void PlayerbotAI::EvaluateHealerDpsStrategy()
     else
         ChangeStrategy("+healer dps", BOT_STATE_COMBAT);
 }
+
+// RTG LOS STABILIZATION (marker only, manual logic to be inserted as per instructions)
