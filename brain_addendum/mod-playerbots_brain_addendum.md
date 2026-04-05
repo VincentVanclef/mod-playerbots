@@ -749,3 +749,25 @@ Stable LOS navigation, reduced jitter, improved pursuit.
 
 Status:
 LIVE TEST READY
+
+
+CHAPTER: RTG-AI-ENGAGE-FORCING
+
+Problem:
+Caster and LOS-sensitive bots still idled instead of committing to chase when a target existed but could not yet be cast on.
+
+Root Cause:
+The behavior layer could preserve targets longer, but still lacked a forced-engage state that converted out-of-range / out-of-LOS target possession into committed reposition movement.
+
+Fix:
+- Added RTG LOS stabilization fields to PlayerbotAI state
+- Added target stickiness / anti-target-thrash memory
+- Added forced-engage helper that moves to the target's last known position when LOS or range blocks action
+- Added path commit lock (1.5s) to prevent movement jitter loops
+- Kept vmap/mmap/LOS rules intact; this only stabilizes decision making
+
+Result:
+Bots with a target should reposition instead of idling, especially casters in arena pillar play.
+
+Status:
+LIVE TEST READY

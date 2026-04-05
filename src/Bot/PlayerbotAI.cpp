@@ -63,6 +63,47 @@ const int SPELL_TITAN_GRIP = 49152;
 
 namespace
 {
+
+
+static bool RTG_TrackAndForceEngageTarget(Player* bot, Unit* target, ObjectGuid& lastTarget, uint32& lastSeenMs, uint32& pathCommitUntil)
+{
+    if (!bot || !target)
+        return false;
+
+    uint32 now = GameTime::GetGameTimeMS().count();
+    lastTarget = target->GetGUID();
+    lastSeenMs = now;
+
+    float desiredRange = 25.0f;
+    switch (bot->getClass())
+    {
+        case CLASS_MAGE:
+        case CLASS_WARLOCK:
+        case CLASS_PRIEST:
+            desiredRange = 30.0f;
+            break;
+        case CLASS_HUNTER:
+            desiredRange = 35.0f;
+            break;
+        default:
+            desiredRange = 5.0f;
+            break;
+    }
+
+    float dist = bot->GetDistance(target);
+    if (!bot->IsWithinLOSInMap(target) || dist > desiredRange)
+    {
+        if (now < pathCommitUntil)
+            return true;
+
+        Position pos = target->GetPosition();
+        bot->GetMotionMaster()->MovePoint(0, pos);
+        pathCommitUntil = now + 1500;
+        return true;
+    }
+
+    return false;
+}
 static Unit* RTG_GetStickyTarget(Player* bot, ObjectGuid guid)
 {
     if (!bot || !guid)
@@ -3316,6 +3357,9 @@ bool PlayerbotAI::HasAnyAuraOf(Unit* player, ...)
 
 bool PlayerbotAI::CanCastSpell(std::string const name, Unit* target, Item* itemTarget)
 {
+    if (target && RTG_TrackAndForceEngageTarget(bot, target, rtg_lastTarget, rtg_lastTargetSeenMs, rtg_pathCommitUntil))
+        return true;
+
     return CanCastSpell(aiObjectContext->GetValue<uint32>("spell id", name)->Get(), target, true, itemTarget);
 }
 
