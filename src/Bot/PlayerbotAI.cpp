@@ -70,6 +70,12 @@ static bool RTG_TrackAndForceEngageTarget(Player* bot, Unit* target, ObjectGuid&
     if (!bot || !target)
         return false;
 
+    if (!bot->IsInWorld() || bot->isDead() || bot->GetCorpse())
+        return false;
+
+    if (!target->IsInWorld() || target->IsDuringRemoveFromWorld() || target->isDead())
+        return false;
+
     uint32 now = GameTime::GetGameTimeMS().count();
     lastTarget = target->GetGUID();
     lastSeenMs = now;
@@ -110,7 +116,7 @@ static Unit* RTG_GetStickyTarget(Player* bot, ObjectGuid guid)
         return nullptr;
 
     Unit* unit = ObjectAccessor::GetUnit(*bot, guid);
-    if (!unit || !unit->IsInWorld() || unit->IsDuringRemoveFromWorld())
+    if (!unit || !unit->IsInWorld() || unit->IsDuringRemoveFromWorld() || unit->isDead())
         return nullptr;
 
     return unit;
@@ -1587,8 +1593,15 @@ void PlayerbotAI::DoNextAction(bool min)
 
     if (currentTarget)
     {
-        rtg_lastTarget = currentTarget->GetGUID();
-        rtg_lastTargetSeenMs = rtgNowMs;
+        if (currentTarget->isDead() || currentTarget->IsDuringRemoveFromWorld())
+        {
+            aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
+            currentTarget = nullptr;
+        }
+        else
+        {
+            rtg_lastTarget = currentTarget->GetGUID();
+            rtg_lastTargetSeenMs = rtgNowMs;
 
         if (!bot->IsWithinLOSInMap(currentTarget))
         {
@@ -1608,6 +1621,7 @@ void PlayerbotAI::DoNextAction(bool min)
                 aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
             }
         }
+    }
     }
     else if (!rtg_lastTarget.IsEmpty() && (rtgNowMs - rtg_lastTargetSeenMs) < 2000)
     {
