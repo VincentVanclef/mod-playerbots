@@ -1575,8 +1575,8 @@ void PlayerbotAI::DoNextAction(bool min)
             aiObjectContext->GetValue<Unit*>("current target")->Set(last);
     }
 
-    if (bot->InArena())
-        bot->SetReactState(REACT_AGGRESSIVE);
+    // RTG LOS stabilization: avoid Player::SetReactState on this branch;
+    // arena aggression should be handled through AI strategy/behavior, not Creature react state.
 
     bool minimal = !this->AllowActivity();
 
