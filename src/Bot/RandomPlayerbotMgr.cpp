@@ -361,7 +361,14 @@ namespace
         if (!botAI)
             return false;
 
-        char const* laneName = RTG_NormalizeArenaTeamSize(BattlegroundQueueTypeId(desiredQueueType)) ? "arena" : "bg";
+        BattlegroundQueueTypeId qType = BattlegroundQueueTypeId(desiredQueueType);
+
+		bool isArena =
+			qType == BATTLEGROUND_QUEUE_2v2 ||
+			qType == BATTLEGROUND_QUEUE_3v3 ||
+			qType == BATTLEGROUND_QUEUE_5v5;
+
+		char const* laneName = isArena ? "arena" : "bg";
         botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(desiredQueueType);
         bool queued = botAI->DoSpecificAction("bg join", Event(), true);
         RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][DISPATCH] helper={} queue={} reason={} result={}",
