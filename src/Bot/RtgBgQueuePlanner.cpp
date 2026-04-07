@@ -234,9 +234,10 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;
                 uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
                 bool activeMatch = activeInstances > 0;
+                bool hardDormant = (realQueued == 0u);
                 bool hasRealDemand = realQueued > 0 && !activeMatch;
                 bool hasQueueSeed = currentQueued > 0;
-                bool orphanQueueResidue = !hasRealDemand && !activeMatch && currentQueued > 0;
+                bool orphanQueueResidue = hardDormant ? (currentQueued > 0) : (!hasRealDemand && !activeMatch && currentQueued > 0);
 
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
@@ -250,12 +251,12 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                     allianceNeed = std::min(allianceNeed, totalNeed);
                     hordeNeed = totalNeed > allianceNeed ? (totalNeed - allianceNeed) : 0u;
                 }
-                uint32 phase = activeMatch ? 3u : (hasRealDemand ? 2u : 0u);
+                uint32 phase = hardDormant ? 0u : (activeMatch ? 3u : (hasRealDemand ? 2u : 0u));
 
                 if (orphanQueueResidue)
                 {
-                    RTG_WorldLog("[RTG][ARENA][CLEAR] queue={} bracket={} reason=orphan_queue_residue queued={} activeInstances={}",
-                        uint32(queueTypeId), uint32(bracketId), currentQueued, activeInstances);
+                    RTG_WorldLog("[RTG][ARENA][CLEAR] queue={} bracket={} reason={} queued={} activeInstances={} realQueued={}",
+                        uint32(queueTypeId), uint32(bracketId), hardDormant ? "hard_dormant" : "orphan_queue_residue", currentQueued, activeInstances, realQueued);
                     mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), 0u, 0);
                     mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), 0u, 0);
                     mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_ALLIANCE)), 0u, 0);

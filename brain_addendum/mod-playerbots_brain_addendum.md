@@ -771,3 +771,18 @@ Bots with a target should reposition instead of idling, especially casters in ar
 
 Status:
 LIVE TEST READY
+
+
+## Chapter: RTG queue final stability pass — arena hard dormant + throttled logout wave
+- Date: 2026-04-06
+- Context: Mixed arena/BG testing showed one arena bot lingering after match completion and arena phase/demand continuing to tick with no real players queued. BG end cleanup also appeared to crash during mass helper logout waves.
+- Findings:
+  - Arena planner was still allowing phase/activity truth to survive from `activeInstances` even when `realQueued == 0`, which let post-match scoreboard/instance residue keep the lane alive.
+  - Queue helper retirement still requested immediate logout work in bursts large enough to risk end-of-match cleanup spikes.
+- Changes:
+  - In `RtgBgQueuePlanner.cpp`, arena queue state now enters hard dormant whenever `realQueued == 0`, regardless of lingering `activeInstances`, and clears overlay/real demand through the existing orphan clear path.
+  - In `RandomPlayerbotMgr`, helper logouts are now staged through a small per-tick logout queue instead of firing all requests at once.
+- Expected proof:
+  - Arena queue 9 should stop emitting phase/demand once no real players remain queued.
+  - BG end cleanup should retire helpers in a staggered wave instead of a crash-prone mass logout burst.
+- Status: Ready for live validation.

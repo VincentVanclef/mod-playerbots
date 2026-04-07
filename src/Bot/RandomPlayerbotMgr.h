@@ -12,6 +12,7 @@
 #include "GameTime.h"
 #include "PlayerbotCommandServer.h"
 #include "RandomPlayerbotMgr.h"
+#include <deque>
 
 
 struct BattlegroundInfo
@@ -268,6 +269,7 @@ private:
     std::vector<uint32> GetBgBots(uint32 bracket);
     bool RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason = nullptr, bool clearQueueState = true);
     void RTG_RunQueueOwnershipAudit();
+    void RTG_ProcessLogoutQueue();
     time_t BgCheckTimer;
     time_t LfgCheckTimer;
     time_t PlayersCheckTimer;
@@ -283,6 +285,7 @@ private:
     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
     std::vector<Player*> players;
     uint32 processTicks;
+    std::deque<ObjectGuid> rtgLogoutQueue;
 
     // std::map<uint32, std::vector<WorldLocation>> rpgLocsCache;
     std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> rpgLocsCacheLevel;

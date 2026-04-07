@@ -1413,6 +1413,38 @@ uint32 RandomPlayerbotMgr::GetOnlineRealPlayerCount() const
     return count;
 }
 
+void RandomPlayerbotMgr::RTG_ProcessLogoutQueue()
+{
+    static constexpr uint32 RTG_MAX_LOGOUTS_PER_TICK = 3u;
+    uint32 processed = 0;
+
+    while (!rtgLogoutQueue.empty() && processed < RTG_MAX_LOGOUTS_PER_TICK)
+    {
+        ObjectGuid guid = rtgLogoutQueue.front();
+        rtgLogoutQueue.pop_front();
+
+        Player* bot = GetPlayerBot(guid);
+        if (!bot)
+            bot = ObjectAccessor::FindPlayer(guid);
+
+        if (!bot)
+        {
+            ++processed;
+            continue;
+        }
+
+        WorldSession* session = bot->GetSession();
+        if (!session || session->isLogingOut() || bot->IsDuringRemoveFromWorld())
+        {
+            ++processed;
+            continue;
+        }
+
+        LogoutPlayerBot(guid);
+        ++processed;
+    }
+}
+
 bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason, bool clearQueueState)
 {
     Player* bot = GetPlayerBot(guid);
@@ -1469,7 +1501,12 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         LOG_INFO("playerbots", "[RTGDBG][LOGOUT] request bot={} reason={} addData='{}'", botId, reason ? reason : "rtg", GetEventData(botId, "add"));
     RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGOUT] request helper={} reason={}", botId, reason ? reason : "rtg"));
 
-    LogoutPlayerBot(guid);
+    if (!GetEventValue(botId, "rtg_logout_queued"))
+    {
+        SetEventValue(botId, "rtg_logout_queued", 1, 120);
+        rtgLogoutQueue.push_back(guid);
+    }
+
     return true;
 }
 
@@ -1482,6 +1519,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_bg_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
+    SetEventValue(bot, "rtg_logout_queued", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
     SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
@@ -1887,6 +1925,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     // that mode or queue demand/acquisition/logging will never execute.
     if (!sPlayerbotAIConfig.randomBotAutologin && !sPlayerbotAIConfig.rtgEventDriven)
         return;
+
+    RTG_ProcessLogoutQueue();
 
     // Enforce community level cap as a hard XP ceiling for randombots.
     // This prevents bots from leveling past the current community cap even if they gain XP in the world.
@@ -5607,6 +5647,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
             SetEventValue(bot, "add", 0, 0);
             SetEventValue(bot, "logout", 0, 0);
             SetEventValue(bot, "rtg_add_requested", 0, 0);
+    SetEventValue(bot, "rtg_logout_queued", 0, 0);
             SetEventValue(bot, "rtg_lfg_pending", 0, 0);
             currentBots.remove(bot);
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
@@ -7619,6 +7660,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
     SetEventValue(bot, "rtg_lfg_orphan_since", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
+    SetEventValue(bot, "rtg_logout_queued", 0, 0);
     SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     currentBots.remove(bot);
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
