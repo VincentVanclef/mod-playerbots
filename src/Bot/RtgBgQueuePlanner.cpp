@@ -216,10 +216,10 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
                 bool isRated = bgInfo.ratedArenaPlayerCount || bgInfo.ratedArenaBotCount ||
                                bgInfo.activeRatedArenaQueue || bgInfo.ratedArenaInstanceCount;
-                uint32 realQueued = isRated ? bgInfo.ratedArenaPlayerCount : bgInfo.skirmishArenaPlayerCount;
+                uint32 realQueued = 0;
                 uint32 botQueued = isRated ? bgInfo.ratedArenaBotCount : bgInfo.skirmishArenaBotCount;
-                uint32 realQueuedAlliance = isRated ? bgInfo.ratedArenaAlliancePlayerCount : bgInfo.skirmishArenaAlliancePlayerCount;
-                uint32 realQueuedHorde = isRated ? bgInfo.ratedArenaHordePlayerCount : bgInfo.skirmishArenaHordePlayerCount;
+                uint32 realQueuedAlliance = 0;
+                uint32 realQueuedHorde = 0;
                 auto liveItr = liveRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
                 if (liveItr != liveRealDemand.end())
                 {
@@ -241,11 +241,11 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
 
-                uint32 desiredTotal = arenaTeamSize * 2u;
-                uint32 totalNeed = (!activeMatch && desiredTotal > currentQueued) ? (desiredTotal - currentQueued) : 0u;
+                uint32 desiredTotal = hasRealDemand ? (arenaTeamSize * 2u) : 0u;
+                uint32 totalNeed = (hasRealDemand && !activeMatch && desiredTotal > currentQueued) ? (desiredTotal - currentQueued) : 0u;
                 uint32 allianceNeed = hasRealDemand ? (arenaTeamSize > currentQueuedAlliance ? (arenaTeamSize - currentQueuedAlliance) : 0u) : 0u;
                 uint32 hordeNeed = hasRealDemand ? (arenaTeamSize > currentQueuedHorde ? (arenaTeamSize - currentQueuedHorde) : 0u) : 0u;
-                if (allianceNeed + hordeNeed != totalNeed)
+                if (hasRealDemand && allianceNeed + hordeNeed != totalNeed)
                 {
                     allianceNeed = std::min(allianceNeed, totalNeed);
                     hordeNeed = totalNeed > allianceNeed ? (totalNeed - allianceNeed) : 0u;
@@ -326,12 +326,6 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             bool hasRealQueuedSeed = (queueRealAlliance || queueRealHorde);
             bool hasActiveMatch = (activeCurrentAlliance || activeCurrentHorde);
             bool hasRealActiveMatch = (activeRealAlliance || activeRealHorde);
-            bool orphanedBotOnlyMatch = hasActiveMatch && !hasRealActiveMatch;
-            if (orphanedBotOnlyMatch)
-            {
-                hasRealDemand = false;
-                hasRealQueuedSeed = false;
-            }
             bool orphanQueueResidue = !hasRealDemand && (queueCurrentAlliance || queueCurrentHorde || activeCurrentAlliance || activeCurrentHorde || bgInfo.activeBgQueue);
             bool queueOrMatchActive = sPlayerbotAIConfig.rtgSmartQueue ?
                 (hasRealActiveMatch || hasRealQueuedSeed) :
@@ -405,9 +399,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                     uint32& nextLogAt = sNextOrphanResidueLogAt[residueKey];
                     if (!nextLogAt || nowTs >= nextLogAt)
                     {
-                        RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason={} queueA={} queueH={} activeA={} activeH={} realActiveA={} realActiveH={}",
-                            uint32(queueTypeId), uint32(bracketId), orphanedBotOnlyMatch ? "bot_only_match" : "orphan_queue_residue",
-                            queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde, activeRealAlliance, activeRealHorde);
+                        RTG_WorldLog("[RTG][BG][CLEAR] queue={} bracket={} reason=orphan_queue_residue queueA={} queueH={} activeA={} activeH={}",
+                            uint32(queueTypeId), uint32(bracketId), queueCurrentAlliance, queueCurrentHorde, activeCurrentAlliance, activeCurrentHorde);
                         nextLogAt = nowTs + 60;
                     }
 

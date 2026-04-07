@@ -63,53 +63,6 @@ const int SPELL_TITAN_GRIP = 49152;
 
 namespace
 {
-
-
-static bool RTG_TrackAndForceEngageTarget(Player* bot, Unit* target, ObjectGuid& lastTarget, uint32& lastSeenMs, uint32& pathCommitUntil)
-{
-    if (!bot || !target)
-        return false;
-
-    if (!bot->IsInWorld() || bot->isDead() || bot->GetCorpse())
-        return false;
-
-    if (!target->IsInWorld() || target->IsDuringRemoveFromWorld() || target->isDead())
-        return false;
-
-    uint32 now = GameTime::GetGameTimeMS().count();
-    lastTarget = target->GetGUID();
-    lastSeenMs = now;
-
-    float desiredRange = 25.0f;
-    switch (bot->getClass())
-    {
-        case CLASS_MAGE:
-        case CLASS_WARLOCK:
-        case CLASS_PRIEST:
-            desiredRange = 30.0f;
-            break;
-        case CLASS_HUNTER:
-            desiredRange = 35.0f;
-            break;
-        default:
-            desiredRange = 5.0f;
-            break;
-    }
-
-    float dist = bot->GetDistance(target);
-    if (!bot->IsWithinLOSInMap(target) || dist > desiredRange)
-    {
-        if (now < pathCommitUntil)
-            return true;
-
-        Position pos = target->GetPosition();
-        bot->GetMotionMaster()->MovePoint(0, pos);
-        pathCommitUntil = now + 1500;
-        return true;
-    }
-
-    return false;
-}
 static Unit* RTG_GetStickyTarget(Player* bot, ObjectGuid guid)
 {
     if (!bot || !guid)
@@ -1564,6 +1517,9 @@ void PlayerbotAI::DoNextAction(bool min)
         aiObjectContext->GetValue<Unit*>("enemy player target")->Set(nullptr);
         aiObjectContext->GetValue<ObjectGuid>("pull target")->Set(ObjectGuid::Empty);
         aiObjectContext->GetValue<LootObject>("loot target")->Set(LootObject());
+        rtg_lastTarget.Clear();
+        rtg_lastTargetSeenMs = 0;
+        rtg_pathCommitUntil = 0;
 
         ChangeEngine(BOT_STATE_DEAD);
         return;
@@ -1589,13 +1545,25 @@ void PlayerbotAI::DoNextAction(bool min)
     }
 
     uint32 rtgNowMs = static_cast<uint32>(GameTime::GetGameTimeMS().count());
-    Unit* currentTarget = aiObjectContext->GetValue<Unit*>("current target")->Get();
+    if (bot->isDead() || bot->GetCorpse())
+    {
+        rtg_lastTarget.Clear();
+        rtg_lastTargetSeenMs = 0;
+        rtg_pathCommitUntil = 0;
+        aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
+    }
 
+    Unit* currentTarget = aiObjectContext->GetValue<Unit*>("current target")->Get();
     if (currentTarget)
     {
         if (currentTarget->isDead() || currentTarget->IsDuringRemoveFromWorld())
         {
             aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
+            if (rtg_lastTarget == currentTarget->GetGUID())
+            {
+                rtg_lastTarget.Clear();
+                rtg_lastTargetSeenMs = 0;
+            }
             currentTarget = nullptr;
         }
         else
@@ -1603,25 +1571,19 @@ void PlayerbotAI::DoNextAction(bool min)
             rtg_lastTarget = currentTarget->GetGUID();
             rtg_lastTargetSeenMs = rtgNowMs;
 
-        if (!bot->IsWithinLOSInMap(currentTarget))
-        {
-            if (rtgNowMs >= rtg_pathCommitUntil)
+            if (!bot->IsWithinLOSInMap(currentTarget))
             {
-                Position pos = currentTarget->GetPosition();
-                bot->GetMotionMaster()->MovePoint(0, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), FORCED_MOVEMENT_NONE, 0.0f, 0.0f, true, false);
-                rtg_pathCommitUntil = rtgNowMs + 1500;
-            }
+                if (rtgNowMs >= rtg_pathCommitUntil)
+                {
+                    Position pos = currentTarget->GetPosition();
+                    bot->GetMotionMaster()->MovePoint(0, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), FORCED_MOVEMENT_NONE, 0.0f, 0.0f, true, false);
+                    rtg_pathCommitUntil = rtgNowMs + 1500;
+                }
 
-            if (rtg_lastTarget == currentTarget->GetGUID() && (rtgNowMs - rtg_lastTargetSeenMs) < 3000)
-            {
-                // Keep sticky target briefly while pathing to last known position.
-            }
-            else
-            {
-                aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
+                if (!(rtg_lastTarget == currentTarget->GetGUID() && (rtgNowMs - rtg_lastTargetSeenMs) < 3000))
+                    aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
             }
         }
-    }
     }
     else if (!rtg_lastTarget.IsEmpty() && (rtgNowMs - rtg_lastTargetSeenMs) < 2000)
     {
@@ -1629,9 +1591,6 @@ void PlayerbotAI::DoNextAction(bool min)
         if (last)
             aiObjectContext->GetValue<Unit*>("current target")->Set(last);
     }
-
-    // RTG LOS stabilization: avoid Player::SetReactState on this branch;
-    // arena aggression should be handled through AI strategy/behavior, not Creature react state.
 
     bool minimal = !this->AllowActivity();
 
@@ -2275,28 +2234,6 @@ int32 PlayerbotAI::GetMeleeIndex(Player* player)
     return 0;
 }
 
-
-static uint32 RTG_GetExactSpecRoleMaskForPlayer(Player* player)
-{
-    if (!player)
-        return lfg::PLAYER_ROLE_DAMAGE;
-
-    return RTG::RoleMaskForClassSpecTab(player->getClass(), static_cast<uint8>(AiFactory::GetPlayerSpecTab(player)));
-}
-
-static bool RTG_ShouldHonorQueuedRoleOverride(Player* player)
-{
-    if (!player)
-        return false;
-
-    uint32 actualMask = RTG_GetExactSpecRoleMaskForPlayer(player);
-    if (player->getClass() == CLASS_DRUID)
-        return actualMask == (lfg::PLAYER_ROLE_TANK | lfg::PLAYER_ROLE_DAMAGE);
-    if (player->getClass() == CLASS_PRIEST)
-        return actualMask == (lfg::PLAYER_ROLE_HEALER | lfg::PLAYER_ROLE_DAMAGE);
-    return false;
-}
-
 bool PlayerbotAI::IsTank(Player* player, bool bySpec)
 {
     PlayerbotAI* botAi = GET_PLAYERBOT_AI(player);
@@ -2316,7 +2253,7 @@ bool PlayerbotAI::IsTank(Player* player, bool bySpec)
         uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
         bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
                                sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
-        if (queuedRole && queuedLfgActive && RTG_ShouldHonorQueuedRoleOverride(player))
+        if (queuedRole && queuedLfgActive)
             return (queuedRole & lfg::PLAYER_ROLE_TANK) != 0;
     }
     if (!bySpec && botAi)
@@ -2373,7 +2310,7 @@ bool PlayerbotAI::IsHeal(Player* player, bool bySpec)
         uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
         bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
                                sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
-        if (queuedRole && queuedLfgActive && RTG_ShouldHonorQueuedRoleOverride(player))
+        if (queuedRole && queuedLfgActive)
             return (queuedRole & lfg::PLAYER_ROLE_HEALER) != 0;
     }
     if (!bySpec && botAi)
@@ -2429,7 +2366,7 @@ bool PlayerbotAI::IsDps(Player* player, bool bySpec)
         uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
         bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
                                sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
-        if (queuedRole && queuedLfgActive && RTG_ShouldHonorQueuedRoleOverride(player))
+        if (queuedRole && queuedLfgActive)
             return (queuedRole & lfg::PLAYER_ROLE_DAMAGE) != 0;
     }
     if (!bySpec && botAi)
@@ -3371,8 +3308,58 @@ bool PlayerbotAI::HasAnyAuraOf(Unit* player, ...)
 
 bool PlayerbotAI::CanCastSpell(std::string const name, Unit* target, Item* itemTarget)
 {
-    if (target && RTG_TrackAndForceEngageTarget(bot, target, rtg_lastTarget, rtg_lastTargetSeenMs, rtg_pathCommitUntil))
-        return true;
+    if (target)
+    {
+        if (bot->isDead() || bot->GetCorpse())
+        {
+            rtg_lastTarget.Clear();
+            rtg_lastTargetSeenMs = 0;
+            rtg_pathCommitUntil = 0;
+            return false;
+        }
+
+        if (target->isDead() || target->IsDuringRemoveFromWorld() || !target->IsInWorld())
+        {
+            if (rtg_lastTarget == target->GetGUID())
+            {
+                rtg_lastTarget.Clear();
+                rtg_lastTargetSeenMs = 0;
+            }
+            return false;
+        }
+
+        uint32 now = static_cast<uint32>(GameTime::GetGameTimeMS().count());
+        rtg_lastTarget = target->GetGUID();
+        rtg_lastTargetSeenMs = now;
+
+        float desiredRange = 25.0f;
+        switch (bot->getClass())
+        {
+            case CLASS_MAGE:
+            case CLASS_WARLOCK:
+            case CLASS_PRIEST:
+                desiredRange = 30.0f;
+                break;
+            case CLASS_HUNTER:
+                desiredRange = 35.0f;
+                break;
+            default:
+                desiredRange = 5.0f;
+                break;
+        }
+
+        float dist = bot->GetDistance(target);
+        if (!bot->IsWithinLOSInMap(target) || dist > desiredRange)
+        {
+            if (now >= rtg_pathCommitUntil)
+            {
+                Position pos = target->GetPosition();
+                bot->GetMotionMaster()->MovePoint(0, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), FORCED_MOVEMENT_NONE, 0.0f, 0.0f, true, false);
+                rtg_pathCommitUntil = now + 1500;
+            }
+            return true;
+        }
+    }
 
     return CanCastSpell(aiObjectContext->GetValue<uint32>("spell id", name)->Get(), target, true, itemTarget);
 }
