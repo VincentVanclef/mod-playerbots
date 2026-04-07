@@ -173,6 +173,12 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
         if (!player || !player->IsInWorld() || mgr.IsRandomBot(player))
             continue;
 
+        // Only count real players who are actually still waiting in a queue.
+        // Once they are invited or already inside a battleground/arena, that state
+        // must not be recycled into fresh helper demand.
+        if (player->InBattleground() || player->InArena() || player->IsInvitedForBattlegroundInstance())
+            continue;
+
         for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
         {
             BattlegroundQueueTypeId liveQueueType = player->GetBattlegroundQueueTypeId(queueSlot);
@@ -234,7 +240,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;
                 uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
                 bool activeMatch = activeInstances > 0;
-                bool hardDormant = (realQueued == 0u);
+                bool hardDormant = (realQueued == 0u && !activeMatch);
                 bool hasRealDemand = realQueued > 0 && !activeMatch;
                 bool hasQueueSeed = currentQueued > 0;
                 bool orphanQueueResidue = hardDormant ? (currentQueued > 0) : (!hasRealDemand && !activeMatch && currentQueued > 0);
@@ -243,7 +249,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
 
                 uint32 desiredTotal = hasRealDemand ? (arenaTeamSize * 2u) : 0u;
-                uint32 totalNeed = (hasRealDemand && !activeMatch && desiredTotal > currentQueued) ? (desiredTotal - currentQueued) : 0u;
+                uint32 totalNeed = (hasRealDemand && desiredTotal > currentQueued) ? (desiredTotal - currentQueued) : 0u;
                 uint32 allianceNeed = hasRealDemand ? (arenaTeamSize > currentQueuedAlliance ? (arenaTeamSize - currentQueuedAlliance) : 0u) : 0u;
                 uint32 hordeNeed = hasRealDemand ? (arenaTeamSize > currentQueuedHorde ? (arenaTeamSize - currentQueuedHorde) : 0u) : 0u;
                 if (hasRealDemand && allianceNeed + hordeNeed != totalNeed)
@@ -251,7 +257,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                     allianceNeed = std::min(allianceNeed, totalNeed);
                     hordeNeed = totalNeed > allianceNeed ? (totalNeed - allianceNeed) : 0u;
                 }
-                uint32 phase = hardDormant ? 0u : (activeMatch ? 3u : (hasRealDemand ? 2u : 0u));
+                // Arena is a one-time fill lane, not a BG-style live_refill lane.
+                uint32 phase = hasRealDemand ? 2u : 0u;
 
                 if (orphanQueueResidue)
                 {

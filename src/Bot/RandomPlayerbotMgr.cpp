@@ -361,17 +361,18 @@ namespace
         if (!botAI)
             return false;
 
+        char const* laneName = RTG_NormalizeArenaTeamSize(BattlegroundQueueTypeId(desiredQueueType)) ? "arena" : "bg";
         botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(desiredQueueType);
         bool queued = botAI->DoSpecificAction("bg join", Event(), true);
         RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][DISPATCH] helper={} queue={} reason={} result={}",
             bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg", queued ? 1 : 0));
 
         if (queued)
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane=bg queue={} reason={}",
-                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg"));
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane={} queue={} reason={}",
+                bot->GetGUID().GetCounter(), laneName, desiredQueueType, reason ? reason : "rtg"));
         else
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane=bg queue={} reason={} inWorld={} inQueue={} invited={} inBg={} inArena={}",
-                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg",
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane={} queue={} reason={} inWorld={} inQueue={} invited={} inBg={} inArena={}",
+                bot->GetGUID().GetCounter(), laneName, desiredQueueType, reason ? reason : "rtg",
                 bot->IsInWorld() ? 1 : 0,
                 bot->InBattlegroundQueue() ? 1 : 0,
                 bot->IsInvitedForBattlegroundInstance() ? 1 : 0,

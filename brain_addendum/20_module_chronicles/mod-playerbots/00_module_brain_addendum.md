@@ -1006,3 +1006,26 @@ Stable LOS navigation, reduced jitter, improved pursuit.
 
 Status:
 LIVE TEST READY
+
+
+### Chapter: RTG Arena One-Time Fill Truth + Lane Label Cleanup
+Date: 2026-04-06
+Subsystem: Arena/BG planner and dispatch logging
+
+Problem:
+Arena queue 9 was still logging as lane=bg, showing live_refill semantics after fill, and could regenerate demand after a completed match because real queue truth still counted invited/in-instance real players.
+
+Root Cause:
+1. Arena dispatch logging reused the BG lane label for queue dispatches.
+2. Live real queue scan counted players already invited or already inside battleground/arena lifecycle.
+3. Arena phase logic reused BG-style live_refill semantics even though arena is a one-time fill lane.
+
+Fix:
+- Arena/BG dispatch logging now labels queue 9 as lane=arena.
+- Live real queue scan now ignores players already invited or already inside battleground/arena.
+- Arena planner now treats arena as one-time fill only: phase is pop_or_invite while real queue exists, otherwise dormant; no live_refill phase is emitted for arena.
+
+Expected Proof:
+- queue 9 dispatch lines show lane=arena
+- arena no longer logs phase=live_refill
+- once the real player is invited/in arena or no longer queued, queue 9 demand stops regenerating
