@@ -3972,7 +3972,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             }
-            else if (RTG::HasPrefix(addData, "rtg_bg:"))
+            else if (RTG::HasPrefix(addData, "rtg_bg:") || RTG::HasPrefix(addData, "rtg_arena:"))
             {
                 SetEventValue(charInfo.guid, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(charInfo.guid, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
@@ -4635,7 +4635,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!capacity)
                     return false;
 
-                std::string addData = RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
+                bool isArenaBucket = BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(bucket.queueTypeId)) != ARENA_TYPE_NONE;
+                std::string addData = isArenaBucket
+                    ? RTG::MakeArenaAddData(bucket.team, bucket.level, bucket.queueTypeId)
+                    : RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
                 for (auto const& charInfo : allCharacters)
                 {
                     if (!capacity)
@@ -4649,10 +4652,15 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     LOG_INFO("playerbots", "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
-                        charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
-                        bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
-                    if (BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(bucket.queueTypeId)) != ARENA_TYPE_NONE)
+                    if (isArenaBucket)
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
+                            bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
+                    else
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
+                            bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
+                    if (isArenaBucket)
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][FORM] helper={} queue={} bracket={} team={} level={} teamSize={}",
                             charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.teamSize));
                     ++rtgBgLogged;
@@ -7643,7 +7651,7 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
             SetEventValue(bot, "rtg_add_requested", nowTs, 120, addData);
             if (RTG::HasPrefix(addData, "rtg_lfg:"))
                 SetEventValue(bot, "rtg_lfg_pending", 1, 45, addData);
-            else if (RTG::HasPrefix(addData, "rtg_bg:"))
+            else if (RTG::HasPrefix(addData, "rtg_bg:") || RTG::HasPrefix(addData, "rtg_arena:"))
             {
                 SetEventValue(bot, "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(bot, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);

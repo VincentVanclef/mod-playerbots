@@ -1029,3 +1029,10 @@ Expected Proof:
 - queue 9 dispatch lines show lane=arena
 - arena no longer logs phase=live_refill
 - once the real player is invited/in arena or no longer queued, queue 9 demand stops regenerating
+
+
+CHAPTER: RTG-ARENA-LANE-OWNERSHIP-SEPARATION
+Context: Arena helpers were still acquired with rtg_bg ownership while only dispatch logs said lane=arena.
+Fix: Added rtg_arena add-data, broadened queue metadata parsing for arena ownership, switched arena helper assignment to MakeArenaAddData, and changed arena assignment breadcrumbs to [RTG][ARENA][ASSIGN].
+Result: Arena acquire/assign ownership now separates from BG ownership at the key level instead of only at dispatch labeling.
+Status: LIVE TEST READY.

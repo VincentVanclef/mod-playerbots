@@ -62,12 +62,27 @@ inline std::string MakeBgAddData(unsigned int team, unsigned int level, unsigned
     return data;
 }
 
+inline std::string MakeArenaAddData(unsigned int team, unsigned int level, unsigned int queueType, unsigned int owner = 0)
+{
+    std::string data = std::string("rtg_arena:") + std::to_string(team) + ":" + std::to_string(level) + ":" + std::to_string(queueType);
+    if (owner)
+        data += ":" + std::to_string(owner);
+    return data;
+}
+
+inline bool IsArenaManagedAddData(std::string const& data)
+{
+    return HasPrefix(data, "rtg_arena:");
+}
+
 inline bool ParseBgAddData(std::string const& data, unsigned int& team, unsigned int& level, unsigned int& queueType, unsigned int* owner = nullptr)
 {
-    if (!HasPrefix(data, "rtg_bg:"))
+    bool isBg = HasPrefix(data, "rtg_bg:");
+    bool isArena = HasPrefix(data, "rtg_arena:");
+    if (!isBg && !isArena)
         return false;
 
-    std::string payload = data.substr(7);
+    std::string payload = data.substr(isArena ? 10 : 7);
     std::vector<std::string> parts;
     std::stringstream ss(payload);
     std::string part;
@@ -94,7 +109,7 @@ inline bool ParseBgAddData(std::string const& data, unsigned int& team, unsigned
 
 inline bool IsQueueManagedAddData(std::string const& data)
 {
-    return HasPrefix(data, "rtg_lfg:") || HasPrefix(data, "rtg_bg:");
+    return HasPrefix(data, "rtg_lfg:") || HasPrefix(data, "rtg_bg:") || HasPrefix(data, "rtg_arena:");
 }
 
 inline bool ParseLfgDesiredRole(std::string const& addData, uint32_t& desiredRole)

@@ -21,10 +21,12 @@ namespace
 {
     static bool RTG_ParseBgBotAssignment(std::string const& data, uint32& team, uint32& level, uint32& queueType)
     {
-        if (data.rfind("rtg_bg:", 0) != 0)
+        bool isBg = data.rfind("rtg_bg:", 0) == 0;
+        bool isArena = data.rfind("rtg_arena:", 0) == 0;
+        if (!isBg && !isArena)
             return false;
 
-        std::string payload = data.substr(7);
+        std::string payload = data.substr(isArena ? 10 : 7);
         size_t sep1 = payload.find(':');
         size_t sep2 = payload.find(':', sep1 == std::string::npos ? sep1 : sep1 + 1);
         if (sep1 == std::string::npos || sep2 == std::string::npos)
