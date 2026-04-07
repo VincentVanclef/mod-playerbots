@@ -1036,3 +1036,27 @@ Context: Arena helpers were still acquired with rtg_bg ownership while only disp
 Fix: Added rtg_arena add-data, broadened queue metadata parsing for arena ownership, switched arena helper assignment to MakeArenaAddData, and changed arena assignment breadcrumbs to [RTG][ARENA][ASSIGN].
 Result: Arena acquire/assign ownership now separates from BG ownership at the key level instead of only at dispatch labeling.
 Status: LIVE TEST READY.
+
+
+## CHAPTER: RTG-ARENA-HARD-STOP + TRUE ONE-SHOT RETIRE
+
+Context:
+Arena ownership had already been split to rtg_arena add-data, but runtime cleanup still processed arena helpers through the generic BG helper retirement sweep. This produced BG-flavored RETURN_WORLD breadcrumbs for queue 9 and allowed post-match residue to linger longer than desired.
+
+Findings:
+- Arena planner could continue emitting dormant phase breadcrumbs even when no real queue, no active instance, and no queued helpers remained.
+- Arena helpers were still being retired through the BG world-return delay path.
+- Post-match arena helpers could remain online briefly even after the arena was already over because they were waiting on BG-style retire timing.
+
+Fix:
+- Added a hard planner gate for truly dormant arena state (no real queue, no active instance, no queued helpers) so the planner clears state and stops processing entirely.
+- Split arena retirement inside RandomPlayerbotMgr's queue-helper cleanup loop.
+- Arena helpers now emit ARENA return-world breadcrumbs and retire immediately once detached from arena lifecycle.
+- Added a lightweight rtg_arena_complete event to prevent post-match arena helpers from re-entering queue handling during logout/cleanup.
+
+Result:
+Arena is now treated as a true one-shot lane:
+fill -> run -> end -> zero activity
+
+Status:
+LIVE TEST READY

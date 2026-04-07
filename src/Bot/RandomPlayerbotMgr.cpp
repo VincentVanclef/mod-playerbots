@@ -934,6 +934,11 @@ namespace
         return false;
     }
 
+    static bool RTG_IsArenaQueueType(BattlegroundQueueTypeId queueTypeId)
+    {
+        return BattlegroundMgr::BGArenaType(queueTypeId) != ARENA_TYPE_NONE;
+    }
+
     static bool RTG_HasLiveRealBgDemandForQueue(RandomPlayerbotMgr& mgr, uint32 desiredQueueType, uint32 desiredLevel)
     {
         BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
@@ -1535,6 +1540,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_teleport_attempts", 0, 0);
     SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
     SetEventValue(bot, "rtg_lfg_orphan_since", 0, 0);
+    SetEventValue(bot, "rtg_arena_complete", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -2786,21 +2792,28 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
                 continue;
 
-            bool bgHasRealDemand = RTG_HasLiveRealBgDemandForQueue(*this, desiredQueueType, desiredLevel ? desiredLevel : bot->GetLevel());
+            bool isArenaManaged = RTG::IsArenaManagedAddData(addData) || RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType));
+            bool queueHasRealDemand = RTG_HasLiveRealBgDemandForQueue(*this, desiredQueueType, desiredLevel ? desiredLevel : bot->GetLevel());
 
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
-            bool noLongerNeeded = !bgHasRealDemand || wrongTeam;
+            bool noLongerNeeded = !queueHasRealDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
+
+            if (isArenaManaged && GetEventValue(botId, "rtg_arena_complete"))
+            {
+                RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_complete", true);
+                continue;
+            }
 
             if (desiredTeam && bot->GetTeamId() != desiredTeam)
             {
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][FAIL] helper={} queue={} desiredTeam={} actualTeam={} reason=login_team_mismatch",
-                    bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, bot->GetTeamId()));
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][{}][FAIL] helper={} queue={} desiredTeam={} actualTeam={} reason=login_team_mismatch",
+                    isArenaManaged ? "ARENA" : "BG", bot->GetGUID().GetCounter(), desiredQueueType, desiredTeam, bot->GetTeamId()));
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 0, 0);
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_grace", 0, 0);
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_add_requested", 0, 0);
                 RTG_ClearQueueHelperState(bot->GetGUID().GetCounter(), true);
-                RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_bg_login_team_mismatch");
+                RTG_RequestQueueHelperLogout(bot->GetGUID(), isArenaManaged ? "rtg_arena_login_team_mismatch" : "rtg_bg_login_team_mismatch");
                 return;
             }
 
@@ -2856,7 +2869,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                 {
                     RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
-                    ledger.RequestRetire(botId, noLongerNeeded ? "bg helper pending safe retire" : "bg helper still active");
+                    ledger.RequestRetire(botId, noLongerNeeded ? (isArenaManaged ? "arena helper pending safe retire" : "bg helper pending safe retire") : (isArenaManaged ? "arena helper still active" : "bg helper still active"));
                     if (!noLongerNeeded)
                         ledger.ClearRetireRequest(botId);
                 }
@@ -2908,6 +2921,20 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                 uint32 worldReturnSince = GetEventValue(botId, "rtg_bg_world_return_since");
                 uint32 nowTs = uint32(time(nullptr));
+                if (isArenaManaged)
+                {
+                    // Arena is a true one-shot lane: once the helper has returned to world and
+                    // is no longer arena-lifecycle-owned, retire it immediately instead of
+                    // treating it like a BG live-refill helper.
+                    RTG_LeaveBotOnlyGroup(bot);
+                    SetEventValue(botId, "rtg_bg_leave_requested", 0, 0);
+                    SetEventValue(botId, "rtg_bg_world_return_since", 0, 0);
+                    SetEventValue(botId, "rtg_arena_complete", 1, 120, addData);
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][RETURN_WORLD] helper={} queue={} retireNow=1", botId, desiredQueueType));
+                    RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_retire", true);
+                    continue;
+                }
+
                 if (!worldReturnSince)
                 {
                     RTG_LeaveBotOnlyGroup(bot);

@@ -245,8 +245,20 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 bool hasQueueSeed = currentQueued > 0;
                 bool orphanQueueResidue = hardDormant ? (currentQueued > 0) : (!hasRealDemand && !activeMatch && currentQueued > 0);
 
-                mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
-                mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, ttl);
+                // Hard planner gate: once arena is truly dormant (no real queue, no active instance,
+                // no queued helpers), clear state and stop processing entirely.
+                if (hardDormant && !hasQueueSeed)
+                {
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_ALLIANCE)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgTeamNeedKey(uint32(queueTypeId), uint32(bracketId), uint32(TEAM_HORDE)), 0u, 0);
+                    mgr.RTG_SetGlobalEvent(RTG_MakeBgPhaseKey(uint32(queueTypeId), uint32(bracketId)), 0u, 0, "dormant");
+                    continue;
+                }
+
+                mgr.RTG_SetGlobalEvent(RTG_MakeBgDemandKey_Overlay(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, hasRealDemand ? ttl : 0);
+                mgr.RTG_SetGlobalEvent(RTG_MakeBgRealDemandKey(uint32(queueTypeId), uint32(bracketId)), hasRealDemand ? 1u : 0u, hasRealDemand ? ttl : 0);
 
                 uint32 desiredTotal = hasRealDemand ? (arenaTeamSize * 2u) : 0u;
                 uint32 totalNeed = (hasRealDemand && desiredTotal > currentQueued) ? (desiredTotal - currentQueued) : 0u;
