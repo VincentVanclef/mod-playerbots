@@ -746,52 +746,10 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 **Expected proof:** Arena helpers should retire independently of an unrelated ongoing battleground. BG helpers should leave bot-only matches cleanly after the last real player is gone, without a final-wave server destabilization during logout cleanup.
 
 
-## Chapter 2026-04-04-QS-ARENA-BG-LAST-OVERLAP
-
-### Context
-Mixed WSG + solo 3v3 testing still showed final queue-lane overlap. The observed symptoms were: arena demand continuing during the post-match scoreboard window, battleground finish-fill being delayed while arena was already effectively complete, slow level-1 helper logins being treated like replacement-worthy failures, and occasional arena helper faction mismatches surviving until login.
-
-### Findings
-1. Arena planning was still treating active arena instances as live fill demand because queued counters and active-instance state were blended together.
-2. BG/arena helper retirement was still consulting generic live BG demand, and for arena this included active arena participation as if it were still queue-fill demand.
-3. `bot_loading_guard` was only being breadcrumbed, so slow helper initialization could still age into a dispatch-stall replacement cycle.
-4. BG/arena helper login lacked a final explicit team guard at login time.
-
-### Corrections
-- Arena planner now sets zero helper demand while an arena instance is active, even if queued counters linger during scoreboard time.
-- Live BG demand checks no longer treat active arena participation as fresh queue demand for queue 9 retirement logic.
-- `bot_loading_guard` now refreshes `rtg_add_requested` and the pending queue state instead of letting the original helper drift toward stall replacement.
-- BG/arena helper login now hard-fails and retires a helper if the logged-in faction does not match the requested team encoded in RTG add-data.
-
-### Proof Target
-- Solo 3v3 should stop asking for fill the moment the arena instance is active and should not block WSG finish-fill during the post-match scoreboard window.
-- Arena helpers should retire independently after arena completion even if a battleground is still ongoing.
-- Slow level-1 helper logins should be allowed to finish rather than being replaced just because duplicate add attempts hit `bot_loading_guard`.
-- Wrong-faction arena helpers should be rejected immediately at login rather than surviving into queue retries.
-
-
-## Chapter: RTG Full Enforcement Wiring — strict RDF role validation + stale arena helper cleanup
-
-**Context**
-A late RDF validation seam still allowed role-invalid helpers to slip through in rare cases, such as Retribution paladins appearing in tank slots. Arena lifecycle also still left behind a rare dangling helper that logged in for solo arena but never bound to arena lifecycle and therefore missed normal retirement.
-
-**What changed**
-- Added `RTG_IsValidSpecForRole(Player*, uint32)` in `RandomPlayerbotMgr.cpp`.
-- Wired strict spec-role validation into RDF helper acquisition before login and again on RDF helper login before queue preparation.
-- Preferred offline spec truth for hybrid classes during strict validation to avoid transient runtime misreads.
-- Added arena helper activity tracking via `rtg_arena_last_active`.
-- Added cleanup for `rtg_arena:` helpers that never join arena lifecycle and remain stale for 10 seconds.
-
-**Result**
-- Retribution paladins can no longer slip into tank slots during RDF helper wiring.
-- Arena helpers that login but never actually join are force-retired instead of lingering online indefinitely.
-
-**Proof target**
-- No RDF groups should surface role-invalid paladin, druid, warrior, shaman, or priest assignments.
-- Solo arena should fully retire all helpers, including any helper that never entered the arena proper.
-
-
-## Chapter: Arena scoreboard retirement + exact-role hybrid RDF filtering
-Situation: Solo arena helpers that actually entered the arena were remaining online after match completion, while the one helper that failed to join could retire. Root cause was BG-style lifecycle retirement waiting for absence of real players, which is wrong for arena scoreboard/WAIT_LEAVE. Separately, exact-role hybrids could still surface from offline capability scans if the authored role was not enforced as an exact match.
-Fix: Arena-managed queue helpers now request immediate leave when real queue demand is gone or arena enters WAIT_LEAVE, and arena return-world retirement uses an immediate delay with ARENA breadcrumbs. RDF offline selection now re-checks exact-role hybrids (Paladin, Warrior, Shaman) against authored spec-tab role masks so specs like Retribution do not leak into tank slots.
-Expected: all arena participants retire after arena completion even if the real player stays on scoreboard, and Ret paladins no longer surface as RDF tanks.
+## Chapter 2026-04-08 — Major lane isolation audit patch
+- Re-audited queue ownership after arena helpers continued to surface as `rtg_bg:*:9` in runtime logs.
+- Hardened arena detection in `RandomPlayerbotMgr.cpp` through a dedicated lane helper instead of relying only on raw `BGArenaType(...)` checks.
+- Switched BG/arena helper acquisition to use lane-aware arena detection when building buckets and add-data.
+- Split queue helper reservation state so arena helpers use `rtg_arena_pending` / `rtg_arena_queue_grace` instead of reusing BG pending markers.
+- Tightened offline RDF role filtering to derive the mask from authored offline spec-tab role truth, reducing regressions such as holy-priest DPS or enhancement-healer assignment.
+- Goal of this pass: make arena ownership lane-correct at acquire/assign time and reduce further cross-lane regressions before additional queue polish.
