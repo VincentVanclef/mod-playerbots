@@ -2786,10 +2786,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
                 continue;
 
-            bool bgHasRealDemand = RTG_HasLiveRealBgDemandForQueue(*this, desiredQueueType, desiredLevel ? desiredLevel : bot->GetLevel());
+            bool isArenaManaged = RTG::IsArenaManagedAddData(addData) ||
+                                  (BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(desiredQueueType)) != ARENA_TYPE_NONE);
+            bool liveQueueDemand = RTG_HasLiveRealBgDemandForQueue(*this, desiredQueueType, desiredLevel ? desiredLevel : bot->GetLevel());
 
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
-            bool noLongerNeeded = !bgHasRealDemand || wrongTeam;
+            bool noLongerNeeded = !liveQueueDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
             if (desiredTeam && bot->GetTeamId() != desiredTeam)
@@ -2812,6 +2814,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
+            Battleground* currentBg = bot->GetBattleground();
+            bool arenaEnded = isArenaManaged && currentBg && currentBg->GetStatus() == STATUS_WAIT_LEAVE;
             bool queueGrace = GetEventValue(botId, "rtg_bg_queue_grace") != 0;
 
             if (!noLongerNeeded && !inQueueState)
@@ -2840,29 +2844,38 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 SetEventValue(botId, "rtg_bg_pending", 0, 0);
                 SetEventValue(botId, "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
 
-                if (noLongerNeeded)
+                if (noLongerNeeded || arenaEnded)
                 {
-                    Battleground* currentBg = bot->GetBattleground();
-                    if ((currentBg || bot->InArena()) && !RTG_BattlegroundHasRealPlayers(currentBg))
+                    bool shouldForceLeave = false;
+                    if (isArenaManaged)
                     {
-                        if (!GetEventValue(botId, "rtg_bg_leave_requested"))
-                        {
-                            if (RTG_RequestImmediateBgLeave(bot))
-                                SetEventValue(botId, "rtg_bg_leave_requested", 1, 15, addData);
-                        }
+                        // Arena is one-shot. Once real demand is gone or the match has entered
+                        // WAIT_LEAVE scoreboard state, all arena helpers should leave immediately,
+                        // even if the real player is still viewing the scoreboard.
+                        shouldForceLeave = (currentBg || bot->InArena());
+                    }
+                    else if ((currentBg || bot->InArena()) && !RTG_BattlegroundHasRealPlayers(currentBg))
+                    {
+                        shouldForceLeave = true;
+                    }
+
+                    if (shouldForceLeave && !GetEventValue(botId, "rtg_bg_leave_requested"))
+                    {
+                        if (RTG_RequestImmediateBgLeave(bot))
+                            SetEventValue(botId, "rtg_bg_leave_requested", 1, 15, addData);
                     }
                 }
 
                 if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
                 {
                     RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
-                    ledger.RequestRetire(botId, noLongerNeeded ? "bg helper pending safe retire" : "bg helper still active");
-                    if (!noLongerNeeded)
+                    ledger.RequestRetire(botId, (noLongerNeeded || arenaEnded) ? "queue helper pending safe retire" : "queue helper still active");
+                    if (!noLongerNeeded && !arenaEnded)
                         ledger.ClearRetireRequest(botId);
                 }
 
-                if (noLongerNeeded)
-                    SetEventValue(botId, "rtg_bg_retire_when_safe", 1, 120, addData);
+                if (noLongerNeeded || arenaEnded)
+                    SetEventValue(botId, "rtg_bg_retire_when_safe", 1, isArenaManaged ? 30 : 120, addData);
                 else
                 {
                     SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
@@ -2889,7 +2902,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool retireWhenSafe = GetEventValue(botId, "rtg_bg_retire_when_safe") != 0;
             bool outOfBgState = !RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
-            if (outOfBgState && (retireWhenSafe || noLongerNeeded))
+            if (outOfBgState && (retireWhenSafe || noLongerNeeded || arenaEnded))
             {
                 if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
@@ -2913,16 +2926,22 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     RTG_LeaveBotOnlyGroup(bot);
                     SetEventValue(botId, "rtg_bg_world_return_since", nowTs, 60, addData);
                     SetEventValue(botId, "rtg_bg_leave_requested", 0, 0);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][RETURN_WORLD] helper={} queue={} retireSoon=1", botId, desiredQueueType));
+                    if (isArenaManaged)
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][RETURN_WORLD] helper={} queue={} retireSoon=1", botId, desiredQueueType));
+                    else
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][RETURN_WORLD] helper={} queue={} retireSoon=1", botId, desiredQueueType));
                     continue;
                 }
 
-                if (nowTs <= worldReturnSince || (nowTs - worldReturnSince) < RTG_BG_RETURN_WORLD_RETIRE_SECONDS)
+                uint32 requiredDelay = isArenaManaged ? 1u : RTG_BG_RETURN_WORLD_RETIRE_SECONDS;
+                if (nowTs <= worldReturnSince || (nowTs - worldReturnSince) < requiredDelay)
                     continue;
 
                 RTG_LeaveBotOnlyGroup(bot);
                 SetEventValue(botId, "rtg_bg_leave_requested", 0, 0);
-                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RETIRE] allowing helper={} queue={} noLongerNeeded={} retireWhenSafe={}", botId, desiredQueueType, noLongerNeeded ? 1 : 0, retireWhenSafe ? 1 : 0));
+                if (isArenaManaged)
+                    SetEventValue(botId, "rtg_arena_complete", 1, 30, addData);
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][RETIRE] allowing helper={} queue={} noLongerNeeded={} retireWhenSafe={} arena={}", botId, desiredQueueType, noLongerNeeded ? 1 : 0, retireWhenSafe ? 1 : 0, isArenaManaged ? 1 : 0));
                 rtgBgLogout.push_back(botGuid);
                 continue;
             }
@@ -4546,6 +4565,18 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         {
                             if (!roleKnown || (roleMask & desiredRole) == 0)
                                 continue;
+
+                            // Exact-role hybrids must only ever be surfaced for their authored role.
+                            // This protects RDF from cases like Retribution paladins entering tank slots.
+                            if (charInfo.rClass == CLASS_PALADIN || charInfo.rClass == CLASS_WARRIOR || charInfo.rClass == CLASS_SHAMAN)
+                            {
+                                uint8 specTab = 0;
+                                if (!RTG::HasOfflineSpecData(charInfo.guid, charInfo.rClass, &specTab))
+                                    continue;
+                                uint32 exactMask = RTG::RoleMaskForClassSpecTab(charInfo.rClass, specTab);
+                                if ((exactMask & desiredRole) == 0)
+                                    continue;
+                            }
                         }
                         else
                         {

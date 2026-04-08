@@ -815,3 +815,9 @@ A late RDF validation seam still allowed role-invalid helpers to slip through in
 **Proof target**
 - No RDF groups should surface role-invalid paladin, druid, warrior, shaman, or priest assignments.
 - Solo arena should fully retire all helpers, including any helper that never entered the arena proper.
+
+
+## Chapter: Arena scoreboard retirement + exact-role hybrid RDF filtering
+Situation: Solo arena helpers that actually entered the arena were remaining online after match completion, while the one helper that failed to join could retire. Root cause was BG-style lifecycle retirement waiting for absence of real players, which is wrong for arena scoreboard/WAIT_LEAVE. Separately, exact-role hybrids could still surface from offline capability scans if the authored role was not enforced as an exact match.
+Fix: Arena-managed queue helpers now request immediate leave when real queue demand is gone or arena enters WAIT_LEAVE, and arena return-world retirement uses an immediate delay with ARENA breadcrumbs. RDF offline selection now re-checks exact-role hybrids (Paladin, Warrior, Shaman) against authored spec-tab role masks so specs like Retribution do not leak into tank slots.
+Expected: all arena participants retire after arena completion even if the real player stays on scoreboard, and Ret paladins no longer surface as RDF tanks.
