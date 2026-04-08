@@ -1415,9 +1415,12 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     {
         SetEventValue(botId, "add", 0, 0);
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-        SetEventValue(botId, pendingKey, 0, 0);
-        SetEventValue(botId, retireWhenSafeKey, 0, 0);
-        SetEventValue(botId, worldReturnSinceKey, 0, 0);
+        SetEventValue(botId, "rtg_bg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
+        SetEventValue(botId, "rtg_bg_world_return_since", 0, 0);
+        SetEventValue(botId, "rtg_arena_pending", 0, 0);
+        SetEventValue(botId, "rtg_arena_retire_when_safe", 0, 0);
+        SetEventValue(botId, "rtg_arena_world_return_since", 0, 0);
         SetEventValue(botId, "rtg_add_requested", 0, 0);
     }
 
@@ -4565,7 +4568,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!tryLoginBot(charInfo, addData))
                         continue;
 
-                    LOG_INFO("playerbots", isArenaBucket ? "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}" : "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
+                    LOG_INFO("playerbots", bucket.isArena ? "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}" : "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
                         charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
