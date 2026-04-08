@@ -960,7 +960,7 @@ namespace
         return true;
     }
 
-    static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 30u;
+    static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 5u;
     static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
 
     static bool RTG_IsArenaQueueTypeForKeys(BattlegroundQueueTypeId queueTypeId)
