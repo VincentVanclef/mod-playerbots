@@ -12,6 +12,47 @@ namespace RTG
 {
 namespace
 {
+static bool RTG_IsArenaQueueType(BattlegroundQueueTypeId queueTypeId)
+{
+    uint32 raw = uint32(BattlegroundMgr::BGArenaType(queueTypeId));
+    if (raw != 0u)
+        return true;
+    if (queueTypeId == BATTLEGROUND_QUEUE_2v2 || queueTypeId == BATTLEGROUND_QUEUE_3v3 || queueTypeId == BATTLEGROUND_QUEUE_5v5)
+        return true;
+    return uint32(queueTypeId) == 9u;
+}
+
+static std::string RTG_MakeDemandKey(BattlegroundQueueTypeId queueTypeId, uint32 queueType, uint32 bracketId)
+{
+    return RTG_IsArenaQueueType(queueTypeId) ?
+        (std::string("rtg_arena_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+        (std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
+}
+
+static std::string RTG_MakePhaseKey(BattlegroundQueueTypeId queueTypeId, uint32 queueType, uint32 bracketId)
+{
+    return RTG_IsArenaQueueType(queueTypeId) ?
+        (std::string("rtg_arena_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+        (std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
+}
+
+static std::string RTG_MakeTeamNeedKey(BattlegroundQueueTypeId queueTypeId, uint32 queueType, uint32 bracketId, uint32 teamId)
+{
+    return RTG_IsArenaQueueType(queueTypeId) ?
+        (std::string("rtg_arena_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId)) :
+        (std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId));
+}
+
+static char const* RTG_PendingKey(BattlegroundQueueTypeId queueTypeId)
+{
+    return RTG_IsArenaQueueType(queueTypeId) ? "rtg_arena_pending" : "rtg_bg_pending";
+}
+
+static char const* RTG_QueueGraceKey(BattlegroundQueueTypeId queueTypeId)
+{
+    return RTG_IsArenaQueueType(queueTypeId) ? "rtg_arena_queue_grace" : "rtg_bg_queue_grace";
+}
+
 static bool RTG_IsActivelyOwnedHelperState(RtgHelperState state)
 {
     switch (state)
@@ -44,20 +85,15 @@ static bool RTG_IsOrphanQueuedBgHelper(Player* bot, RtgHelperLedgerEntry const& 
 
     uint32 queueType = uint32(entry.target.queueTypeId);
     uint32 bracketId = uint32(entry.target.bracketId);
-    bool isArenaQueue = BattlegroundMgr::BGArenaType(entry.target.queueTypeId) != 0;
-    std::string demandKey = isArenaQueue ?
-        (std::string("rtg_arena_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
-        (std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
-    std::string phaseKey = isArenaQueue ?
-        (std::string("rtg_arena_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
-        (std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
+    std::string demandKey = RTG_MakeDemandKey(entry.target.queueTypeId, queueType, bracketId);
+    std::string phaseKey = RTG_MakePhaseKey(entry.target.queueTypeId, queueType, bracketId);
     if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0)
         return false;
 
     if (sRandomPlayerbotMgr.RTG_GetBotEventValue(0, phaseKey) != 0)
         return false;
 
-    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending") != 0)
+    if (sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), RTG_PendingKey(entry.target.queueTypeId)) != 0)
         return false;
 
     return true;
@@ -99,23 +135,20 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
                 if (PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bgTemplate->GetMapId(), level ? level : bot->GetLevel()))
                 {
                     uint32 bracketId = uint32(pvpDiff->GetBracketId());
-                    bool isArenaQueue = BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(queueType)) != 0;
-                    std::string demandKey = isArenaQueue ?
-                        (std::string("rtg_arena_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
-                        (std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
-                    std::string phaseKey = isArenaQueue ?
-                        (std::string("rtg_arena_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
-                        (std::string("rtg_bg_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId));
-                    std::string teamNeedKey = std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(team);
+                    BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueType);
+                    bool isArenaQueue = RTG_IsArenaQueueType(queueTypeId);
+                    std::string demandKey = RTG_MakeDemandKey(queueTypeId, queueType, bracketId);
+                    std::string phaseKey = RTG_MakePhaseKey(queueTypeId, queueType, bracketId);
+                    std::string teamNeedKey = RTG_MakeTeamNeedKey(queueTypeId, queueType, bracketId, team);
                     bool queueDemandActive =
                         sRandomPlayerbotMgr.RTG_GetBotEventValue(0, demandKey) != 0 ||
                         sRandomPlayerbotMgr.RTG_GetBotEventValue(0, phaseKey) != 0 ||
-                        (!isArenaQueue && sRandomPlayerbotMgr.RTG_GetBotEventValue(0, teamNeedKey) != 0);
+                        sRandomPlayerbotMgr.RTG_GetBotEventValue(0, teamNeedKey) != 0;
 
                     if (queueDemandActive)
                     {
-                        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
-                            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_queue_grace") ||
+                        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_PendingKey(queueTypeId)) ||
+                            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_QueueGraceKey(queueTypeId)) ||
                             entry.pendingQueueJoin || entry.pendingBgJoin)
                             return true;
 

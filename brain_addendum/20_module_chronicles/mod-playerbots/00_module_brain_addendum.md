@@ -1010,3 +1010,50 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 - Split queue helper reservation state so arena helpers use `rtg_arena_pending` / `rtg_arena_queue_grace` instead of reusing BG pending markers.
 - Tightened offline RDF role filtering to derive the mask from authored offline spec-tab role truth, reducing regressions such as holy-priest DPS or enhancement-healer assignment.
 - Goal of this pass: make arena ownership lane-correct at acquire/assign time and reduce further cross-lane regressions before additional queue polish.
+
+## 2026-04-08 — Hard lane isolation for arena + scoreboard-safe 30-second world-return retirement
+
+### Problem surface proven by live logs
+- arena queue `9` was still being acquired with BG add-data (`rtg_bg:*:9`) instead of true arena-native ownership
+- arena helpers were still emitting `[RTG][BG][ASSIGN]` and `lane=bg queue=9`, proving lane contamination was happening at creation/assign time rather than only in log wording
+- dormant arena states could still leave stale helpers online long enough to leak into later arena cycles
+- BG/arena helpers were retiring too quickly after leaving battleground context instead of waiting a safe post-leave world-return window
+
+### Root causes corrected
+1. **Arena helper creation still used `MakeBgAddData(...)` inside the shared BG bucket acquire path.** That meant queue `9` and other arena lanes could be born as BG-owned from the first write.
+2. **Arena planner state was still written through BG event keys in several places.** This allowed arena demand/phase/team-need truth to remain partially shared with BG surfaces.
+3. **Lifecycle retirement checks still favored BG-only pending/grace keys in some shared ownership code.** Arena helpers could therefore survive or be evaluated against the wrong ownership surface.
+4. **Post-leave retirement delay was only 5 seconds.** That was too short for the desired scoreboard/end-state behavior.
+
+### Manual repair applied
+- `src/Bot/RandomPlayerbotMgr.cpp`
+  - changed queue-key helpers to become lane-aware so arena queues now resolve to:
+    - `rtg_arena_need:*`
+    - `rtg_arena_team_need:*`
+    - `rtg_arena_phase:*`
+  - changed the shared battleground/arena acquire path so arena buckets now create helpers with `RTG::MakeArenaAddData(...)` at birth instead of `RTG::MakeBgAddData(...)`
+  - changed dispatch breadcrumbs so queue dispatch now logs `lane=arena` for arena queues rather than forcing `lane=bg`
+  - changed assignment breadcrumbs so arena helpers now emit `[RTG][ARENA][ASSIGN]` instead of `[RTG][BG][ASSIGN]`
+  - expanded queue-helper state clearing to wipe arena queue grace / leave / return markers as first-class lane state
+  - standardized post-leave BG/arena retirement timing to a 30-second world-return window before logout
+  - made final retire reason lane-specific so arena helpers retire as `rtg_arena_retire`
+- `src/Bot/RtgBgQueuePlanner.cpp`
+  - added arena-native planner keys (`rtg_arena_need`, `rtg_arena_team_need`, `rtg_arena_phase`)
+  - stopped writing live arena demand through BG planner keys
+  - explicitly clears old BG-lane arena residue when arena becomes dormant/orphaned so stale cross-lane truth cannot linger
+  - normalized solo arena queue `9` to team-size `3` in the planner path too, matching the manager-side arena detection doctrine
+- `src/Bot/RtgQueueLifecycle.cpp`
+  - made demand/phase/team-need/pending/grace evaluation lane-aware for arena-managed helpers
+  - arena helpers now consult `rtg_arena_*` ownership truth during retire evaluation instead of falling back to BG-only markers
+
+### Behavioral doctrine after this pass
+- BG lane remains `rtg_bg:*`
+- Arena lane is now born, planned, assigned, dispatched, and retired as `rtg_arena:*`
+- Arena no longer relies on shared BG keyspace for active demand truth
+- BG and arena helpers now wait roughly 30 seconds after actually returning to world context before logout, which matches the requested scoreboard-safe leave-then-logout behavior better than the earlier near-immediate retirement
+
+### Proof signals to demand next
+- no new arena helper should log `add='rtg_bg:*:9'`
+- arena helpers should log `[RTG][ARENA][ASSIGN]` and `lane=arena`
+- after scoreboard/end or real-player disappearance, helpers should leave battleground/arena naturally and then log out only after the post-leave world-return delay
+- arena dormant states should no longer leave reusable stale helpers hanging online for later arena cycles

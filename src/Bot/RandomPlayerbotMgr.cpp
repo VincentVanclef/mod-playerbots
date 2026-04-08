@@ -360,17 +360,18 @@ namespace
         if (!botAI)
             return false;
 
+        char const* laneTag = RTG_GetQueueLaneTag(BattlegroundQueueTypeId(desiredQueueType));
         botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(desiredQueueType);
         bool queued = botAI->DoSpecificAction("bg join", Event(), true);
-        RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][DISPATCH] helper={} queue={} reason={} result={}",
-            bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg", queued ? 1 : 0));
+        RTG_RuntimeBreadcrumb(fmt::format("[RTG][QUEUE][DISPATCH] helper={} lane={} queue={} reason={} result={}",
+            bot->GetGUID().GetCounter(), laneTag, desiredQueueType, reason ? reason : "rtg", queued ? 1 : 0));
 
         if (queued)
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane=bg queue={} reason={}",
-                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg"));
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane={} queue={} reason={}",
+                bot->GetGUID().GetCounter(), laneTag, desiredQueueType, reason ? reason : "rtg"));
         else
-            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane=bg queue={} reason={} inWorld={} inQueue={} invited={} inBg={} inArena={}",
-                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg",
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][FAIL_REASON] helper={} lane={} queue={} reason={} inWorld={} inQueue={} invited={} inBg={} inArena={}",
+                bot->GetGUID().GetCounter(), laneTag, desiredQueueType, reason ? reason : "rtg",
                 bot->IsInWorld() ? 1 : 0,
                 bot->InBattlegroundQueue() ? 1 : 0,
                 bot->IsInvitedForBattlegroundInstance() ? 1 : 0,
@@ -959,19 +960,40 @@ namespace
     static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 5u;
     static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
 
+    static bool RTG_IsArenaQueueTypeForKeys(BattlegroundQueueTypeId queueTypeId)
+    {
+        uint32 raw = uint32(BattlegroundMgr::BGArenaType(queueTypeId));
+        if (raw != 0u)
+            return true;
+        if (queueTypeId == BATTLEGROUND_QUEUE_2v2 || queueTypeId == BATTLEGROUND_QUEUE_3v3 || queueTypeId == BATTLEGROUND_QUEUE_5v5)
+            return true;
+        return uint32(queueTypeId) == 9u;
+    }
+
+    static char const* RTG_GetQueueLaneTag(BattlegroundQueueTypeId queueTypeId)
+    {
+        return RTG_IsArenaQueueTypeForKeys(queueTypeId) ? "arena" : "bg";
+    }
+
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
-        return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+        return RTG_IsArenaQueueTypeForKeys(BattlegroundQueueTypeId(queueType)) ?
+            ("rtg_arena_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+            ("rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId));
     }
 
     static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
     {
-        return "rtg_bg_team_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
+        return RTG_IsArenaQueueTypeForKeys(BattlegroundQueueTypeId(queueType)) ?
+            ("rtg_arena_team_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId)) :
+            ("rtg_bg_team_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId));
     }
 
     static std::string RTG_MakeBgPhaseKey(uint32 queueType, uint32 bracketId)
     {
-        return "rtg_bg_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+        return RTG_IsArenaQueueTypeForKeys(BattlegroundQueueTypeId(queueType)) ?
+            ("rtg_arena_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId)) :
+            ("rtg_bg_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId));
     }
 
     static void RTG_ClearQueueDebuffs(Player* bot)
@@ -1442,9 +1464,16 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
-    SetEventValue(bot, "rtg_arena_pending", 0, 0);
+    SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
+    SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_bg_leave_requested", 0, 0);
     SetEventValue(bot, "rtg_bg_world_return_since", 0, 0);
+    SetEventValue(bot, "rtg_arena_pending", 0, 0);
+    SetEventValue(bot, "rtg_arena_queue_grace", 0, 0);
+    SetEventValue(bot, "rtg_arena_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_arena_leave_requested", 0, 0);
+    SetEventValue(bot, "rtg_arena_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
@@ -2867,7 +2896,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         {
             if (rtgBgRetireCount >= RTG_BG_RETIRE_LOGOUTS_PER_TICK)
                 break;
-            if (RTG_RequestQueueHelperLogout(botGuid, "rtg_bg_retire", true))
+            Player* retireBot = GetPlayerBot(botGuid);
+            std::string retireAddData = retireBot ? GetEventData(botGuid.GetCounter(), "add") : std::string();
+            char const* retireReason = RTG::IsArenaManagedAddData(retireAddData) ? "rtg_arena_retire" : "rtg_bg_retire";
+            if (RTG_RequestQueueHelperLogout(botGuid, retireReason, true))
                 ++rtgBgRetireCount;
         }
     }
@@ -4556,7 +4588,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (!capacity)
                     return false;
 
-                std::string addData = RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
+                std::string addData = bucket.isArena ?
+                    RTG::MakeArenaAddData(bucket.team, bucket.level, bucket.queueTypeId) :
+                    RTG::MakeBgAddData(bucket.team, bucket.level, bucket.queueTypeId);
                 for (auto const& charInfo : allCharacters)
                 {
                     if (!capacity)
@@ -4569,13 +4603,21 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         continue;
 
                     LOG_INFO("playerbots", bucket.isArena ? "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}" : "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, bucket.level));
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
-                        charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
-                        bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
-                    if (BattlegroundMgr::BGArenaType(BattlegroundQueueTypeId(bucket.queueTypeId)) != ARENA_TYPE_NONE)
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} lane={} queue={} team={} level={}", charInfo.guid, bucket.isArena ? "arena" : "bg", bucket.queueTypeId, bucket.team, bucket.level));
+                    if (bucket.isArena)
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
+                            bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][FORM] helper={} queue={} bracket={} team={} level={} teamSize={}",
                             charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.teamSize));
+                    }
+                    else
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.level, bucket.phase,
+                            bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
+                    }
                     ++rtgBgLogged;
                     --capacity;
                     --remainingCapacity;
@@ -7513,12 +7555,16 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     std::string addData = GetEventData(bot, "add");
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
-    SetEventValue(bot, "rtg_arena_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
-    SetEventValue(bot, "rtg_arena_pending", 0, 0);
-    SetEventValue(bot, "rtg_arena_queue_grace", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_bg_leave_requested", 0, 0);
+    SetEventValue(bot, "rtg_bg_world_return_since", 0, 0);
+    SetEventValue(bot, "rtg_arena_pending", 0, 0);
+    SetEventValue(bot, "rtg_arena_queue_grace", 0, 0);
+    SetEventValue(bot, "rtg_arena_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_arena_leave_requested", 0, 0);
+    SetEventValue(bot, "rtg_arena_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
