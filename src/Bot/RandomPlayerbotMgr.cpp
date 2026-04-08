@@ -347,6 +347,9 @@ namespace
         return owner->InBattleground() || owner->InArena();
     }
 
+    static bool RTG_IsArenaQueueTypeForKeys(BattlegroundQueueTypeId queueTypeId);
+    static char const* RTG_GetQueueLaneTag(BattlegroundQueueTypeId queueTypeId);
+
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
     {
         if (!bot || !desiredQueueType || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
@@ -957,7 +960,7 @@ namespace
         return true;
     }
 
-    static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 5u;
+    static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 30u;
     static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
 
     static bool RTG_IsArenaQueueTypeForKeys(BattlegroundQueueTypeId queueTypeId)
