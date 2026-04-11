@@ -126,8 +126,12 @@ public:
     bool rtgPrefer19If19Queueing = true;
     bool rtgPvpGearStrict = true;
     float rtgPvpGearStaminaWeightBonus = 0.45f;
-    float rtgPvpGearResilienceWeightBonus = 2.0f;
     float rtgPvpGearCritWeightBonus = 0.35f;
+    bool rtgPvpStrategyEnable = true;
+    std::string rtgBgCombatStrategyOverrides;
+    std::string rtgArenaCombatStrategyOverrides;
+    std::string rtgBgNonCombatStrategyOverrides;
+    std::string rtgArenaNonCombatStrategyOverrides;
 
     bool botAutologin;
     std::string randomBotMapsAsString;

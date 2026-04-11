@@ -367,13 +367,41 @@ AiPlayerbot.RTG.PvPGear.Strict = 1
 # Higher values make PvP helpers prefer sturdier pieces over fragile PvE-biased ones.
 AiPlayerbot.RTG.PvPGear.StaminaWeightBonus = 0.45
 
-# Extra resilience weight added for RTG BG/arena helpers during item scoring.
-# This helps PvP helpers favor true PvP pieces when available.
-AiPlayerbot.RTG.PvPGear.ResilienceWeightBonus = 2.0
-
 # Extra crit weight added for RTG BG/arena helpers during item scoring.
 # Useful for keeping low-level PvP item choices from drifting too far into flat PvE stat lines.
 AiPlayerbot.RTG.PvPGear.CritWeightBonus = 0.35
+
+# Enable RTG PvP strategy doctrine for BG and arena queue helpers. This applies lane-aware combat/non-combat
+# tightening after the normal playerbot defaults are built, so queue-managed PvP helpers stop inheriting loose
+# world/PvE behavior packages.
+#
+# Default: 1
+AiPlayerbot.RTG.PvPStrategy.Enable = 1
+
+# Optional extra combat strategy overrides for RTG BG helpers, applied through Engine::ChangeStrategy syntax.
+# Leave blank to keep the built-in RTG PvP doctrine only.
+#
+# Example: +collision,-flee
+# Default: ""
+AiPlayerbot.RTG.PvPStrategy.BgCombatOverrides = 
+
+# Optional extra combat strategy overrides for RTG arena helpers.
+#
+# Example: +collision,-aoe
+# Default: ""
+AiPlayerbot.RTG.PvPStrategy.ArenaCombatOverrides = 
+
+# Optional extra non-combat strategy overrides for RTG BG helpers.
+#
+# Example: +guard
+# Default: ""
+AiPlayerbot.RTG.PvPStrategy.BgNonCombatOverrides = 
+
+# Optional extra non-combat strategy overrides for RTG arena helpers.
+#
+# Example: -mount
+# Default: ""
+AiPlayerbot.RTG.PvPStrategy.ArenaNonCombatOverrides = 
 
 
 ####################################################################################################

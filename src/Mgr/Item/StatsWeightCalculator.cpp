@@ -869,7 +869,6 @@ bool StatsWeightCalculator::IsRtgPvpGearHardRejected(ItemTemplate const* proto) 
 void StatsWeightCalculator::ApplyRtgPvpWeights(ItemTemplate const* /*proto*/)
 {
     stats_weights_[STATS_TYPE_STAMINA] += sPlayerbotAIConfig.rtgPvpGearStaminaWeightBonus;
-    stats_weights_[STATS_TYPE_RESILIENCE] += sPlayerbotAIConfig.rtgPvpGearResilienceWeightBonus;
     stats_weights_[STATS_TYPE_CRIT] += sPlayerbotAIConfig.rtgPvpGearCritWeightBonus;
 
     if (rtgArenaLane_)

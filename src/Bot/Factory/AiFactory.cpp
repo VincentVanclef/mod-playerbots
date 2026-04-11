@@ -19,6 +19,7 @@
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 #include "PriestAiObjectContext.h"
+#include "RandomPlayerbotMgr.h"
 #include "RogueAiObjectContext.h"
 #include "ShamanAiObjectContext.h"
 #include "SharedDefines.h"
@@ -26,6 +27,162 @@
 #include "SpellMgr.h"
 #include "WarlockAiObjectContext.h"
 #include "WarriorAiObjectContext.h"
+
+
+namespace
+{
+    static bool RTG_HasPrefix(std::string const& value, char const* prefix)
+    {
+        return prefix && value.rfind(prefix, 0) == 0;
+    }
+
+    static bool RTG_GetQueuePvpLaneContext(Player* player, bool& isArenaLane, std::string& addData)
+    {
+        if (!player)
+            return false;
+
+        addData = sRandomPlayerbotMgr.RTG_GetBotEventData(player->GetGUID().GetCounter(), "add");
+        if (RTG_HasPrefix(addData, "rtg_arena:"))
+        {
+            isArenaLane = true;
+            return true;
+        }
+
+        if (RTG_HasPrefix(addData, "rtg_bg:"))
+        {
+            isArenaLane = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    static void RTG_ApplyPvpCombatDoctrine(Player* player, PlayerbotAI* facade, Engine* engine)
+    {
+        if (!player || !facade || !engine || !sPlayerbotAIConfig.rtgPvpStrategyEnable)
+            return;
+
+        bool isArenaLane = false;
+        std::string addData;
+        if (!RTG_GetQueuePvpLaneContext(player, isArenaLane, addData))
+            return;
+
+        uint8 cls = player->getClass();
+        uint8 tab = AiFactory::GetPlayerSpecTab(player);
+
+        engine->removeStrategy("flee", false);
+        engine->removeStrategy("threat", false);
+        engine->addStrategy("boost", false);
+        engine->addStrategy("dps assist", false);
+
+        if (PlayerbotAI::IsHeal(player, true))
+        {
+            engine->removeStrategy("healer dps", false);
+            engine->removeStrategy("save mana", false);
+        }
+
+        switch (cls)
+        {
+            case CLASS_ROGUE:
+                engine->addStrategy("behind", false);
+                engine->addStrategy("stealth", false);
+                engine->addStrategy("cc", false);
+                if (isArenaLane)
+                    engine->removeStrategy("aoe", false);
+                break;
+            case CLASS_DRUID:
+                if (tab == DRUID_TAB_FERAL)
+                {
+                    engine->removeStrategy("bear", false);
+                    engine->removeStrategy("tank", false);
+                    engine->removeStrategy("tank assist", false);
+                    engine->removeStrategy("tank face", false);
+                    engine->removeStrategy("caster", false);
+                    engine->removeStrategy("caster aoe", false);
+                    engine->removeStrategy("caster debuff", false);
+                    engine->removeStrategy("heal", false);
+                    engine->removeStrategy("resto", false);
+                    engine->removeStrategy("healer dps", false);
+                    engine->addStrategy("cat", false);
+                    engine->addStrategy("behind", false);
+                    engine->addStrategy("dps assist", false);
+                }
+                else if (tab == DRUID_TAB_RESTORATION)
+                {
+                    engine->removeStrategy("healer dps", false);
+                    engine->removeStrategy("save mana", false);
+                }
+                break;
+            case CLASS_WARRIOR:
+                if (tab != WARRIOR_TAB_PROTECTION)
+                    engine->addStrategy("behind", false);
+                break;
+            case CLASS_HUNTER:
+            case CLASS_MAGE:
+            case CLASS_WARLOCK:
+                engine->addStrategy("cc", false);
+                break;
+            case CLASS_PRIEST:
+            case CLASS_PALADIN:
+            case CLASS_SHAMAN:
+                if (PlayerbotAI::IsHeal(player, true))
+                {
+                    engine->removeStrategy("healer dps", false);
+                    engine->removeStrategy("save mana", false);
+                }
+                break;
+            default:
+                break;
+        }
+
+        std::string const& overrides = isArenaLane ? sPlayerbotAIConfig.rtgArenaCombatStrategyOverrides
+                                                   : sPlayerbotAIConfig.rtgBgCombatStrategyOverrides;
+        if (!overrides.empty())
+            engine->ChangeStrategy(overrides);
+
+        LOG_INFO("playerbots", "[RTG][PVP][STRATEGY] helper={} lane={} state=combat class={} specTab={} add='{}'",
+            player->GetName(), isArenaLane ? "arena" : "bg", cls, tab, addData);
+    }
+
+    static void RTG_ApplyPvpNonCombatDoctrine(Player* player, PlayerbotAI* facade, Engine* engine)
+    {
+        if (!player || !facade || !engine || !sPlayerbotAIConfig.rtgPvpStrategyEnable)
+            return;
+
+        bool isArenaLane = false;
+        std::string addData;
+        if (!RTG_GetQueuePvpLaneContext(player, isArenaLane, addData))
+            return;
+
+        uint8 cls = player->getClass();
+        uint8 tab = AiFactory::GetPlayerSpecTab(player);
+
+        engine->addStrategy("pvp", false);
+        engine->addStrategy("dps assist", false);
+        engine->removeStrategy("travel", false);
+        engine->removeStrategy("rpg", false);
+        engine->removeStrategy("grind", false);
+        engine->removeStrategy("move random", false);
+        if (isArenaLane)
+            engine->removeStrategy("mount", false);
+
+        if (PlayerbotAI::IsHeal(player, true))
+            engine->removeStrategy("save mana", false);
+
+        if (cls == CLASS_ROGUE)
+            engine->addStrategy("stealth", false);
+        if (cls == CLASS_DRUID && tab == DRUID_TAB_FERAL)
+            engine->addStrategy("dps assist", false);
+
+        std::string const& overrides = isArenaLane ? sPlayerbotAIConfig.rtgArenaNonCombatStrategyOverrides
+                                                   : sPlayerbotAIConfig.rtgBgNonCombatStrategyOverrides;
+        if (!overrides.empty())
+            engine->ChangeStrategy(overrides);
+
+        LOG_INFO("playerbots", "[RTG][PVP][STRATEGY] helper={} lane={} state=noncombat class={} specTab={} add='{}'",
+            player->GetName(), isArenaLane ? "arena" : "bg", cls, tab, addData);
+    }
+}
 
 AiObjectContext* AiFactory::createAiObjectContext(Player* player, PlayerbotAI* botAI)
 {
@@ -601,6 +758,8 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
         engine->removeStrategy("threat", false);
         engine->addStrategy("boost", false);
     }
+
+    RTG_ApplyPvpCombatDoctrine(player, facade, engine);
 }
 
 Engine* AiFactory::createCombatEngine(Player* player, PlayerbotAI* const facade, AiObjectContext* aiObjectContext)
@@ -823,6 +982,8 @@ void AiFactory::AddDefaultNonCombatStrategies(Player* player, PlayerbotAI* const
             nonCombatEngine->removeStrategy("mount", false);
         }
     }
+
+    RTG_ApplyPvpNonCombatDoctrine(player, facade, nonCombatEngine);
 }
 
 Engine* AiFactory::createNonCombatEngine(Player* player, PlayerbotAI* const facade, AiObjectContext* aiObjectContext)

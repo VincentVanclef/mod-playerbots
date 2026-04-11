@@ -1114,3 +1114,67 @@ After readiness gating and lane-native spec doctrine were in place, the remainin
 - `[RTG][PVP][GEAR][REJECT]` should appear for obviously wrong family pieces during rebuilds
 - helper gear quality should tighten around lane-native PvP specs instead of mixing broad PvE/random item families
 - next pass should focus on strategy doctrine and combat package tightening now that readiness, spec, and gear-family layers are aligned
+
+## 2026-04-11 — RTG PvP strategy doctrine pass + level-19 resilience cleanup
+
+### Context
+Readiness gating, lane-native spec doctrine, and PvP gear-family vetoes were already in place, but BG/arena helpers still inherited too much of the generic playerbot combat package. That left PvP helpers structurally correct on ownership/spec/gear while still behaving with world/PvE softness in combat strategy selection. The live follow-up requirement also clarified that resilience weighting was invalid for RTG level-19 twinks because the active gear doctrine does not use resilience pieces.
+
+### Changes made
+- removed RTG PvP resilience bonus loading and scoring from the helper gear doctrine so the level-19 PvP item model no longer pretends resilience is part of the target stat environment
+- added RTG PvP strategy doctrine config surfaces:
+  - `AiPlayerbot.RTG.PvPStrategy.Enable`
+  - `AiPlayerbot.RTG.PvPStrategy.BgCombatOverrides`
+  - `AiPlayerbot.RTG.PvPStrategy.ArenaCombatOverrides`
+  - `AiPlayerbot.RTG.PvPStrategy.BgNonCombatOverrides`
+  - `AiPlayerbot.RTG.PvPStrategy.ArenaNonCombatOverrides`
+- wired `AiFactory::AddDefaultCombatStrategies()` to detect queue-managed `rtg_bg:` / `rtg_arena:` helpers and tighten their combat package after the normal class defaults are built
+- wired `AiFactory::AddDefaultNonCombatStrategies()` to apply RTG lane-aware PvP non-combat cleanup for BG/arena helpers
+- added explicit `[RTG][PVP][STRATEGY]` breadcrumbs for both combat and non-combat doctrine application
+
+### Doctrine outcome
+- RTG PvP helpers now drop generic `flee` / `threat` behavior and keep `boost` + `dps assist` as stable PvP baseline behavior
+- healer PvP helpers remove `healer dps` and `save mana` so arena/BG healers stop inheriting soft PvE healing logic
+- rogues now force in `behind`, `stealth`, and `cc`, with arena also stripping `aoe` to reduce sloppy arena package drift
+- feral druids are forced toward cat-style pressure logic and stripped of bear/tank/caster/resto package leakage
+- ranged control classes like hunter, mage, and warlock now explicitly gain `cc` in the RTG PvP doctrine layer
+- arena/BG non-combat doctrine removes lingering world movement logic like travel/rpg/grind/move-random from queue-managed PvP helpers and keeps `pvp` attached
+
+### Expected validation
+- new helper rebuilds should emit `[RTG][PVP][STRATEGY]` for both combat and non-combat states
+- rogues should now consistently show stealth/behind behavior in BG and arena helper flow
+- feral druids should stop behaving like partial bear/caster hybrids in PvP helper states
+- healer BG/arena helpers should no longer re-enable `healer dps` from the RTG doctrine layer
+- no RTG PvP config or scoring surface should refer to resilience weighting anymore
+
+## 2026-04-11 — RTG PvP strategy doctrine pass + level-19 resilience cleanup
+
+### Context
+Readiness gating, lane-native spec doctrine, and PvP gear-family vetoes were already in place, but BG/arena helpers still inherited too much of the generic playerbot combat package. That left PvP helpers structurally correct on ownership/spec/gear while still behaving with world/PvE softness in combat strategy selection. The live follow-up requirement also clarified that resilience weighting was invalid for RTG level-19 twinks because the active gear doctrine does not use resilience pieces.
+
+### Changes made
+- removed RTG PvP resilience bonus loading and scoring from the helper gear doctrine so the level-19 PvP item model no longer pretends resilience is part of the target stat environment
+- added RTG PvP strategy doctrine config surfaces:
+  - `AiPlayerbot.RTG.PvPStrategy.Enable`
+  - `AiPlayerbot.RTG.PvPStrategy.BgCombatOverrides`
+  - `AiPlayerbot.RTG.PvPStrategy.ArenaCombatOverrides`
+  - `AiPlayerbot.RTG.PvPStrategy.BgNonCombatOverrides`
+  - `AiPlayerbot.RTG.PvPStrategy.ArenaNonCombatOverrides`
+- wired `AiFactory::AddDefaultCombatStrategies()` to detect queue-managed `rtg_bg:` / `rtg_arena:` helpers and tighten their combat package after the normal class defaults are built
+- wired `AiFactory::AddDefaultNonCombatStrategies()` to apply RTG lane-aware PvP non-combat cleanup for BG/arena helpers
+- added explicit `[RTG][PVP][STRATEGY]` breadcrumbs for both combat and non-combat doctrine application
+
+### Doctrine outcome
+- RTG PvP helpers now drop generic `flee` / `threat` behavior and keep `boost` + `dps assist` as stable PvP baseline behavior
+- healer PvP helpers remove `healer dps` and `save mana` so arena/BG healers stop inheriting soft PvE healing logic
+- rogues now force in `behind`, `stealth`, and `cc`, with arena also stripping `aoe` to reduce sloppy arena package drift
+- feral druids are forced toward cat-style pressure logic and stripped of bear/tank/caster/resto package leakage
+- ranged control classes like hunter, mage, and warlock now explicitly gain `cc` in the RTG PvP doctrine layer
+- arena/BG non-combat doctrine removes lingering world movement logic like travel/rpg/grind/move-random from queue-managed PvP helpers and keeps `pvp` attached
+
+### Expected validation
+- new helper rebuilds should emit `[RTG][PVP][STRATEGY]` for both combat and non-combat states
+- rogues should now consistently show stealth/behind behavior in BG and arena helper flow
+- feral druids should stop behaving like partial bear/caster hybrids in PvP helper states
+- healer BG/arena helpers should no longer re-enable `healer dps` from the RTG doctrine layer
+- no RTG PvP config or scoring surface should refer to resilience weighting anymore

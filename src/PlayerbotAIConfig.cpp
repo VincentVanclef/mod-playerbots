@@ -276,8 +276,12 @@ bool PlayerbotAIConfig::Initialize()
     rtgPrefer19If19Queueing = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.Prefer19If19Queueing", true);
     rtgPvpGearStrict = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.PvPGear.Strict", true);
     rtgPvpGearStaminaWeightBonus = sConfigMgr->GetOption<float>("AiPlayerbot.RTG.PvPGear.StaminaWeightBonus", 0.45f);
-    rtgPvpGearResilienceWeightBonus = sConfigMgr->GetOption<float>("AiPlayerbot.RTG.PvPGear.ResilienceWeightBonus", 2.0f);
     rtgPvpGearCritWeightBonus = sConfigMgr->GetOption<float>("AiPlayerbot.RTG.PvPGear.CritWeightBonus", 0.35f);
+    rtgPvpStrategyEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.PvPStrategy.Enable", true);
+    rtgBgCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.BgCombatOverrides", "");
+    rtgArenaCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.ArenaCombatOverrides", "");
+    rtgBgNonCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.BgNonCombatOverrides", "");
+    rtgArenaNonCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.ArenaNonCombatOverrides", "");
 
     // Community-level pacing cap (optional)
     communityLevelCapEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.CommunityLevelCap.Enable", false);
