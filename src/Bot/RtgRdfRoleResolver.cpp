@@ -31,10 +31,8 @@ bool ClassCanRole(uint8 cls, uint32 role)
 
 uint32 DefaultRoleForClass(uint8 cls)
 {
-    if (ClassCanRole(cls, lfg::PLAYER_ROLE_HEALER))
-        return lfg::PLAYER_ROLE_HEALER;
-    if (ClassCanRole(cls, lfg::PLAYER_ROLE_TANK))
-        return lfg::PLAYER_ROLE_TANK;
+    // RTG RDF doctrine: missing/ambiguous queue-role state must fail safe to damage.
+    // Only explicit healing/tanking specs should surface healer/tank demand.
     return lfg::PLAYER_ROLE_DAMAGE;
 }
 
@@ -134,8 +132,6 @@ static bool SpecTabCanPerformRole(uint8 cls, uint8 specTab, uint32 role)
         case CLASS_PRIEST:
             if (specTab == 2)
                 return role == lfg::PLAYER_ROLE_DAMAGE;
-            if (specTab == 0)
-                return role == lfg::PLAYER_ROLE_HEALER || role == lfg::PLAYER_ROLE_DAMAGE;
             return role == lfg::PLAYER_ROLE_HEALER;
 
         case CLASS_SHAMAN:
@@ -182,8 +178,6 @@ uint32 RoleMaskForClassSpecTab(uint8 cls, uint8 specTab)
         case CLASS_PRIEST:
             if (specTab == 2)
                 return lfg::PLAYER_ROLE_DAMAGE;
-            if (specTab == 0)
-                return lfg::PLAYER_ROLE_HEALER | lfg::PLAYER_ROLE_DAMAGE;
             return lfg::PLAYER_ROLE_HEALER;
 
         case CLASS_SHAMAN:

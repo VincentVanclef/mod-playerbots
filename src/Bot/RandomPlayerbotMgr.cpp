@@ -3975,7 +3975,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 RTG_IsLoginDispatchInflight(charInfo.guid);
         };
 
-        auto countAvailableBgCandidates = [&](uint32 team) -> uint32
+        auto countAvailableBgCandidates = [&](uint32 team, bool arenaOnly) -> uint32
         {
             uint32 count = 0;
             for (CharacterInfo const& charInfo : allCharacters)
@@ -4839,12 +4839,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (bucket.assignedExtra >= bucket.need)
                     return false;
 
-                uint32 availableCandidates = countAvailableBgCandidates(bucket.team);
+                uint32 availableCandidates = countAvailableBgCandidates(bucket.team, bucket.isArena);
                 if (!availableCandidates)
                 {
                     if (RTG_QueueDebugEnabled())
                     {
-                        LOG_INFO("playerbots", "[RTG][BG][HEADROOM] queue={} bracket={} team={} phase={} need={} pending={} currentBots={} reason=no_offline_candidates",
+                        LOG_INFO("playerbots", bucket.isArena ?
+                                 "[RTG][ARENA][HEADROOM] queue={} bracket={} team={} phase={} need={} pending={} currentBots={} reason=no_offline_candidates" :
+                                 "[RTG][BG][HEADROOM] queue={} bracket={} team={} phase={} need={} pending={} currentBots={} reason=no_offline_candidates",
                                  bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, bucket.phase, bucket.need,
                                  RTG_CountPendingHelpers(), static_cast<uint32>(currentBots.size()));
                     }
@@ -4902,6 +4904,21 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             };
 
+            auto countOutstandingBgNeed = [&](bool arenaOnly) -> uint32
+            {
+                uint32 outstanding = 0;
+                for (RtgBgBucket const& bucket : orderedBgBuckets)
+                {
+                    if (arenaOnly != bucket.isArena)
+                        continue;
+
+                    if (bucket.need > bucket.assignedExtra)
+                        outstanding += (bucket.need - bucket.assignedExtra);
+                }
+
+                return outstanding;
+            };
+
             uint32 reservedLfgCapacity = lfgCapacity;
             uint32 reservedArenaCapacity = arenaCapacity;
             uint32 reservedBattlegroundCapacity = battlegroundCapacity;
@@ -4912,13 +4929,22 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             fillReservedLfgLane(reservedLfgCapacity, bgDemandActive);
             fillReservedBgLane(reservedArenaCapacity, true);
+            uint32 arenaOutstandingNeed = countOutstandingBgNeed(true);
             fillReservedBgLane(reservedBattlegroundCapacity, false);
 
-            uint32 sharedSurplus = reservedLfgCapacity + reservedArenaCapacity + reservedBattlegroundCapacity;
+            uint32 sharedSurplus = reservedLfgCapacity + reservedBattlegroundCapacity;
+            if (!arenaOutstandingNeed)
+                sharedSurplus += reservedArenaCapacity;
             lfgCapacity = 0;
             bgCapacity = 0;
             arenaCapacity = 0;
             battlegroundCapacity = 0;
+
+            if (arenaOutstandingNeed && RTG_QueueDebugEnabled())
+            {
+                LOG_INFO("playerbots", "[RTG][ARENA][RESERVE] outstandingNeed={} heldArenaCapacity={} battlegroundSharedBlocked=1 remainingCapacity={} pendingHelpers={}",
+                         arenaOutstandingNeed, reservedArenaCapacity, remainingCapacity, RTG_CountPendingHelpers());
+            }
 
             if (sharedSurplus && remainingCapacity)
             {
