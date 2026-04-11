@@ -123,6 +123,7 @@ public:
     bool rtgLowBracketCapsEnable = false;
     uint32 rtgLowBracketBotCap = 40;
     uint32 rtgLowBotsPerNewPlayer = 20;
+    bool rtgPrefer19If19Queueing = true;
 
     bool botAutologin;
     std::string randomBotMapsAsString;

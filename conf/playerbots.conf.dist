@@ -356,7 +356,7 @@ AiPlayerbot.RTG.LowBracketCaps.PerNewPlayer = 20
 # Useful for RTG realms centered around permanent level 19 gameplay.
 #     0 = disabled
 #     1 = enabled
-AiPlayerbot.RTG.Prefer19If19Queueing = 0
+AiPlayerbot.RTG.Prefer19If19Queueing = 1
 
 
 ####################################################################################################

@@ -207,6 +207,7 @@ bool PlayerbotAIConfig::Initialize()
     rtgLowBracketCapsEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.LowBracketCaps.Enable", false);
     rtgLowBracketBotCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.Cap", 40);
     rtgLowBotsPerNewPlayer = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.PerNewPlayer", 20);
+    rtgPrefer19If19Queueing = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.Prefer19If19Queueing", true);
 
     // Community-level pacing cap (optional)
     communityLevelCapEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.CommunityLevelCap.Enable", false);
@@ -225,7 +226,7 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
     debugCommunityLevelCap = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.CommunityLevelCap", false);
 
     LOG_INFO("server.loading",
-        "RTG CFG loaded: Enable={} Debug={} SmartQueue={} MaxBots={} BgMax={} LfgMax={} DemandCheck={} Grace={} NoPlayersRetire={} DungeonFinishedLogout={} QueueOwnership={} RetireRetry={} TransitionMax={} OwnershipDebug={} LowBracketCaps={} Ratio={} CommunityCap={}",
+        "RTG CFG loaded: Enable={} Debug={} SmartQueue={} MaxBots={} BgMax={} LfgMax={} DemandCheck={} Grace={} NoPlayersRetire={} DungeonFinishedLogout={} QueueOwnership={} RetireRetry={} TransitionMax={} OwnershipDebug={} LowBracketCaps={} Prefer19={} Ratio={} CommunityCap={}",
         rtgEventDriven ? 1 : 0,
         rtgEventDebug ? 1 : 0,
         rtgSmartQueue ? 1 : 0,
@@ -241,6 +242,7 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
         rtgQueueOwnershipMaxTransitionSeconds,
         rtgQueueOwnershipDebug ? 1 : 0,
         rtgLowBracketCapsEnable ? 1 : 0,
+        rtgPrefer19If19Queueing ? 1 : 0,
         usePlayerCountRatio ? 1 : 0,
         communityLevelCapEnabled ? 1 : 0);
     randomBotUpdateInterval = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotUpdateInterval", 20);
