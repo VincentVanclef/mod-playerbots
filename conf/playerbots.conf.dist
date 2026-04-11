@@ -358,6 +358,23 @@ AiPlayerbot.RTG.LowBracketCaps.PerNewPlayer = 20
 #     1 = enabled
 AiPlayerbot.RTG.Prefer19If19Queueing = 1
 
+# Enable strict RTG PvP gear-family doctrine for BG and arena queue helpers.
+#     0 = disabled
+#     1 = enabled
+AiPlayerbot.RTG.PvPGear.Strict = 1
+
+# Extra stamina weight added for RTG BG/arena helpers during item scoring.
+# Higher values make PvP helpers prefer sturdier pieces over fragile PvE-biased ones.
+AiPlayerbot.RTG.PvPGear.StaminaWeightBonus = 0.45
+
+# Extra resilience weight added for RTG BG/arena helpers during item scoring.
+# This helps PvP helpers favor true PvP pieces when available.
+AiPlayerbot.RTG.PvPGear.ResilienceWeightBonus = 2.0
+
+# Extra crit weight added for RTG BG/arena helpers during item scoring.
+# Useful for keeping low-level PvP item choices from drifting too far into flat PvE stat lines.
+AiPlayerbot.RTG.PvPGear.CritWeightBonus = 0.35
+
 
 ####################################################################################################
 # RTG — PVP SPEC DOCTRINE

@@ -1083,3 +1083,34 @@ This pass fixes **spec doctrine**, not final item-family doctrine. It ensures BG
 - druid BG/arena helpers should now resolve through RTG PvP druid templates instead of broad random druid templates
 - simultaneous BG+arena tests should no longer show helper quality drifting because the generic randombot spec tables happened to roll poorly
 - next pass should lock PvP gear doctrine so feral/caster/healer item families match the lane-native PvP talent doctrine
+
+
+## 2026-04-11 — RTG PvP gear doctrine for BG and arena helpers
+
+### Summary
+After readiness gating and lane-native spec doctrine were in place, the remaining live seam was item-family drift. BG and arena helpers could still equip pieces that were technically scoreable for a broad role but wrong for RTG PvP identity, such as feral drifting into caster leather or caster/healer helpers inheriting physical-only pieces because the final item veto layer was too soft.
+
+### Resolution
+- added RTG PvP gear doctrine config surfaces:
+  - `AiPlayerbot.RTG.PvPGear.Strict`
+  - `AiPlayerbot.RTG.PvPGear.StaminaWeightBonus`
+  - `AiPlayerbot.RTG.PvPGear.ResilienceWeightBonus`
+  - `AiPlayerbot.RTG.PvPGear.CritWeightBonus`
+- wired `StatsWeightCalculator` to detect `rtg_bg:` / `rtg_arena:` helper ownership directly from add-data
+- added strict hard-reject logic for RTG PvP helpers so clearly wrong cross-family pieces no longer merely score lower; they can be fully removed from selection
+- hard-rejected caster-only gear for melee/physical PvP specs, hard-rejected physical-only gear for caster/healer PvP specs, and hard-rejected caster-tagged items for feral druids specifically
+- added PvP weight boosts for stamina, resilience, and crit so BG/arena helpers prefer sturdier PvP-appropriate pieces when valid choices exist
+- added light class/spec shaping for rogue, feral, and arms-style physical profiles to keep their final item scoring closer to intended RTG PvP identity
+- emitted explicit `[RTG][PVP][GEAR][REJECT]` breadcrumbs so live tests can prove when invalid pieces are being filtered from helper gear assembly
+
+### Behavioral doctrine after this pass
+- feral should stop inheriting caster leather merely because it is still leather and had broad utility score
+- rogues should stay on PvP-appropriate weapon/item families instead of broad random weapon drift
+- caster/healer helpers should stop inheriting obvious physical-only gear families unless the item also has meaningful caster/healer identity
+- arena should slightly prefer resilience-weighted gear even more strongly than BG
+
+### Proof to demand next
+- feral helpers should no longer appear in spell-power / caster-leaning leather during BG+arena queue cycles
+- `[RTG][PVP][GEAR][REJECT]` should appear for obviously wrong family pieces during rebuilds
+- helper gear quality should tighten around lane-native PvP specs instead of mixing broad PvE/random item families
+- next pass should focus on strategy doctrine and combat package tightening now that readiness, spec, and gear-family layers are aligned

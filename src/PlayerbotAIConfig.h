@@ -124,6 +124,10 @@ public:
     uint32 rtgLowBracketBotCap = 40;
     uint32 rtgLowBotsPerNewPlayer = 20;
     bool rtgPrefer19If19Queueing = true;
+    bool rtgPvpGearStrict = true;
+    float rtgPvpGearStaminaWeightBonus = 0.45f;
+    float rtgPvpGearResilienceWeightBonus = 2.0f;
+    float rtgPvpGearCritWeightBonus = 0.35f;
 
     bool botAutologin;
     std::string randomBotMapsAsString;

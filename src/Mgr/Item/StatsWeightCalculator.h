@@ -7,6 +7,7 @@
 #define _PLAYERBOT_GEARSCORECALCULATOR_H
 
 #include "Player.h"
+#include <string>
 #include "StatsCollector.h"
 
 #define ITEM_SUBCLASS_MASK_SINGLE_HAND                                                                        \
@@ -50,6 +51,11 @@ public:
 
     void ApplyOverflowPenalty(Player* player);
     void ApplyWeightFinetune(Player* player);
+    bool HasCasterTaggedStats() const;
+    bool HasPhysicalTaggedStats() const;
+    bool HasDefensiveTaggedStats() const;
+    bool IsRtgPvpGearHardRejected(ItemTemplate const* proto) const;
+    void ApplyRtgPvpWeights(ItemTemplate const* proto);
 
 private:
     Player* player_;
@@ -62,6 +68,10 @@ private:
     bool enable_overflow_penalty_;
     bool enable_item_set_bonus_;
     bool enable_quality_blend_;
+    bool rtgQueuePvpHelper_ = false;
+    bool rtgArenaLane_ = false;
+    bool rtgPvpGearStrict_ = true;
+    std::string rtgQueueAddData_;
 
     float weight_;
     float stats_weights_[STATS_TYPE_MAX];

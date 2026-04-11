@@ -8,12 +8,15 @@
 #include <memory>
 
 #include "AiFactory.h"
+#include "Log.h"
 #include "DBCStores.h"
 #include "ItemEnchantmentMgr.h"
 #include "ItemTemplate.h"
 #include "ObjectMgr.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotAIConfig.h"
 #include "PlayerbotFactory.h"
+#include "RandomPlayerbotMgr.h"
 #include "SharedDefines.h"
 #include "SpellAuraDefines.h"
 #include "SpellMgr.h"
@@ -49,6 +52,20 @@ StatsWeightCalculator::StatsWeightCalculator(Player* player) : player_(player)
     enable_overflow_penalty_ = true;
     enable_item_set_bonus_ = true;
     enable_quality_blend_ = true;
+
+    rtgQueueAddData_ = sRandomPlayerbotMgr.RTG_GetBotEventData(player_->GetGUID().GetCounter(), "add");
+    if (rtgQueueAddData_.rfind("rtg_arena:", 0) == 0)
+    {
+        rtgQueuePvpHelper_ = true;
+        rtgArenaLane_ = true;
+    }
+    else if (rtgQueueAddData_.rfind("rtg_bg:", 0) == 0)
+    {
+        rtgQueuePvpHelper_ = true;
+        rtgArenaLane_ = false;
+    }
+
+    rtgPvpGearStrict_ = sPlayerbotAIConfig.rtgPvpGearStrict;
 }
 
 void StatsWeightCalculator::Reset()
@@ -78,7 +95,16 @@ float StatsWeightCalculator::CalculateItem(uint32 itemId, int32 randomPropertyId
     if (enable_overflow_penalty_)
         ApplyOverflowPenalty(player_);
 
+    if (rtgQueuePvpHelper_ && rtgPvpGearStrict_ && IsRtgPvpGearHardRejected(proto))
+    {
+        LOG_DEBUG("playerbots", "[RTG][PVP][GEAR][REJECT] helper={} lane={} class={} specTab={} item={} add='{}'",
+            player_->GetName(), rtgArenaLane_ ? "arena" : "bg", cls, tab, itemId, rtgQueueAddData_);
+        return -100000.0f;
+    }
+
     GenerateWeights(player_);
+    if (rtgQueuePvpHelper_)
+        ApplyRtgPvpWeights(proto);
     for (uint32 i = 0; i < STATS_TYPE_MAX; i++)
     {
         weight_ += stats_weights_[i] * collector_->stats[i];
@@ -769,5 +795,110 @@ void StatsWeightCalculator::ApplyWeightFinetune(Player* player)
             if (armor_penetration_current > 50)
                 stats_weights_[STATS_TYPE_ARMOR_PENETRATION] *= 1.2f;
         }
+    }
+}
+
+
+bool StatsWeightCalculator::HasCasterTaggedStats() const
+{
+    return collector_->stats[STATS_TYPE_INTELLECT] > 0.0f || collector_->stats[STATS_TYPE_SPIRIT] > 0.0f ||
+           collector_->stats[STATS_TYPE_SPELL_POWER] > 0.0f || collector_->stats[STATS_TYPE_HEAL_POWER] > 0.0f ||
+           collector_->stats[STATS_TYPE_MANA_REGENERATION] > 0.0f || collector_->stats[STATS_TYPE_SPELL_PENETRATION] > 0.0f;
+}
+
+bool StatsWeightCalculator::HasPhysicalTaggedStats() const
+{
+    return collector_->stats[STATS_TYPE_STRENGTH] > 0.0f || collector_->stats[STATS_TYPE_AGILITY] > 0.0f ||
+           collector_->stats[STATS_TYPE_ATTACK_POWER] > 0.0f || collector_->stats[STATS_TYPE_ARMOR_PENETRATION] > 0.0f ||
+           collector_->stats[STATS_TYPE_EXPERTISE] > 0.0f || collector_->stats[STATS_TYPE_MELEE_DPS] > 0.0f ||
+           collector_->stats[STATS_TYPE_RANGED_DPS] > 0.0f;
+}
+
+bool StatsWeightCalculator::HasDefensiveTaggedStats() const
+{
+    return collector_->stats[STATS_TYPE_DEFENSE] > 0.0f || collector_->stats[STATS_TYPE_DODGE] > 0.0f ||
+           collector_->stats[STATS_TYPE_PARRY] > 0.0f || collector_->stats[STATS_TYPE_BLOCK_RATING] > 0.0f ||
+           collector_->stats[STATS_TYPE_BLOCK_VALUE] > 0.0f;
+}
+
+bool StatsWeightCalculator::IsRtgPvpGearHardRejected(ItemTemplate const* proto) const
+{
+    if (!rtgQueuePvpHelper_ || !proto)
+        return false;
+
+    bool casterTagged = HasCasterTaggedStats();
+    bool physicalTagged = HasPhysicalTaggedStats();
+    bool defensiveTagged = HasDefensiveTaggedStats();
+
+    bool meleePhysicalSpec = (cls == CLASS_ROGUE) || (cls == CLASS_HUNTER) ||
+                             (cls == CLASS_WARRIOR && tab != WARRIOR_TAB_PROTECTION) ||
+                             (cls == CLASS_PALADIN && tab == PALADIN_TAB_RETRIBUTION) ||
+                             (cls == CLASS_SHAMAN && tab == SHAMAN_TAB_ENHANCEMENT) ||
+                             (cls == CLASS_DRUID && tab == DRUID_TAB_FERAL && !PlayerbotAI::IsTank(player_)) ||
+                             (cls == CLASS_DEATH_KNIGHT && tab != DEATH_KNIGHT_TAB_BLOOD && !PlayerbotAI::IsTank(player_));
+
+    bool casterOrHealerSpec = (cls == CLASS_MAGE) || (cls == CLASS_WARLOCK) ||
+                              (cls == CLASS_PRIEST) ||
+                              (cls == CLASS_DRUID && (tab == DRUID_TAB_BALANCE || tab == DRUID_TAB_RESTORATION)) ||
+                              (cls == CLASS_SHAMAN && (tab == SHAMAN_TAB_ELEMENTAL || tab == SHAMAN_TAB_RESTORATION)) ||
+                              (cls == CLASS_PALADIN && tab == PALADIN_TAB_HOLY);
+
+    if (meleePhysicalSpec && casterTagged && !physicalTagged && !defensiveTagged)
+        return true;
+
+    if (casterOrHealerSpec && physicalTagged && !casterTagged && !defensiveTagged)
+        return true;
+
+    if (cls == CLASS_DRUID && tab == DRUID_TAB_FERAL && casterTagged)
+        return true;
+
+    if (cls == CLASS_ROGUE && proto->Class == ITEM_CLASS_WEAPON)
+    {
+        bool isDagger = proto->SubClass == ITEM_SUBCLASS_WEAPON_DAGGER;
+        bool isSword = proto->SubClass == ITEM_SUBCLASS_WEAPON_SWORD;
+        bool isMace = proto->SubClass == ITEM_SUBCLASS_WEAPON_MACE;
+        bool isFist = proto->SubClass == ITEM_SUBCLASS_WEAPON_FIST;
+        bool isThrown = proto->SubClass == ITEM_SUBCLASS_WEAPON_THROWN;
+        if (!(isDagger || isSword || isMace || isFist || isThrown))
+            return true;
+    }
+
+    return false;
+}
+
+void StatsWeightCalculator::ApplyRtgPvpWeights(ItemTemplate const* /*proto*/)
+{
+    stats_weights_[STATS_TYPE_STAMINA] += sPlayerbotAIConfig.rtgPvpGearStaminaWeightBonus;
+    stats_weights_[STATS_TYPE_RESILIENCE] += sPlayerbotAIConfig.rtgPvpGearResilienceWeightBonus;
+    stats_weights_[STATS_TYPE_CRIT] += sPlayerbotAIConfig.rtgPvpGearCritWeightBonus;
+
+    if (rtgArenaLane_)
+        stats_weights_[STATS_TYPE_RESILIENCE] += 0.35f;
+
+    if ((cls == CLASS_ROGUE) ||
+        (cls == CLASS_DRUID && tab == DRUID_TAB_FERAL && !PlayerbotAI::IsTank(player_)) ||
+        (cls == CLASS_WARRIOR && tab == WARRIOR_TAB_ARMS))
+    {
+        stats_weights_[STATS_TYPE_AGILITY] += 0.35f;
+        stats_weights_[STATS_TYPE_ATTACK_POWER] += 0.20f;
+        stats_weights_[STATS_TYPE_MELEE_DPS] += 0.75f;
+    }
+
+    if (cls == CLASS_DRUID && tab == DRUID_TAB_FERAL)
+    {
+        stats_weights_[STATS_TYPE_INTELLECT] = 0.0f;
+        stats_weights_[STATS_TYPE_SPIRIT] = 0.0f;
+        stats_weights_[STATS_TYPE_SPELL_POWER] = 0.0f;
+        stats_weights_[STATS_TYPE_HEAL_POWER] = 0.0f;
+        stats_weights_[STATS_TYPE_MANA_REGENERATION] = 0.0f;
+    }
+
+    if ((cls == CLASS_DRUID && (tab == DRUID_TAB_BALANCE || tab == DRUID_TAB_RESTORATION)) ||
+        (cls == CLASS_SHAMAN && (tab == SHAMAN_TAB_ELEMENTAL || tab == SHAMAN_TAB_RESTORATION)) ||
+        (cls == CLASS_PRIEST) || cls == CLASS_MAGE || cls == CLASS_WARLOCK)
+    {
+        stats_weights_[STATS_TYPE_SPELL_POWER] += 0.20f;
+        stats_weights_[STATS_TYPE_HEAL_POWER] += 0.20f;
+        stats_weights_[STATS_TYPE_SPELL_PENETRATION] += 0.15f;
     }
 }
