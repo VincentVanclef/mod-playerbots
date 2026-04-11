@@ -296,6 +296,10 @@ public:
     std::vector<std::vector<uint32>> parsedHunterPetLinkOrder[3][21];
     uint32 randomClassSpecProb[MAX_CLASSES][MAX_SPECNO];
     uint32 randomClassSpecIndex[MAX_CLASSES][MAX_SPECNO];
+    uint32 rtgBgClassSpecProb[MAX_CLASSES][3];
+    uint32 rtgBgClassSpecIndex[MAX_CLASSES][3];
+    uint32 rtgArenaClassSpecProb[MAX_CLASSES][3];
+    uint32 rtgArenaClassSpecIndex[MAX_CLASSES][3];
 
     std::string commandPrefix, commandSeparator;
     std::string randomBotAccountPrefix;

@@ -1057,3 +1057,29 @@ A recent RDF test was mostly correct, but one protection warrior could still beh
 - arena helpers should log `[RTG][ARENA][ASSIGN]` and `lane=arena`
 - after scoreboard/end or real-player disappearance, helpers should leave battleground/arena naturally and then log out only after the post-leave world-return delay
 - arena dormant states should no longer leave reusable stale helpers hanging online for later arena cycles
+
+
+## 2026-04-11 — RTG lane-native PvP spec doctrine for BG and arena helpers
+
+### Summary
+Pass 1 fixed the false-body problem by forcing BG/arena helpers to become real queue-ready PvP helpers before dispatch. The next live seam was spec quality: helpers were still selecting talents through the broad randombot class-spec probability tables, which made RTG PvP lanes inherit loose generic spec distributions. That produced weak or inappropriate PvP identities such as rogues not strongly preferring subtlety and druids entering PvP helper flow without a lane-native PvP template doctrine.
+
+### Resolution
+- added RTG lane-specific spec doctrine arrays in config/runtime:
+  - `AiPlayerbot.RTG.BgClassSpecProb.<class>.<spectab>`
+  - `AiPlayerbot.RTG.BgClassSpecIndex.<class>.<spectab>`
+  - `AiPlayerbot.RTG.ArenaClassSpecProb.<class>.<spectab>`
+  - `AiPlayerbot.RTG.ArenaClassSpecIndex.<class>.<spectab>`
+- wired `PlayerbotFactory::InitTalentsTree()` to detect `rtg_bg:` / `rtg_arena:` add-data and use the RTG PvP selector instead of the generic random-spec selection path
+- wired `PlayerbotFactory::InitTalentsByTemplate()` to resolve the lane-native PvP premade template index after the base tree tab is chosen
+- default doctrine now strongly favors subtlety rogues for RTG PvP lanes and provides explicit feral/resto-biased druid defaults for BG/arena
+- emitted explicit `[RTG][PVP][SPEC]` logs so future tests can confirm class, lane, tree tab, and premade-spec template choice during helper rebuild
+
+### Important scope boundary
+This pass fixes **spec doctrine**, not final item-family doctrine. It ensures BG/arena helpers are now rebuilt through lane-native PvP talent templates. Gear-family hard vetoes such as preventing feral from equipping caster leather are still the next pass and belong in item scoring / equipment assembly.
+
+### Proof to demand next
+- queued rogues in BG/arena should overwhelmingly emit subtlety PvP spec selections in the new `[RTG][PVP][SPEC]` breadcrumbs
+- druid BG/arena helpers should now resolve through RTG PvP druid templates instead of broad random druid templates
+- simultaneous BG+arena tests should no longer show helper quality drifting because the generic randombot spec tables happened to roll poorly
+- next pass should lock PvP gear doctrine so feral/caster/healer item families match the lane-native PvP talent doctrine

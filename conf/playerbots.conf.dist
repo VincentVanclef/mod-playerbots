@@ -360,6 +360,49 @@ AiPlayerbot.RTG.Prefer19If19Queueing = 1
 
 
 ####################################################################################################
+# RTG — PVP SPEC DOCTRINE
+#
+# These settings let RTG battleground and arena queue helpers use lane-specific PvP
+# spec selection instead of the broad random randombot spec tables.
+#
+# Format:
+#   AiPlayerbot.RTG.BgClassSpecProb.<class>.<spectab>
+#   AiPlayerbot.RTG.BgClassSpecIndex.<class>.<spectab>
+#   AiPlayerbot.RTG.ArenaClassSpecProb.<class>.<spectab>
+#   AiPlayerbot.RTG.ArenaClassSpecIndex.<class>.<spectab>
+#
+# <spectab> is always 0, 1, or 2 for the base class tree tabs.
+# The *.Prob keys decide how often that tree is selected for RTG BG/arena helpers.
+# The *.Index keys decide which PremadeSpec template index is used after the tree is chosen.
+#
+# Rogue (class 4) defaults shown explicitly for clarity.
+AiPlayerbot.RTG.BgClassSpecProb.4.0 = 15
+AiPlayerbot.RTG.BgClassSpecIndex.4.0 = 3
+AiPlayerbot.RTG.BgClassSpecProb.4.1 = 10
+AiPlayerbot.RTG.BgClassSpecIndex.4.1 = 4
+AiPlayerbot.RTG.BgClassSpecProb.4.2 = 75
+AiPlayerbot.RTG.BgClassSpecIndex.4.2 = 5
+AiPlayerbot.RTG.ArenaClassSpecProb.4.0 = 10
+AiPlayerbot.RTG.ArenaClassSpecIndex.4.0 = 3
+AiPlayerbot.RTG.ArenaClassSpecProb.4.1 = 5
+AiPlayerbot.RTG.ArenaClassSpecIndex.4.1 = 4
+AiPlayerbot.RTG.ArenaClassSpecProb.4.2 = 85
+AiPlayerbot.RTG.ArenaClassSpecIndex.4.2 = 5
+
+# Druid (class 11) defaults shown explicitly for clarity.
+AiPlayerbot.RTG.BgClassSpecProb.11.0 = 15
+AiPlayerbot.RTG.BgClassSpecIndex.11.0 = 4
+AiPlayerbot.RTG.BgClassSpecProb.11.1 = 55
+AiPlayerbot.RTG.BgClassSpecIndex.11.1 = 5
+AiPlayerbot.RTG.BgClassSpecProb.11.2 = 30
+AiPlayerbot.RTG.BgClassSpecIndex.11.2 = 6
+AiPlayerbot.RTG.ArenaClassSpecProb.11.0 = 5
+AiPlayerbot.RTG.ArenaClassSpecIndex.11.0 = 4
+AiPlayerbot.RTG.ArenaClassSpecProb.11.1 = 55
+AiPlayerbot.RTG.ArenaClassSpecIndex.11.1 = 5
+AiPlayerbot.RTG.ArenaClassSpecProb.11.2 = 40
+AiPlayerbot.RTG.ArenaClassSpecIndex.11.2 = 6
+
 # RTG — DYNAMIC BOT POPULATION SCALING
 #
 # Dynamically grows or shrinks the random bot population based on the number of real players online.

@@ -35,6 +35,8 @@
 #include "QuestDef.h"
 #include "RandomItemMgr.h"
 #include "RandomPlayerbotFactory.h"
+#include "RandomPlayerbotMgr.h"
+#include "RtgQueueMetadata.h"
 #include "ReputationMgr.h"
 #include "SharedDefines.h"
 #include "SpellAuraDefines.h"
@@ -61,6 +63,72 @@ std::list<uint32> PlayerbotFactory::specialQuestIds;
 std::vector<uint32> PlayerbotFactory::enchantSpellIdCache;
 std::vector<uint32> PlayerbotFactory::enchantGemIdCache;
 std::unordered_map<uint32, std::vector<uint32>> PlayerbotFactory::trainerIdCache;
+
+namespace
+{
+    static bool RTG_HasPrefix(std::string const& value, char const* prefix)
+    {
+        return prefix && value.rfind(prefix, 0) == 0;
+    }
+
+    static bool RTG_GetQueuePvpLaneContext(Player* bot, bool& isArenaLane, std::string& addData)
+    {
+        if (!bot)
+            return false;
+
+        addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+        if (RTG_HasPrefix(addData, "rtg_arena:"))
+        {
+            isArenaLane = true;
+            return true;
+        }
+
+        if (RTG_HasPrefix(addData, "rtg_bg:"))
+        {
+            isArenaLane = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    static bool RTG_SelectConfiguredPvpSpecTab(Player* bot, bool isArenaLane, uint32& specTab)
+    {
+        if (!bot)
+            return false;
+
+        uint8 cls = bot->getClass();
+        uint32 pointSum = 0;
+        for (uint32 i = 0; i < 3; ++i)
+            pointSum += isArenaLane ? sPlayerbotAIConfig.rtgArenaClassSpecProb[cls][i] : sPlayerbotAIConfig.rtgBgClassSpecProb[cls][i];
+
+        if (!pointSum)
+            return false;
+
+        uint32 point = urand(1u, pointSum);
+        uint32 current = 0;
+        for (uint32 i = 0; i < 3; ++i)
+        {
+            current += isArenaLane ? sPlayerbotAIConfig.rtgArenaClassSpecProb[cls][i] : sPlayerbotAIConfig.rtgBgClassSpecProb[cls][i];
+            if (point <= current)
+            {
+                specTab = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    static uint32 RTG_GetConfiguredPvpSpecIndex(Player* bot, bool isArenaLane, uint32 specTab)
+    {
+        if (!bot || specTab >= 3)
+            return specTab;
+
+        uint8 cls = bot->getClass();
+        return isArenaLane ? sPlayerbotAIConfig.rtgArenaClassSpecIndex[cls][specTab] : sPlayerbotAIConfig.rtgBgClassSpecIndex[cls][specTab];
+    }
+}
 
 PlayerbotFactory::PlayerbotFactory(Player* bot, uint32 level, uint32 itemQuality, uint32 gearScoreLimit)
     : level(level), itemQuality(itemQuality), gearScoreLimit(gearScoreLimit), bot(bot)
@@ -1113,12 +1181,23 @@ void PlayerbotFactory::ResetQuests()
 
 void PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_template /*true*/, bool reset /*false*/)
 {
-    uint32 specTab;
+    uint32 specTab = 0;
     uint8 cls = bot->getClass();
-    std::map<uint8, uint32> tabs = AiFactory::GetPlayerSpecTabs(bot);
-    uint32 total_tabs = tabs[0] + tabs[1] + tabs[2];
-    if (increment && total_tabs != 0)
+    bool rtgIsArenaLane = false;
+    std::string rtgAddData;
+    bool rtgQueuePvpHelper = RTG_GetQueuePvpLaneContext(bot, rtgIsArenaLane, rtgAddData);
+    if (rtgQueuePvpHelper && RTG_SelectConfiguredPvpSpecTab(bot, rtgIsArenaLane, specTab))
     {
+        uint32 specIndex = RTG_GetConfiguredPvpSpecIndex(bot, rtgIsArenaLane, specTab);
+        LOG_INFO("playerbots", "[RTG][PVP][SPEC] helper={} lane={} class={} specTab={} specIndex={} add='{}'",
+            bot->GetGUID().GetCounter(), rtgIsArenaLane ? "arena" : "bg", uint32(cls), specTab, specIndex, rtgAddData);
+    }
+    else
+    {
+        std::map<uint8, uint32> tabs = AiFactory::GetPlayerSpecTabs(bot);
+        uint32 total_tabs = tabs[0] + tabs[1] + tabs[2];
+        if (increment && total_tabs != 0)
+        {
         /// @todo: match current talent with template
         specTab = AiFactory::GetPlayerSpecTab(bot);
         /// @todo: fix cat druid hardcode
@@ -1162,6 +1241,7 @@ void PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_templa
             specTab = 0;
             LOG_ERROR("playerbots", "Fail to select spec num for bot {}! Set to 0.", bot->GetName());
         }
+    }
     }
     if (reset)
     {
@@ -2758,7 +2838,15 @@ void PlayerbotFactory::InitTalentsByTemplate(uint32 specTab)
     // }
     uint32 cls = bot->getClass();
     int startLevel = bot->GetLevel();
+    bool rtgIsArenaLane = false;
+    std::string rtgAddData;
     uint32 specIndex = sPlayerbotAIConfig.randomClassSpecIndex[cls][specTab];
+    if (RTG_GetQueuePvpLaneContext(bot, rtgIsArenaLane, rtgAddData))
+    {
+        uint32 configuredSpecIndex = RTG_GetConfiguredPvpSpecIndex(bot, rtgIsArenaLane, specTab);
+        if (configuredSpecIndex < MAX_SPECNO && !sPlayerbotAIConfig.premadeSpecName[cls][configuredSpecIndex].empty())
+            specIndex = configuredSpecIndex;
+    }
     uint32 classMask = bot->getClassMask();
     std::unordered_map<uint32, std::vector<TalentEntry const*>> spells_row;
     for (uint32 i = 0; i < sTalentStore.GetNumRows(); ++i)

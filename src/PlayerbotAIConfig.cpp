@@ -17,6 +17,72 @@
 #include "Talentspec.h"
 
 
+
+namespace
+{
+    static uint32 RTG_DefaultBgSpecProb(uint8 cls, uint32 specTab)
+    {
+        switch (cls)
+        {
+            case CLASS_WARRIOR: return specTab == 0 ? 70u : (specTab == 1 ? 10u : 20u);
+            case CLASS_PALADIN: return specTab == 0 ? 25u : (specTab == 1 ? 5u : 70u);
+            case CLASS_HUNTER: return specTab == 0 ? 15u : (specTab == 1 ? 35u : 50u);
+            case CLASS_ROGUE: return specTab == 0 ? 15u : (specTab == 1 ? 10u : 75u);
+            case CLASS_PRIEST: return specTab == 0 ? 50u : (specTab == 1 ? 10u : 40u);
+            case CLASS_DEATH_KNIGHT: return specTab == 0 ? 10u : (specTab == 1 ? 35u : 55u);
+            case CLASS_SHAMAN: return specTab == 0 ? 25u : (specTab == 1 ? 35u : 40u);
+            case CLASS_MAGE: return specTab == 0 ? 10u : (specTab == 1 ? 15u : 75u);
+            case CLASS_WARLOCK: return specTab == 0 ? 45u : (specTab == 1 ? 10u : 45u);
+            case CLASS_DRUID: return specTab == 0 ? 15u : (specTab == 1 ? 55u : 30u);
+            default: return specTab == 0 ? 33u : (specTab == 1 ? 33u : 34u);
+        }
+    }
+
+    static uint32 RTG_DefaultArenaSpecProb(uint8 cls, uint32 specTab)
+    {
+        switch (cls)
+        {
+            case CLASS_WARRIOR: return specTab == 0 ? 80u : (specTab == 1 ? 5u : 15u);
+            case CLASS_PALADIN: return specTab == 0 ? 45u : (specTab == 1 ? 5u : 50u);
+            case CLASS_HUNTER: return specTab == 0 ? 15u : (specTab == 1 ? 25u : 60u);
+            case CLASS_ROGUE: return specTab == 0 ? 10u : (specTab == 1 ? 5u : 85u);
+            case CLASS_PRIEST: return specTab == 0 ? 65u : (specTab == 1 ? 5u : 30u);
+            case CLASS_DEATH_KNIGHT: return specTab == 0 ? 5u : (specTab == 1 ? 45u : 50u);
+            case CLASS_SHAMAN: return specTab == 0 ? 15u : (specTab == 1 ? 35u : 50u);
+            case CLASS_MAGE: return specTab == 0 ? 10u : (specTab == 1 ? 10u : 80u);
+            case CLASS_WARLOCK: return specTab == 0 ? 50u : (specTab == 1 ? 5u : 45u);
+            case CLASS_DRUID: return specTab == 0 ? 5u : (specTab == 1 ? 55u : 40u);
+            default: return specTab == 0 ? 33u : (specTab == 1 ? 33u : 34u);
+        }
+    }
+
+    static uint32 RTG_DefaultBgSpecIndex(uint8 cls, uint32 specTab)
+    {
+        switch (cls)
+        {
+            case CLASS_WARRIOR:
+            case CLASS_PALADIN:
+            case CLASS_HUNTER:
+            case CLASS_ROGUE:
+            case CLASS_PRIEST:
+            case CLASS_SHAMAN:
+            case CLASS_WARLOCK:
+                return specTab + 3u;
+            case CLASS_DRUID:
+            case CLASS_MAGE:
+            case CLASS_DEATH_KNIGHT:
+                return specTab == 0 ? 4u : (specTab == 1 ? 5u : 6u);
+            default:
+                return specTab;
+        }
+    }
+
+    static uint32 RTG_DefaultArenaSpecIndex(uint8 cls, uint32 specTab)
+    {
+        return RTG_DefaultBgSpecIndex(cls, specTab);
+    }
+}
+
 template <class T>
 void LoadList(std::string const value, T& list)
 {
@@ -539,6 +605,24 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
             os.clear();
             os << "AiPlayerbot.RandomClassSpecIndex." << cls << "." << spec;
             randomClassSpecIndex[cls][spec] = sConfigMgr->GetOption<uint32>(os.str().c_str(), spec, false);
+        }
+        for (uint32 specTab = 0; specTab < 3; ++specTab)
+        {
+            std::ostringstream os;
+            os << "AiPlayerbot.RTG.BgClassSpecProb." << cls << "." << specTab;
+            rtgBgClassSpecProb[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultBgSpecProb(cls, specTab), false);
+            os.str("");
+            os.clear();
+            os << "AiPlayerbot.RTG.BgClassSpecIndex." << cls << "." << specTab;
+            rtgBgClassSpecIndex[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultBgSpecIndex(cls, specTab), false);
+            os.str("");
+            os.clear();
+            os << "AiPlayerbot.RTG.ArenaClassSpecProb." << cls << "." << specTab;
+            rtgArenaClassSpecProb[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultArenaSpecProb(cls, specTab), false);
+            os.str("");
+            os.clear();
+            os << "AiPlayerbot.RTG.ArenaClassSpecIndex." << cls << "." << specTab;
+            rtgArenaClassSpecIndex[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultArenaSpecIndex(cls, specTab), false);
         }
     }
 
