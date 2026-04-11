@@ -235,6 +235,11 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
         ledger.AssignQueueOwnership(botId, entry->target, entry->purpose, "invited for battleground");
         ledger.MarkState(botId, RtgHelperState::Invited, "invited for battleground");
         entry->pendingBgJoin = true;
+        if (BattlegroundMgr::BGArenaType(queueTypeId) != 0 || uint32(queueTypeId) == 9u)
+        {
+            LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} bracket={} team={} state=invited",
+                botId, uint32(queueTypeId), uint32(bracketId), uint32(bot->GetTeamId()));
+        }
         if (sPlayerbotAIConfig.rtgQueueOwnershipProtectInBattleground)
             ledger.Protect(botId, nowMs + sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds * IN_MILLISECONDS, "invite protection");
         return;
@@ -245,6 +250,11 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
         uint32 instanceId = bot->GetInstanceId();
         ledger.AssignBattlegroundOwnership(botId, instanceId, "entered battleground");
         ledger.MarkState(botId, RtgHelperState::InBattleground, "entered battleground");
+        if (BattlegroundMgr::BGArenaType(queueTypeId) != 0 || uint32(queueTypeId) == 9u)
+        {
+            LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} bracket={} team={} state=entered instance={}",
+                botId, uint32(queueTypeId), uint32(bracketId), uint32(bot->GetTeamId()), instanceId);
+        }
         if (sPlayerbotAIConfig.rtgQueueOwnershipProtectInBattleground)
             ledger.Protect(botId, nowMs + sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds * IN_MILLISECONDS, "battleground protection");
         return;
