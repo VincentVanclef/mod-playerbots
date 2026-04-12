@@ -506,6 +506,31 @@ namespace
         return owner->InBattleground() || owner->InArena();
     }
 
+    static bool RTG_ShouldAbandonLfgForBattlegroundOwner(uint32 ownerGuid)
+    {
+        if (!ownerGuid)
+            return false;
+
+        Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ownerGuid));
+        if (!owner)
+            return false;
+
+        if (!owner->InBattleground() && !owner->InArena())
+            return false;
+
+        ObjectGuid queueGuid = owner->GetGUID();
+        if (Group* group = owner->GetGroup())
+        {
+            lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+            if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+                queueGuid = group->GetGUID();
+        }
+
+        // Once the owner has actually engaged the RDF/LFG system, do not tear
+        // helpers back down just because the owner is still finishing a BG exit.
+        return sLFGMgr->GetState(queueGuid) == lfg::LFG_STATE_NONE;
+    }
+
     static uint32 RTG_StrictPrimaryRoleForClassSpecTab(uint8 cls, uint8 specTab)
     {
         uint32 roleMask = RTG::RoleMaskForClassSpecTab(cls, specTab);
@@ -3068,7 +3093,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 
 			bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
-            bool ownerInBgMap = RTG_IsOwnerInBattlegroundMap(desiredOwner);
+            bool ownerInBgMap = RTG_ShouldAbandonLfgForBattlegroundOwner(desiredOwner);
 
 			Map* map = bot->GetMap();
 			if (map && (map->IsDungeon() || map->IsRaid()))
@@ -5013,6 +5038,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return aPriority < bPriority;
                 if (a.isArena != b.isArena)
                     return a.isArena > b.isArena;
+                if (a.currentTeamCount != b.currentTeamCount)
+                    return a.currentTeamCount < b.currentTeamCount;
                 if (a.need != b.need)
                     return a.need > b.need;
                 if (a.realQueued != b.realQueued)
@@ -6319,7 +6346,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         uint32 desiredLevel = 0;
         uint32 desiredRole = 0;
         uint32 desiredOwner = 0;
-        if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner) && RTG_IsOwnerInBattlegroundMap(desiredOwner))
+        if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner) && RTG_ShouldAbandonLfgForBattlegroundOwner(desiredOwner))
         {
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_map", bot, desiredOwner));
             RTG_ClearPvpClaim(bot);

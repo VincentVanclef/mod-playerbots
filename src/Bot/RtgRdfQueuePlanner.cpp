@@ -175,9 +175,13 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
 
     if (anyRealLfgDemand && desiredHelperTotal)
     {
-        uint32 globalStart = anyReady
+        uint32 computedGlobalStart = anyReady
             ? (now - sPlayerbotAIConfig.rtgQueueGraceSeconds)
             : (oldestPendingStart ? oldestPendingStart : now);
+        uint32 existingGlobalStart = mgr.RTG_GetBotEventValue(0, "rtg_lfg_start");
+        uint32 globalStart = existingGlobalStart
+            ? std::min(existingGlobalStart, computedGlobalStart)
+            : computedGlobalStart;
 
         uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgLfgMaxBots);
 
