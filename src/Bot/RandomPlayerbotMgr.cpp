@@ -3192,6 +3192,26 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool worldReturnPending = GetEventValue(botId, worldReturnSinceKey) != 0;
             bool leaveRequested = GetEventValue(botId, leaveRequestedKey) != 0;
 
+            // If demand came back for this helper, stale retirement state must not keep it
+            // trapped in the return-world path while the planner is trying to refill.
+            if (!noLongerNeeded && (retireWhenSafe || worldReturnPending || leaveRequested))
+            {
+                SetEventValue(botId, retireWhenSafeKey, 0, 0);
+                SetEventValue(botId, worldReturnSinceKey, 0, 0);
+                SetEventValue(botId, leaveRequestedKey, 0, 0);
+                if (!inQueueState)
+                    SetEventValue(botId, queueRetryKey, 0, 0);
+
+                RTG_RuntimeBreadcrumb(fmt::format(
+                    "[RTG][{}][RESUME] helper={} queue={} reason=demand_restored inQueue={} retiring={} worldReturn={} leaveRequested={}",
+                    laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, retireWhenSafe ? 1 : 0,
+                    worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0));
+
+                retireWhenSafe = false;
+                worldReturnPending = false;
+                leaveRequested = false;
+            }
+
             if (noLongerNeeded && !inQueueState && !retireWhenSafe && !worldReturnPending)
                 SetEventValue(botId, retireWhenSafeKey, 1, 120, addData);
 
