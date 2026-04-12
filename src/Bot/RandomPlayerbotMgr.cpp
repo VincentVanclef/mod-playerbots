@@ -292,9 +292,9 @@ namespace
         if (sPlayerbotAIConfig.rtgEventDriven)
         {
             if (phase >= 4u)
-                return 12u;
+                return 4u;
             if (phase == 3u)
-                return 10u;
+                return 6u;
             return std::max<uint32>(10u, std::min<uint32>(16u, RTG_GetPendingHelperLoginGlobalCap()));
         }
 

@@ -16,6 +16,22 @@
 
 namespace
 {
+    static uint32 RTG_ClampBgPhaseTeamNeed(uint32 phase, uint32 need)
+    {
+        if (!need)
+            return 0u;
+
+        // Seed/start phases can fill aggressively so a battleground actually opens.
+        // Once the match is live, refill in smaller chunks to preserve room for real
+        // players and avoid overreacting to temporary join/teleport skew.
+        if (phase >= 4u)
+            return std::min<uint32>(need, 2u);
+        if (phase == 3u)
+            return std::min<uint32>(need, 3u);
+
+        return need;
+    }
+
     struct RTG_LiveBgDemand
     {
         uint32 queueAlliance = 0;
@@ -408,7 +424,7 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 mgr.RTG_SetGlobalEvent(RTG_MakeBgActiveStartKey(uint32(queueTypeId), uint32(bracketId)), activeStart, 7200);
 
                 uint32 elapsed = activeStart && nowSecs >= activeStart ? (nowSecs - activeStart) : 0u;
-                uint32 rampSteps = elapsed / 90u;
+                uint32 rampSteps = elapsed / 45u;
                 uint32 rampTarget = minPerTeam + (rampSteps * 2u);
                 uint32 liveTarget = std::max(activeCurrentAlliance, activeCurrentHorde);
                 liveTarget = std::max(liveTarget, minPerTeam);
@@ -433,6 +449,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 hordeTarget = matureTarget;
                 allianceNeed = allianceTarget > activeCurrentAlliance ? (allianceTarget - activeCurrentAlliance) : 0u;
                 hordeNeed = hordeTarget > activeCurrentHorde ? (hordeTarget - activeCurrentHorde) : 0u;
+                allianceNeed = RTG_ClampBgPhaseTeamNeed(phase, allianceNeed);
+                hordeNeed = RTG_ClampBgPhaseTeamNeed(phase, hordeNeed);
             }
             else if (hasRealQueuedSeed)
             {
@@ -446,6 +464,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 hordeTarget = startupTarget;
                 allianceNeed = allianceTarget > queueCurrentAlliance ? (allianceTarget - queueCurrentAlliance) : 0u;
                 hordeNeed = hordeTarget > queueCurrentHorde ? (hordeTarget - queueCurrentHorde) : 0u;
+                allianceNeed = RTG_ClampBgPhaseTeamNeed(phase, allianceNeed);
+                hordeNeed = RTG_ClampBgPhaseTeamNeed(phase, hordeNeed);
             }
             else
             {
