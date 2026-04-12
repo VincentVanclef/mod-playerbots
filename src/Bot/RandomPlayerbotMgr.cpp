@@ -4634,6 +4634,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                         sPlayerbotAIConfig.maxRandomBotInWorldTime)
                                 : sPlayerbotAIConfig.permanentlyInWorldTime;
 
+            // Every new queue assignment starts from a clean lane state so reused helpers
+            // cannot inherit stale retire/drain flags from an earlier session.
+            RTG_ClearQueueHelperState(charInfo.guid, false);
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
             if (RTG_IsManagedPvpAddData(addData))
