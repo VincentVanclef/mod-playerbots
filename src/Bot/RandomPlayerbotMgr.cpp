@@ -81,7 +81,7 @@ namespace
 	// --- RDF strict spec-role helper declarations ---
 	static bool RTG_IsPureDpsClass(uint8 cls);
 	static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
-    static bool RTG_TryRecoverRdfHelperToWorld(Player* bot, char const* reason);
+    static bool RTG_RecoverQueuedDungeonHelper(Player* bot, uint32 botId, char const* reason);
     static bool RTG_GroupHasRealPlayer(Group* group);
     static void RTG_LeaveBotOnlyGroup(Player* bot);
     static bool RTG_IsArenaQueueType(BattlegroundQueueTypeId queueTypeId);
@@ -1767,7 +1767,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
 
     if (lfgManaged)
     {
-        RTG_TryRecoverRdfHelperToWorld(bot, reason ? reason : "rtg_lfg_logout");
+        RTG_RecoverQueuedDungeonHelper(bot, botId, reason ? reason : "rtg_lfg_logout");
         RTG_LeaveBotOnlyGroup(bot);
         if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             RTG::RtgQueueLedger::Instance().Release(botId, reason ? reason : "rtg_lfg_logout");
