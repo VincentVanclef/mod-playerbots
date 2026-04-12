@@ -759,6 +759,15 @@ namespace
                sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
     }
 
+    static bool RTG_HasCommittedLfgQueuePresence(uint32 botId)
+    {
+        return RTG_GetProposalLock(botId) ||
+               RTG_GetProposalAcceptSentAt(botId) ||
+               RTG_GetTeleportSentAt(botId) ||
+               RTG_GetTeleportAttempts(botId) ||
+               RTG_GetGroupReadySince(botId);
+    }
+
     static void RTG_ClearProposalAcceptState(uint32 botId, std::string const& addData = "")
     {
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_proposal_lock", 0, 0);
@@ -6221,7 +6230,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             lfg::LfgState botState = sLFGMgr->GetState(managedBot->GetGUID());
             countsInQueuedState = (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON);
         }
-        countsInQueuedState = countsInQueuedState || RTG_HasActiveLfgTransitionState(botId);
+        countsInQueuedState = countsInQueuedState || RTG_HasCommittedLfgQueuePresence(botId);
 
         uint32 roleToCount = desiredRole ? desiredRole : lfg::PLAYER_ROLE_DAMAGE;
         if (countsInQueuedState)
