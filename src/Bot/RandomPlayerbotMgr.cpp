@@ -1125,14 +1125,50 @@ namespace
         return "rtg_bg_real_demand:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+    static std::string RTG_MakeArenaDemandKey(uint32 queueType, uint32 bracketId)
+    {
+        return "rtg_arena_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
     static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
     {
         return "rtg_bg_team_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
     }
 
+    static std::string RTG_MakeArenaTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
+    {
+        return "rtg_arena_team_need:" + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
+    }
+
     static std::string RTG_MakeBgPhaseKey(uint32 queueType, uint32 bracketId)
     {
         return "rtg_bg_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static std::string RTG_MakeArenaPhaseKey(uint32 queueType, uint32 bracketId)
+    {
+        return "rtg_arena_phase:" + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static std::string RTG_MakePvpDemandKey(uint32 queueType, uint32 bracketId)
+    {
+        return RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueType)) ?
+            RTG_MakeArenaDemandKey(queueType, bracketId) :
+            RTG_MakeBgDemandKey(queueType, bracketId);
+    }
+
+    static std::string RTG_MakePvpTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
+    {
+        return RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueType)) ?
+            RTG_MakeArenaTeamNeedKey(queueType, bracketId, teamId) :
+            RTG_MakeBgTeamNeedKey(queueType, bracketId, teamId);
+    }
+
+    static std::string RTG_MakePvpPhaseKey(uint32 queueType, uint32 bracketId)
+    {
+        return RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueType)) ?
+            RTG_MakeArenaPhaseKey(queueType, bracketId) :
+            RTG_MakeBgPhaseKey(queueType, bracketId);
     }
 
     static void RTG_ClearQueueDebuffs(Player* bot)
@@ -2887,7 +2923,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
                 {
                     if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
-                        bgHasRealDemand = GetEventValue(0, RTG_MakeBgDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
+                        bgHasRealDemand = GetEventValue(0, RTG_MakePvpDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
                 }
             }
 
@@ -4333,7 +4369,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.teamSize = bgTeamSizes[std::make_pair(desiredQueueType, dataLevel)];
                         bucket.isArena = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType));
                         bucket.realQueued = bgQueueTotals[std::make_pair(desiredQueueType, dataLevel)];
-                        bucket.phase = GetEventValue(0, RTG_MakeBgPhaseKey(desiredQueueType, uint32(bracketId)));
+                        bucket.phase = GetEventValue(0, RTG_MakePvpPhaseKey(desiredQueueType, uint32(bracketId)));
 
                         BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
                         bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
@@ -4362,11 +4398,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 queueTypeId = queuePair.first.first;
                 uint32 bracketId = queuePair.first.second;
                 RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(queuePair.second, sPlayerbotAIConfig.rtgQueueBotLevel);
-                uint32 phase = GetEventValue(0, RTG_MakeBgPhaseKey(queueTypeId, bracketId));
+                uint32 phase = GetEventValue(0, RTG_MakePvpPhaseKey(queueTypeId, bracketId));
 
                 for (uint32 teamId : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
                 {
-                    uint32 teamNeed = GetEventValue(0, RTG_MakeBgTeamNeedKey(queueTypeId, bracketId, teamId));
+                    uint32 teamNeed = GetEventValue(0, RTG_MakePvpTeamNeedKey(queueTypeId, bracketId, teamId));
                     if (!teamNeed)
                         continue;
 
@@ -4455,11 +4491,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         continue;
 
                     uint32 level = bgInfo.maxLevel ? bgInfo.maxLevel : bgInfo.minLevel;
-                    uint32 phase = GetEventValue(0, RTG_MakeBgPhaseKey(queueTypeId, uint32(bracketId)));
+                    uint32 phase = GetEventValue(0, RTG_MakePvpPhaseKey(queueTypeId, uint32(bracketId)));
 
                     for (uint32 team : {static_cast<uint32>(TEAM_ALLIANCE), static_cast<uint32>(TEAM_HORDE)})
                     {
-                        uint32 plannerNeed = GetEventValue(0, RTG_MakeBgTeamNeedKey(queueTypeId, uint32(bracketId), team));
+                        uint32 plannerNeed = GetEventValue(0, RTG_MakePvpTeamNeedKey(queueTypeId, uint32(bracketId), team));
                         bool alreadyPlannedAdaptive = false;
                         for (auto& bgEntry : bgBuckets)
                         {
