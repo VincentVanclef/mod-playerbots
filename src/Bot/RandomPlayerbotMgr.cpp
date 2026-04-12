@@ -502,6 +502,8 @@ namespace
         return owner->InBattleground() || owner->InArena();
     }
 
+    static bool RTG_PvpClaimAllowsQueue(uint32 botGuid, uint32 desiredQueueType);
+
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
     {
         if (!bot || !desiredQueueType || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
