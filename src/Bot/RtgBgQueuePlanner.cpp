@@ -447,8 +447,13 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 phase = matureTarget > minPerTeam ? 4u : 3u;
                 allianceTarget = matureTarget;
                 hordeTarget = matureTarget;
-                allianceNeed = allianceTarget > activeCurrentAlliance ? (allianceTarget - activeCurrentAlliance) : 0u;
-                hordeNeed = hordeTarget > activeCurrentHorde ? (hordeTarget - activeCurrentHorde) : 0u;
+                // Once a battleground is already live, count committed queue-side helpers
+                // toward the target so we do not keep acquiring more bots for a slot that
+                // is already reserved but has not transitioned in-world yet.
+                uint32 committedAlliance = std::min(allianceTarget, std::max(activeCurrentAlliance, queueCurrentAlliance));
+                uint32 committedHorde = std::min(hordeTarget, std::max(activeCurrentHorde, queueCurrentHorde));
+                allianceNeed = allianceTarget > committedAlliance ? (allianceTarget - committedAlliance) : 0u;
+                hordeNeed = hordeTarget > committedHorde ? (hordeTarget - committedHorde) : 0u;
                 allianceNeed = RTG_ClampBgPhaseTeamNeed(phase, allianceNeed);
                 hordeNeed = RTG_ClampBgPhaseTeamNeed(phase, hordeNeed);
             }
