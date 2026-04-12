@@ -3313,7 +3313,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             uint32 dispatchSince = GetEventValue(botId, dispatchSinceKey);
             uint32 nowTs = NowSeconds();
             bool drainingLifecycle = retireWhenSafe || worldReturnPending || leaveRequested;
-            bool noLongerNeeded = drainingLifecycle || !bgHasRealDemand || !rtgBgDemand || wrongTeam || !plannerWantsHelper;
+            // Per-lane demand decides lifecycle ownership. A zero global BG need total only
+            // means no extra helpers are needed right now; it must not retire helpers that
+            // are actively serving a live battleground or arena with real demand.
+            bool noLongerNeeded = drainingLifecycle || !bgHasRealDemand || wrongTeam || !plannerWantsHelper;
 
             if (activeDesiredPresence)
                 SetEventValue(botId, dispatchSinceKey, 0, 0);
@@ -3328,10 +3331,17 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                 if (!wrongTeam && bgHasRealDemand && plannerWantsHelper)
                 {
-                    RTG_RuntimeBreadcrumb(fmt::format(
-                        "[RTG][{}][DRAIN_HOLD] helper={} queue={} inQueue={} retiring={} worldReturn={} leaveRequested={} phase={} teamNeed={}",
-                        laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, retireWhenSafe ? 1 : 0,
-                        worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0, plannerPhase, plannerTeamNeed));
+                    static std::unordered_map<uint64, uint32> sNextDrainHoldLogAt;
+                    uint64 drainKey = (uint64(botId) << 32) | uint64(desiredQueueType);
+                    uint32& nextDrainLogAt = sNextDrainHoldLogAt[drainKey];
+                    if (!nextDrainLogAt || nowTs >= nextDrainLogAt)
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format(
+                            "[RTG][{}][DRAIN_HOLD] helper={} queue={} inQueue={} retiring={} worldReturn={} leaveRequested={} phase={} teamNeed={}",
+                            laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, retireWhenSafe ? 1 : 0,
+                            worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0, plannerPhase, plannerTeamNeed));
+                        nextDrainLogAt = nowTs + 15u;
+                    }
                 }
             }
 
