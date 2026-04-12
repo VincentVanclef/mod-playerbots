@@ -1559,6 +1559,18 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 8u;
         return bg && bg->GetBgTypeID() == desiredBgType;
     }
 
+    static bool RTG_IsActiveInDesiredBattleground(Player* bot, uint32 desiredQueueType)
+    {
+        if (!bot || desiredQueueType <= BATTLEGROUND_QUEUE_NONE || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return false;
+
+        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
+        if (desiredBgType == BATTLEGROUND_TYPE_NONE)
+            return false;
+
+        return (bot->InBattleground() || bot->InArena()) && bot->GetBattlegroundTypeId() == desiredBgType;
+    }
+
     static BattlegroundQueueTypeId RTG_FindBotQueueTypeForLeave(Player* bot)
     {
         if (!bot)
@@ -3271,6 +3283,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
             bool desiredPresence = RTG_HasDesiredBgQueuePresence(bot, desiredQueueType);
+            bool activeDesiredPresence = RTG_IsActiveInDesiredBattleground(bot, desiredQueueType);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {
@@ -3287,7 +3300,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             uint32 dispatchSince = GetEventValue(botId, dispatchSinceKey);
             uint32 nowTs = NowSeconds();
 
-            if (desiredPresence)
+            if (activeDesiredPresence)
                 SetEventValue(botId, dispatchSinceKey, 0, 0);
 
             // If demand came back for this helper, stale retirement state must not keep it
@@ -3351,6 +3364,18 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 RTG_ClearQueueDebuffs(bot);
                 SetEventValue(botId, pendingKey, 0, 0);
                 SetEventValue(botId, queueGraceKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
+
+                if (!noLongerNeeded && desiredPresence && !activeDesiredPresence && dispatchSince &&
+                    nowTs > dispatchSince && (nowTs - dispatchSince) >= RTG_GetDispatchStallThresholdSeconds() &&
+                    !bot->InBattleground() && !bot->InArena())
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format(
+                        "[RTG][{}][STALE_QUEUE] helper={} queue={} waited={} forcing_retire=1",
+                        laneTag, botId, desiredQueueType, nowTs - dispatchSince));
+                    RTG_ClearQueueHelperState(botId);
+                    rtgBgLogout.push_back(botGuid);
+                    continue;
+                }
 
                 if (noLongerNeeded)
                 {
@@ -3419,6 +3444,17 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 RTG_RuntimeBreadcrumb(fmt::format(
                     "[RTG][{}][STALE_DISPATCH] helper={} queue={} waited={} forcing_retire=1",
+                    laneTag, botId, desiredQueueType, nowTs - dispatchSince));
+                RTG_ClearQueueHelperState(botId);
+                rtgBgLogout.push_back(botGuid);
+                continue;
+            }
+
+            if (!noLongerNeeded && desiredPresence && !activeDesiredPresence && dispatchSince &&
+                nowTs > dispatchSince && (nowTs - dispatchSince) >= RTG_GetDispatchStallThresholdSeconds())
+            {
+                RTG_RuntimeBreadcrumb(fmt::format(
+                    "[RTG][{}][STALE_QUEUE] helper={} queue={} waited={} forcing_retire=1",
                     laneTag, botId, desiredQueueType, nowTs - dispatchSince));
                 RTG_ClearQueueHelperState(botId);
                 rtgBgLogout.push_back(botGuid);
@@ -4692,6 +4728,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 bool isArena = false;
                 uint32 realQueued = 0;
                 uint32 assignedExtra = 0;
+                uint32 queuedFresh = 0;
                 uint32 currentHealerCount = 0;
                 uint32 assignedHealerCount = 0;
                 uint32 desiredHealerCount = 0;
@@ -4892,10 +4929,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     }
 
                     bool countsInBgState = false;
+                    bool activeInDesiredBgState = false;
                     if (managedBot && managedBot->IsInWorld())
                     {
-                        countsInBgState = managedBot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
-                                          (managedBot->InBattleground() && managedBot->GetBattlegroundTypeId() == BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType)));
+                        countsInBgState = RTG_HasDesiredBgQueuePresence(managedBot, desiredQueueType);
+                        activeInDesiredBgState = RTG_IsActiveInDesiredBattleground(managedBot, desiredQueueType);
                     }
 
                     if (!countsInBgState)
@@ -4903,6 +4941,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         ++it->second.assignedExtra;
                         if (GetEventValue(botId, "rtg_pvp_force_role") == lfg::PLAYER_ROLE_HEALER)
                             ++it->second.assignedHealerCount;
+                    }
+                    else if (!activeInDesiredBgState)
+                    {
+                        uint32 dispatchSince = GetEventValue(botId, RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) ? "rtg_arena_dispatch_since" : "rtg_bg_dispatch_since");
+                        uint32 nowTs = NowSeconds();
+                        if (dispatchSince && nowTs >= dispatchSince && (nowTs - dispatchSince) < RTG_GetDispatchStallThresholdSeconds())
+                            ++it->second.queuedFresh;
                     }
                     else if (managedBot && it->second.isArena && RTG_GetStrictPrimaryRoleForBot(managedBot) == lfg::PLAYER_ROLE_HEALER)
                         ++it->second.currentHealerCount;
@@ -5057,6 +5102,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         }
                     }
                 }
+            }
+
+            for (auto& kv : bgBuckets)
+            {
+                RtgBgBucket& bucket = kv.second;
+                if (bucket.phase >= 3u && bucket.queuedFresh)
+                    bucket.need = bucket.need > bucket.queuedFresh ? (bucket.need - bucket.queuedFresh) : 0u;
             }
             std::vector<RtgLfgBucket> orderedLfgBuckets;
             std::vector<RtgBgBucket> orderedBgBuckets;
