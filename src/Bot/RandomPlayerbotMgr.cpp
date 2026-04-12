@@ -504,7 +504,7 @@ namespace
 
     static uint32 RTG_StrictPrimaryRoleForClassSpecTab(uint8 cls, uint8 specTab)
     {
-        uint32 roleMask = RTG_RoleMaskForClassSpecTab(cls, specTab);
+        uint32 roleMask = RTG::RoleMaskForClassSpecTab(cls, specTab);
         if (roleMask == lfg::PLAYER_ROLE_HEALER)
             return lfg::PLAYER_ROLE_HEALER;
         if (roleMask == lfg::PLAYER_ROLE_TANK)
