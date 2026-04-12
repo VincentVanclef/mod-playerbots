@@ -1539,6 +1539,26 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 8u;
         return false;
     }
 
+    static bool RTG_HasDesiredBgQueuePresence(Player* bot, uint32 desiredQueueType)
+    {
+        if (!bot || desiredQueueType <= BATTLEGROUND_QUEUE_NONE || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return false;
+
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+        if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance())
+            return true;
+
+        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
+        if (desiredBgType == BATTLEGROUND_TYPE_NONE)
+            return false;
+
+        if ((bot->InBattleground() || bot->InArena()) && bot->GetBattlegroundTypeId() == desiredBgType)
+            return true;
+
+        Battleground* bg = bot->GetBattleground();
+        return bg && bg->GetBgTypeID() == desiredBgType;
+    }
+
     static BattlegroundQueueTypeId RTG_FindBotQueueTypeForLeave(Player* bot)
     {
         if (!bot)
@@ -1833,10 +1853,12 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "add", 0, 0);
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
+        SetEventValue(botId, "rtg_bg_dispatch_since", 0, 0);
         SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
         SetEventValue(botId, "rtg_bg_world_return_since", 0, 0);
         SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
         SetEventValue(botId, "rtg_arena_pending", 0, 0);
+        SetEventValue(botId, "rtg_arena_dispatch_since", 0, 0);
         SetEventValue(botId, "rtg_arena_retire_when_safe", 0, 0);
         SetEventValue(botId, "rtg_arena_world_return_since", 0, 0);
         SetEventValue(botId, "rtg_arena_queue_retry", 0, 0);
@@ -1874,7 +1896,9 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
+    SetEventValue(bot, "rtg_bg_dispatch_since", 0, 0);
     SetEventValue(bot, "rtg_arena_pending", 0, 0);
+    SetEventValue(bot, "rtg_arena_dispatch_since", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_bg_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
@@ -3227,6 +3251,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             char const* retireWhenSafeKey = isArenaManaged ? "rtg_arena_retire_when_safe" : "rtg_bg_retire_when_safe";
             char const* leaveRequestedKey = isArenaManaged ? "rtg_arena_leave_requested" : "rtg_bg_leave_requested";
             char const* worldReturnSinceKey = isArenaManaged ? "rtg_arena_world_return_since" : "rtg_bg_world_return_since";
+            char const* dispatchSinceKey = isArenaManaged ? "rtg_arena_dispatch_since" : "rtg_bg_dispatch_since";
             char const* queueRetryKey = RTG_GetPvpQueueRetryKey(isArenaManaged);
             char const* laneTag = isArenaManaged ? "ARENA" : "BG";
             uint32 retireDelaySeconds = isArenaManaged ? RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS : RTG_BG_RETURN_WORLD_RETIRE_SECONDS;
@@ -3245,6 +3270,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
             bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
+            bool desiredPresence = RTG_HasDesiredBgQueuePresence(bot, desiredQueueType);
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {
@@ -3258,25 +3284,41 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool retireWhenSafe = GetEventValue(botId, retireWhenSafeKey) != 0;
             bool worldReturnPending = GetEventValue(botId, worldReturnSinceKey) != 0;
             bool leaveRequested = GetEventValue(botId, leaveRequestedKey) != 0;
+            uint32 dispatchSince = GetEventValue(botId, dispatchSinceKey);
+            uint32 nowTs = NowSeconds();
+
+            if (desiredPresence)
+                SetEventValue(botId, dispatchSinceKey, 0, 0);
 
             // If demand came back for this helper, stale retirement state must not keep it
             // trapped in the return-world path while the planner is trying to refill.
             if (!noLongerNeeded && (retireWhenSafe || worldReturnPending || leaveRequested))
             {
-                SetEventValue(botId, retireWhenSafeKey, 0, 0);
-                SetEventValue(botId, worldReturnSinceKey, 0, 0);
-                SetEventValue(botId, leaveRequestedKey, 0, 0);
-                if (!inQueueState)
-                    SetEventValue(botId, queueRetryKey, 0, 0);
+                bool safeToResume = desiredPresence || !lifecycleOwned;
+                if (safeToResume)
+                {
+                    SetEventValue(botId, retireWhenSafeKey, 0, 0);
+                    SetEventValue(botId, worldReturnSinceKey, 0, 0);
+                    SetEventValue(botId, leaveRequestedKey, 0, 0);
+                    if (!inQueueState)
+                        SetEventValue(botId, queueRetryKey, 0, 0);
 
-                RTG_RuntimeBreadcrumb(fmt::format(
-                    "[RTG][{}][RESUME] helper={} queue={} reason=demand_restored inQueue={} retiring={} worldReturn={} leaveRequested={}",
-                    laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, retireWhenSafe ? 1 : 0,
-                    worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0));
+                    RTG_RuntimeBreadcrumb(fmt::format(
+                        "[RTG][{}][RESUME] helper={} queue={} reason=demand_restored inQueue={} retiring={} worldReturn={} leaveRequested={}",
+                        laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, retireWhenSafe ? 1 : 0,
+                        worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0));
 
-                retireWhenSafe = false;
-                worldReturnPending = false;
-                leaveRequested = false;
+                    retireWhenSafe = false;
+                    worldReturnPending = false;
+                    leaveRequested = false;
+                }
+                else
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format(
+                        "[RTG][{}][HOLD] helper={} queue={} reason=detaching_old_lifecycle inQueue={} desiredPresence={} worldReturn={} leaveRequested={}",
+                        laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, desiredPresence ? 1 : 0,
+                        worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0));
+                }
             }
 
             if (noLongerNeeded && !inQueueState && !retireWhenSafe && !worldReturnPending)
@@ -3286,6 +3328,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 SetEventValue(botId, pendingKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(botId, queueGraceKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
+                if (!dispatchSince)
+                    SetEventValue(botId, dispatchSinceKey, nowTs, std::max<uint32>(120u, RTG_GetDispatchStallThresholdSeconds() + 60u), addData);
 
                 if (!GetEventValue(botId, queueRetryKey))
                 {
@@ -3318,7 +3362,19 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                             bool leaveIssued = RTG_RequestImmediateBgLeave(bot);
                             // Even failed leave attempts need a short backoff so protected
                             // battleground helpers do not get hammered every update tick.
-                            SetEventValue(botId, leaveRequestedKey, 1, leaveIssued ? 15 : 5, addData);
+                            SetEventValue(botId, leaveRequestedKey, nowTs, leaveIssued ? 15 : 5, addData);
+                        }
+
+                        uint32 leaveRequestedAt = GetEventValue(botId, leaveRequestedKey);
+                        if (leaveRequestedAt && nowTs > leaveRequestedAt &&
+                            (nowTs - leaveRequestedAt) >= RTG_GetDispatchStallThresholdSeconds())
+                        {
+                            RTG_RuntimeBreadcrumb(fmt::format(
+                                "[RTG][{}][STALE_LEAVE] helper={} queue={} waited={} forcing_retire=1",
+                                laneTag, botId, desiredQueueType, nowTs - leaveRequestedAt));
+                            RTG_ClearQueueHelperState(botId);
+                            rtgBgLogout.push_back(botGuid);
+                            continue;
                         }
                     }
                 }
@@ -3333,7 +3389,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                 if (noLongerNeeded)
                     SetEventValue(botId, retireWhenSafeKey, 1, 120, addData);
-                else
+                else if (desiredPresence)
                 {
                     SetEventValue(botId, retireWhenSafeKey, 0, 0);
                     SetEventValue(botId, leaveRequestedKey, 0, 0);
@@ -3357,6 +3413,17 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
 
             bool outOfBgState = !RTG_IsBgLifecycleOwned(bot, desiredQueueType);
+
+            if (!noLongerNeeded && outOfBgState && !desiredPresence && dispatchSince &&
+                nowTs > dispatchSince && (nowTs - dispatchSince) >= RTG_GetDispatchStallThresholdSeconds())
+            {
+                RTG_RuntimeBreadcrumb(fmt::format(
+                    "[RTG][{}][STALE_DISPATCH] helper={} queue={} waited={} forcing_retire=1",
+                    laneTag, botId, desiredQueueType, nowTs - dispatchSince));
+                RTG_ClearQueueHelperState(botId);
+                rtgBgLogout.push_back(botGuid);
+                continue;
+            }
 
             if (outOfBgState && (retireWhenSafe || noLongerNeeded))
             {
@@ -8253,11 +8320,15 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             {
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_arena_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_arena_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_arena_dispatch_since", NowSeconds(),
+                    std::max<uint32>(120u, RTG_GetDispatchStallThresholdSeconds() + 60u), addData);
             }
             else
             {
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_grace", 1, RTG_GetQueueGraceTtlSeconds(), addData);
+                SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_dispatch_since", NowSeconds(),
+                    std::max<uint32>(120u, RTG_GetDispatchStallThresholdSeconds() + 60u), addData);
             }
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_bg_queue_retry", 0, 0);
             SetEventValue(bot->GetGUID().GetCounter(), "rtg_arena_queue_retry", 0, 0);
@@ -8393,7 +8464,9 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     RTG_ClearPvpClaim(bot);
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
+    SetEventValue(bot, "rtg_bg_dispatch_since", 0, 0);
     SetEventValue(bot, "rtg_arena_pending", 0, 0);
+    SetEventValue(bot, "rtg_arena_dispatch_since", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
     SetEventValue(bot, "rtg_arena_pending", 0, 0);
     SetEventValue(bot, "rtg_arena_queue_grace", 0, 0);
