@@ -700,6 +700,26 @@ namespace
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_dungeon_active", 0, 0);
     }
 
+    static bool RTG_HasRequiredRdfTankLoadout(Player* bot, uint32 desiredRole)
+    {
+        if (!bot || desiredRole != lfg::PLAYER_ROLE_TANK)
+            return true;
+
+        switch (bot->getClass())
+        {
+            case CLASS_PALADIN:
+            case CLASS_WARRIOR:
+            {
+                Item* offhand = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+                return offhand && offhand->GetTemplate() &&
+                       offhand->GetTemplate()->Class == ITEM_CLASS_ARMOR &&
+                       offhand->GetTemplate()->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD;
+            }
+            default:
+                return true;
+        }
+    }
+
     static bool RTG_HasActiveLfgTransitionState(uint32 botId)
     {
         return RTG_GetProposalLock(botId) ||
@@ -2654,27 +2674,25 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                                 strictHybridMismatch = (actualRole != desiredRole);
                             break;
                         case CLASS_PRIEST:
-                            // Discipline is the only priest flex spec; Holy and Shadow are exact-role.
-                            if (actualRoleMask == (lfg::PLAYER_ROLE_HEALER | lfg::PLAYER_ROLE_DAMAGE))
-                                strictHybridMismatch = false;
-                            else
-                                strictHybridMismatch = (actualRole != desiredRole);
+                            strictHybridMismatch = (actualRole != desiredRole);
                             break;
                         default:
                             break;
                     }
 
-                    if ((actualRoleMask & desiredRole) == 0 || strictHybridMismatch)
+                    bool tankLoadoutMismatch = !RTG_HasRequiredRdfTankLoadout(bot, desiredRole);
+
+                    if ((actualRoleMask & desiredRole) == 0 || strictHybridMismatch || tankLoadoutMismatch)
                     {
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={}",
-                            botId, desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u));
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={} tankLoadoutMismatch={}",
+                            botId, desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u, tankLoadoutMismatch ? 1u : 0u));
                         RTG_SetCachedRuntimeLfgRole(botId, actualRole);
                         RTG_SetCachedRuntimeLfgRoleMask(botId, actualRoleMask);
                         RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
                         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                         SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
                         RTG_ClearQueueHelperState(botId);
-                        RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_runtime_role_mismatch");
+                        RTG_RequestQueueHelperLogout(bot->GetGUID(), tankLoadoutMismatch ? "rtg_lfg_runtime_tank_loadout_mismatch" : "rtg_lfg_runtime_role_mismatch");
                         continue;
                     }
                 }
@@ -7971,25 +7989,24 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                             strictHybridMismatch = (actualRole != desiredRole);
                         break;
                     case CLASS_PRIEST:
-                        if (actualRoleMask == (lfg::PLAYER_ROLE_HEALER | lfg::PLAYER_ROLE_DAMAGE))
-                            strictHybridMismatch = false;
-                        else
-                            strictHybridMismatch = (actualRole != desiredRole);
+                        strictHybridMismatch = (actualRole != desiredRole);
                         break;
                     default:
                         break;
                 }
 
-                if ((actualRoleMask & desiredRole) == 0 || strictHybridMismatch)
+                bool tankLoadoutMismatch = !RTG_HasRequiredRdfTankLoadout(bot, desiredRole);
+
+                if ((actualRoleMask & desiredRole) == 0 || strictHybridMismatch || tankLoadoutMismatch)
                 {
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={}",
-                        bot->GetGUID().GetCounter(), desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u));
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={} tankLoadoutMismatch={}",
+                        bot->GetGUID().GetCounter(), desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u, tankLoadoutMismatch ? 1u : 0u));
                     RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), actualRole);
                     RTG_SetCachedRuntimeLfgRoleMask(bot->GetGUID().GetCounter(), actualRoleMask);
                     RTG_BlockBotForDesiredLfgRole(bot->GetGUID().GetCounter(), desiredRole);
                     SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
                     RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
-                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_login_role_mismatch");
+                    RTG_RequestQueueHelperLogout(bot->GetGUID(), tankLoadoutMismatch ? "rtg_lfg_login_tank_loadout_mismatch" : "rtg_lfg_login_role_mismatch");
                     return;
                 }
 

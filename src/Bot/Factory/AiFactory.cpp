@@ -601,11 +601,9 @@ void AiFactory::AddDefaultCombatStrategies(Player* player, PlayerbotAI* const fa
                 case CLASS_PRIEST: engine->addStrategy("heal", false); break;
                 default: engine->addStrategy("heal", false); break;
             }
-
-            if (sPlayerbotAIConfig.autoSaveMana)
-                engine->addStrategy("save mana", false);
-            if (!sPlayerbotAIConfig.IsRestrictedHealerDPSMap(player->GetMapId()))
-                engine->addStrategy("healer dps", false);
+            engine->removeStrategy("save mana", false);
+            engine->removeStrategy("healer dps", false);
+            engine->removeStrategy("dps assist", false);
         }
 
         if (lfgTank)
