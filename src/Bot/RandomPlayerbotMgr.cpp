@@ -3269,21 +3269,27 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             uint32 retireDelaySeconds = isArenaManaged ? RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS : RTG_BG_RETURN_WORLD_RETIRE_SECONDS;
 
             bool bgHasRealDemand = false;
-            BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
-            if (desiredBgType != BATTLEGROUND_TYPE_NONE)
+            uint32 plannerPhase = 0;
+            uint32 plannerTeamNeed = 0;
+            BattlegroundBracketId desiredBracketId = BG_BRACKET_ID_FIRST;
+            uint32 queueContextMinLevel = desiredLevel;
+            uint32 queueContextMaxLevel = desiredLevel;
+            bool hasQueueContext = RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType),
+                desiredLevel ? desiredLevel : bot->GetLevel(), desiredBracketId, queueContextMinLevel, queueContextMaxLevel);
+            if (hasQueueContext)
             {
-                if (Battleground* desiredBgTemplate = sBattlegroundMgr->GetBattlegroundTemplate(desiredBgType))
-                {
-                    if (PvPDifficultyEntry const* desiredBracket = GetBattlegroundBracketByLevel(desiredBgTemplate->GetMapId(), desiredLevel ? desiredLevel : bot->GetLevel()))
-                        bgHasRealDemand = GetEventValue(0, RTG_MakePvpDemandKey(uint32(desiredQueueType), uint32(desiredBracket->GetBracketId()))) != 0;
-                }
+                bgHasRealDemand = GetEventValue(0, RTG_MakePvpDemandKey(uint32(desiredQueueType), uint32(desiredBracketId))) != 0;
+                plannerPhase = GetEventValue(0, RTG_MakePvpPhaseKey(uint32(desiredQueueType), uint32(desiredBracketId)));
+                plannerTeamNeed = GetEventValue(0, RTG_MakePvpTeamNeedKey(uint32(desiredQueueType), uint32(desiredBracketId), desiredTeam));
             }
 
             bool wrongTeam = desiredTeam && bot->GetTeamId() != desiredTeam;
-            bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || wrongTeam;
             bool lifecycleOwned = RTG_IsBgLifecycleOwned(bot, desiredQueueType);
             bool desiredPresence = RTG_HasDesiredBgQueuePresence(bot, desiredQueueType);
             bool activeDesiredPresence = RTG_IsActiveInDesiredBattleground(bot, desiredQueueType);
+            bool plannerWantsHelper = plannerPhase != 0 &&
+                (plannerTeamNeed != 0 || desiredPresence || activeDesiredPresence || lifecycleOwned);
+            bool noLongerNeeded = !bgHasRealDemand || !rtgBgDemand || wrongTeam || !plannerWantsHelper;
 
             if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
             {
@@ -3307,7 +3313,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // trapped in the return-world path while the planner is trying to refill.
             if (!noLongerNeeded && (retireWhenSafe || worldReturnPending || leaveRequested))
             {
-                bool safeToResume = desiredPresence || !lifecycleOwned;
+                bool safeToResume = plannerWantsHelper &&
+                    (desiredPresence || !lifecycleOwned) &&
+                    (!worldReturnPending || desiredPresence || activeDesiredPresence);
                 if (safeToResume)
                 {
                     SetEventValue(botId, retireWhenSafeKey, 0, 0);
@@ -3317,9 +3325,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                         SetEventValue(botId, queueRetryKey, 0, 0);
 
                     RTG_RuntimeBreadcrumb(fmt::format(
-                        "[RTG][{}][RESUME] helper={} queue={} reason=demand_restored inQueue={} retiring={} worldReturn={} leaveRequested={}",
+                        "[RTG][{}][RESUME] helper={} queue={} reason=demand_restored inQueue={} retiring={} worldReturn={} leaveRequested={} phase={} teamNeed={}",
                         laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, retireWhenSafe ? 1 : 0,
-                        worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0));
+                        worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0, plannerPhase, plannerTeamNeed));
 
                     retireWhenSafe = false;
                     worldReturnPending = false;
@@ -3328,16 +3336,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 else
                 {
                     RTG_RuntimeBreadcrumb(fmt::format(
-                        "[RTG][{}][HOLD] helper={} queue={} reason=detaching_old_lifecycle inQueue={} desiredPresence={} worldReturn={} leaveRequested={}",
+                        "[RTG][{}][HOLD] helper={} queue={} reason=detaching_old_lifecycle inQueue={} desiredPresence={} worldReturn={} leaveRequested={} phase={} teamNeed={}",
                         laneTag, botId, desiredQueueType, inQueueState ? 1 : 0, desiredPresence ? 1 : 0,
-                        worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0));
+                        worldReturnPending ? 1 : 0, leaveRequested ? 1 : 0, plannerPhase, plannerTeamNeed));
                 }
             }
 
             if (noLongerNeeded && !inQueueState && !retireWhenSafe && !worldReturnPending)
                 SetEventValue(botId, retireWhenSafeKey, 1, 120, addData);
 
-            if (!noLongerNeeded && !inQueueState && !retireWhenSafe && !worldReturnPending && !leaveRequested)
+            if (!noLongerNeeded && plannerTeamNeed != 0 && !inQueueState && !retireWhenSafe && !worldReturnPending && !leaveRequested)
             {
                 SetEventValue(botId, pendingKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(botId, queueGraceKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
