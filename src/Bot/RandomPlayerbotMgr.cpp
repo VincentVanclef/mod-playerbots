@@ -4870,8 +4870,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     }
                 }
             }
-        }
-
             std::vector<RtgLfgBucket> orderedLfgBuckets;
             std::vector<RtgBgBucket> orderedBgBuckets;
             uint32 totalLfgNeed = 0;
