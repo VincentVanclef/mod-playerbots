@@ -169,6 +169,11 @@ namespace
             return 3u;
         return raw;
     }
+
+    static uint32 RTG_GetArenaConcurrentMatchCap()
+    {
+        return 3u;
+    }
 }
 
 namespace RTG
@@ -257,8 +262,9 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;
                 uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
                 bool activeMatch = activeInstances > 0;
+                uint32 targetConcurrentMatches = std::max<uint32>(1u, std::min<uint32>(RTG_GetArenaConcurrentMatchCap(), realQueued));
                 bool hardDormant = (realQueued == 0u && !activeMatch);
-                bool hasRealDemand = realQueued > 0 && !activeMatch;
+                bool hasRealDemand = realQueued > 0 && activeInstances < targetConcurrentMatches;
                 bool hasQueueSeed = currentQueued > 0;
                 bool orphanQueueResidue = hardDormant ? (currentQueued > 0) : (!hasRealDemand && !activeMatch && currentQueued > 0);
 
@@ -319,10 +325,10 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
                 RTG_WorldLog("[RTG][ARENA][PHASE] queue={} bracket={} phase={} teamSize={} queued={} realQueued={} activeInstances={} rated={}",
                     uint32(queueTypeId), uint32(bracketId), RTG_GetBgPhaseName(phase), arenaTeamSize, currentQueued, realQueued, activeInstances, isRated ? 1u : 0u);
-                RTG_WorldLog("[RTG][ARENA][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} rated={}",
-                    uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u, isRated ? 1u : 0u);
+                RTG_WorldLog("[RTG][ARENA][DEMAND] queue={} bracket={} needA={} needH={} totalNeed={} anyRealDemand={} rated={} targetMatches={}",
+                    uint32(queueTypeId), uint32(bracketId), allianceNeed, hordeNeed, allianceNeed + hordeNeed, hasRealDemand ? 1u : 0u, isRated ? 1u : 0u, targetConcurrentMatches);
 
-                if (activeMatch)
+                if (activeMatch && !hasRealDemand)
                     continue;
 
                 if (!hasQueueSeed)
