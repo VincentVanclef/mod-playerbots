@@ -262,7 +262,11 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;
                 uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
                 bool activeMatch = activeInstances > 0;
-                uint32 targetConcurrentMatches = std::max<uint32>(1u, std::min<uint32>(RTG_GetArenaConcurrentMatchCap(), realQueued));
+                // Each currently queued real player seeds one additional bot-backed arena
+                // beyond the arenas already running, up to the configured concurrent cap.
+                uint32 targetConcurrentMatches = std::min<uint32>(RTG_GetArenaConcurrentMatchCap(), activeInstances + realQueued);
+                if (realQueued > 0)
+                    targetConcurrentMatches = std::max<uint32>(1u, targetConcurrentMatches);
                 bool hardDormant = (realQueued == 0u && !activeMatch);
                 bool hasRealDemand = realQueued > 0 && activeInstances < targetConcurrentMatches;
                 bool hasQueueSeed = currentQueued > 0;

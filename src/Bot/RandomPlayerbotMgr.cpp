@@ -1130,7 +1130,9 @@ namespace
     }
 
     static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 5u;
+    static constexpr uint32 RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS = 2u;
     static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
+    static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 8u;
 
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
@@ -3063,6 +3065,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             char const* worldReturnSinceKey = isArenaManaged ? "rtg_arena_world_return_since" : "rtg_bg_world_return_since";
             char const* queueRetryKey = RTG_GetPvpQueueRetryKey(isArenaManaged);
             char const* laneTag = isArenaManaged ? "ARENA" : "BG";
+            uint32 retireDelaySeconds = isArenaManaged ? RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS : RTG_BG_RETURN_WORLD_RETIRE_SECONDS;
 
             bool bgHasRealDemand = false;
             BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
@@ -3192,7 +3195,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     continue;
                 }
 
-                if (nowTs <= worldReturnSince || (nowTs - worldReturnSince) < RTG_BG_RETURN_WORLD_RETIRE_SECONDS)
+                if (nowTs <= worldReturnSince || (nowTs - worldReturnSince) < retireDelaySeconds)
                     continue;
 
                 RTG_LeaveBotOnlyGroup(bot);
@@ -3217,14 +3220,26 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         }
 
         uint32 rtgBgRetireCount = 0;
+        uint32 rtgArenaRetireCount = 0;
         for (ObjectGuid const& botGuid : rtgBgLogout)
         {
-            if (rtgBgRetireCount >= RTG_BG_RETIRE_LOGOUTS_PER_TICK)
-                break;
             uint32 botId = botGuid.GetCounter();
             bool arenaManaged = RTG::HasPrefix(GetEventData(botId, "add"), "rtg_arena:");
+            if (arenaManaged)
+            {
+                if (rtgArenaRetireCount >= RTG_ARENA_RETIRE_LOGOUTS_PER_TICK)
+                    continue;
+            }
+            else if (rtgBgRetireCount >= RTG_BG_RETIRE_LOGOUTS_PER_TICK)
+                break;
+
             if (RTG_RequestQueueHelperLogout(botGuid, RTG_GetPvpRetireReason(arenaManaged, nullptr), true))
-                ++rtgBgRetireCount;
+            {
+                if (arenaManaged)
+                    ++rtgArenaRetireCount;
+                else
+                    ++rtgBgRetireCount;
+            }
         }
     }
 
