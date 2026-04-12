@@ -83,6 +83,7 @@ bool MovementAction::JumpTo(uint32 mapId, float x, float y, float z, MovementPri
     MotionMaster& mm = *bot->GetMotionMaster();
     mm.Clear();
     mm.MoveJump(x, y, z, speed, speed, 1);
+    botAI->SetJumpDestination(Position(x, y, z, bot->GetOrientation()));
     AI_VALUE(LastMovement&, "last movement").Set(mapId, x, y, z, bot->GetOrientation(), 1000, priority);
     return true;
 }
@@ -953,6 +954,9 @@ bool MovementAction::IsWaitingForLastMove(MovementPriority priority)
 
 bool MovementAction::IsMovingAllowed()
 {
+    if (bot->HasUnitMovementFlag(MOVEMENTFLAG_FALLING))
+        return false;
+
     return botAI->CanMove();
 }
 
@@ -964,11 +968,13 @@ void MovementAction::UpdateMovementState()
         bot->HasUnitState(UNIT_STATE_LOST_CONTROL) ||
         bot->IsRooted() ||
         bot->isFrozen() ||
-        bot->IsPolymorphed();
+        bot->IsPolymorphed() ||
+        bot->HasUnitMovementFlag(MOVEMENTFLAG_FALLING);
 
     // no update movement flags while movement is current restricted.
     if (!isCurrentlyRestricted && bot->IsAlive())
     {
+        botAI->ResetJumpDestination();
         // state flags
         const auto master = botAI ? botAI->GetMaster() : nullptr; // real player or not
         const bool masterIsFlying = master ? master->HasUnitMovementFlag(MOVEMENTFLAG_FLYING) : true;

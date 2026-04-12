@@ -1569,18 +1569,20 @@ void PlayerbotAI::DoNextAction(bool min)
         else
         {
             rtg_lastTarget = currentTarget->GetGUID();
-            rtg_lastTargetSeenMs = rtgNowMs;
-
-            if (!bot->IsWithinLOSInMap(currentTarget))
+            if (bot->IsWithinLOSInMap(currentTarget))
             {
-                if (rtgNowMs >= rtg_pathCommitUntil)
+                rtg_lastTargetSeenMs = rtgNowMs;
+            }
+            else
+            {
+                if (CanMove() && !bot->HasUnitMovementFlag(MOVEMENTFLAG_FALLING) && rtgNowMs >= rtg_pathCommitUntil)
                 {
                     Position pos = currentTarget->GetPosition();
                     bot->GetMotionMaster()->MovePoint(0, pos.GetPositionX(), pos.GetPositionY(), pos.GetPositionZ(), FORCED_MOVEMENT_NONE, 0.0f, 0.0f, true, false);
-                    rtg_pathCommitUntil = rtgNowMs + 1500;
+                    rtg_pathCommitUntil = rtgNowMs + 2500;
                 }
 
-                if (!(rtg_lastTarget == currentTarget->GetGUID() && (rtgNowMs - rtg_lastTargetSeenMs) < 3000))
+                if (rtg_lastTargetSeenMs && (rtgNowMs - rtg_lastTargetSeenMs) >= 3000)
                     aiObjectContext->GetValue<Unit*>("current target")->Set(nullptr);
             }
         }
@@ -6236,6 +6238,9 @@ int32 PlayerbotAI::GetNearGroupMemberCount(float dis)
 
 bool PlayerbotAI::CanMove()
 {
+    if (bot->HasUnitMovementFlag(MOVEMENTFLAG_FALLING))
+        return false;
+
     // Most common checks: confused, stunned, fleeing, jumping, charging. All these
     // states are set when handling certain aura effects. We don't check against
     // UNIT_STATE_ROOT here, because this state is used by vehicles.
