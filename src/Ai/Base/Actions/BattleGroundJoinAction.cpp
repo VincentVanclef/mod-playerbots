@@ -199,6 +199,23 @@ namespace
         return nowSecs >= itr->second && (nowSecs - itr->second) >= 5u;
     }
 
+    static void RTG_LogBgLeaveBlocked(Player* bot, Battleground* bg)
+    {
+        if (!bot || !bg)
+            return;
+
+        static std::unordered_map<uint32, uint32> sNextBlockedLogAt;
+        uint32 botId = bot->GetGUID().GetCounter();
+        uint32 nowSecs = static_cast<uint32>(time(nullptr));
+        uint32& nextLogAt = sNextBlockedLogAt[botId];
+        if (nextLogAt && nowSecs < nextLogAt)
+            return;
+
+        nextLogAt = nowSecs + 10u;
+        LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
+            botId, uint32(bg->GetStatus()), bg->GetMapId());
+    }
+
     static bool RTG_DirectJoinArenaQueue(Player* bot, BattlegroundQueueTypeId queueTypeId, ArenaType arenaType, bool isRated)
     {
         if (!bot || queueTypeId == BATTLEGROUND_QUEUE_NONE || arenaType == ARENA_TYPE_NONE)
@@ -1010,8 +1027,7 @@ bool BGLeaveAction::Execute(Event event)
     Battleground* currentBg = bot->GetBattleground();
     if (currentBg && !RTG_ProtectedBgHelperMayLeave(bot, currentBg))
     {
-        LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
-            bot->GetGUID().GetCounter(), uint32(currentBg->GetStatus()), currentBg->GetMapId());
+        RTG_LogBgLeaveBlocked(bot, currentBg);
         return false;
     }
 
@@ -1071,8 +1087,7 @@ bool BGStatusAction::LeaveBG(PlayerbotAI* botAI)
 
     if (!RTG_ProtectedBgHelperMayLeave(bot, bg))
     {
-        LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
-            bot->GetGUID().GetCounter(), uint32(bg->GetStatus()), bg->GetMapId());
+        RTG_LogBgLeaveBlocked(bot, bg);
         return false;
     }
     bool isArena = bg->isArena();

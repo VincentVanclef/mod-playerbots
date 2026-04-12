@@ -3248,8 +3248,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         if (!GetEventValue(botId, leaveRequestedKey))
                         {
-                            if (RTG_RequestImmediateBgLeave(bot))
-                                SetEventValue(botId, leaveRequestedKey, 1, 15, addData);
+                            bool leaveIssued = RTG_RequestImmediateBgLeave(bot);
+                            // Even failed leave attempts need a short backoff so protected
+                            // battleground helpers do not get hammered every update tick.
+                            SetEventValue(botId, leaveRequestedKey, 1, leaveIssued ? 15 : 5, addData);
                         }
                     }
                 }
