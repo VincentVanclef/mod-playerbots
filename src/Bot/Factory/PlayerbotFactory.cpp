@@ -137,6 +137,14 @@ namespace
 
         return sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_pvp_force_role");
     }
+
+    static uint32 RTG_GetForcedLfgRole(Player* bot)
+    {
+        if (!bot)
+            return 0u;
+
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_force_role");
+    }
 }
 
 PlayerbotFactory::PlayerbotFactory(Player* bot, uint32 level, uint32 itemQuality, uint32 gearScoreLimit)
@@ -1195,9 +1203,16 @@ void PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_templa
     bool rtgIsArenaLane = false;
     std::string rtgAddData;
     bool rtgQueuePvpHelper = RTG_GetQueuePvpLaneContext(bot, rtgIsArenaLane, rtgAddData);
+    uint32 forcedLfgRole = RTG_GetForcedLfgRole(bot);
     uint32 forcedPvpRole = rtgQueuePvpHelper ? RTG_GetForcedPvpRole(bot) : 0u;
     uint8 forcedSpecTab = 0;
-    if (rtgQueuePvpHelper && forcedPvpRole && RTG::PreferredSpecTabForClassRole(cls, forcedPvpRole, forcedSpecTab))
+    if (forcedLfgRole && RTG::PreferredSpecTabForClassRole(cls, forcedLfgRole, forcedSpecTab))
+    {
+        specTab = forcedSpecTab;
+        LOG_INFO("playerbots", "[RTG][RDF][SPEC] helper={} class={} specTab={} forcedRole={}",
+            bot->GetGUID().GetCounter(), uint32(cls), specTab, forcedLfgRole);
+    }
+    else if (rtgQueuePvpHelper && forcedPvpRole && RTG::PreferredSpecTabForClassRole(cls, forcedPvpRole, forcedSpecTab))
     {
         specTab = forcedSpecTab;
         LOG_INFO("playerbots", "[RTG][PVP][SPEC] helper={} lane={} class={} specTab={} forcedRole={} add='{}'",

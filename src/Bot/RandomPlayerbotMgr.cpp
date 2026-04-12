@@ -1000,31 +1000,20 @@ namespace
         bool hasOfflineSpecTruth = RTG::HasOfflineSpecData(bot->GetGUID().GetCounter(), bot->getClass(), &resolvedSpecTab);
         if (hasOfflineSpecTruth)
             currentSpecTab = resolvedSpecTab;
-        bool specMismatch = hasOfflineSpecTruth && runtimeSpecTab != currentSpecTab;
-        std::string desiredProfile = fmt::format("{}:{}:{}", desiredLevel ? desiredLevel : bot->GetLevel(), uint32(currentSpecTab), desiredRole);
+
+        uint8 targetSpecTab = currentSpecTab;
+        bool hasPreferredSpec = RTG::PreferredSpecTabForClassRole(bot->getClass(), desiredRole, targetSpecTab);
+        if (!hasPreferredSpec)
+        {
+            if (blocked)
+                *blocked = true;
+            return false;
+        }
+
+        bool specMismatch = runtimeSpecTab != targetSpecTab;
+        std::string desiredProfile = fmt::format("{}:{}:{}", desiredLevel ? desiredLevel : bot->GetLevel(), uint32(targetSpecTab), desiredRole);
         std::string currentProfile = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "rtg_lfg_profile_ready");
         bool profileMismatch = currentProfile != desiredProfile;
-
-        if (RTG_RequiresOfflineSpecTruthForRdf(bot->getClass()) && !hasOfflineSpecTruth)
-        {
-            if (blocked)
-                *blocked = true;
-            return false;
-        }
-
-        uint32 currentRoleMask = hasOfflineSpecTruth
-            ? RTG::RoleMaskForClassSpecTab(bot->getClass(), currentSpecTab)
-            : RTG_GetActualSpecRoleMask(bot);
-
-        bool roleMismatch = (currentRoleMask & desiredRole) == 0;
-
-        // Do not re-spec helpers to fit RDF demand. Queue role must derive from the bot's real spec.
-        if (roleMismatch)
-        {
-            if (blocked)
-                *blocked = true;
-            return false;
-        }
 
         if (!levelMismatch && !missingTalents && !specMismatch && !profileMismatch)
             return false;
@@ -1043,7 +1032,8 @@ namespace
         }
 
         PlayerbotFactory factory(bot, desiredLevel ? desiredLevel : bot->GetLevel());
-        PlayerbotFactory::InitTalentsBySpecNo(bot, currentSpecTab, true);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_force_role", desiredRole, 1800u, desiredProfile);
+        PlayerbotFactory::InitTalentsBySpecNo(bot, targetSpecTab, true);
         factory.InitClassSpells();
         factory.InitAvailableSpells();
         factory.InitSpecialSpells();
@@ -1060,9 +1050,9 @@ namespace
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} runtimeSpecTab={} resolvedSpecTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={} specMismatch={} profileMismatch={}",
-                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(runtimeSpecTab), uint32(currentSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
-                missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0, specMismatch ? 1 : 0, profileMismatch ? 1 : 0);
+            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} runtimeSpecTab={} offlineSpecTab={} targetSpecTab={} level={} preparedRole={} preparedMask={} hadTalents={} levelMismatch={} specMismatch={} profileMismatch={} hadOfflineSpec={} forcedRole=1",
+                bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(runtimeSpecTab), uint32(currentSpecTab), uint32(targetSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
+                missingTalents ? 0 : 1, levelMismatch ? 1 : 0, specMismatch ? 1 : 0, profileMismatch ? 1 : 0, hasOfflineSpecTruth ? 1 : 0);
         }
 
         return true;
@@ -1810,6 +1800,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
         SetEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
         SetEventValue(botId, "rtg_dungeon_active", 0, 0);
+        SetEventValue(botId, "rtg_lfg_force_role", 0, 0);
         SetEventValue(botId, "rtg_lfg_profile_ready", 0, 0);
     }
 
@@ -1857,6 +1848,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_join_retry", 0, 0);
     SetEventValue(bot, "rtg_lfg_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_dungeon_active", 0, 0);
+    SetEventValue(bot, "rtg_lfg_force_role", 0, 0);
     SetEventValue(bot, "rtg_lfg_profile_ready", 0, 0);
 
     if (clearLogout)
@@ -4381,16 +4373,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                 bool roleKnown = false;
                 uint32 roleMask = getOfflineLfgRoleMask(charInfo, roleKnown);
-                if (roleKnown)
+                if (roleKnown && (roleMask & desiredRole) != 0)
                 {
-                    if ((roleMask & desiredRole) == 0)
-                        continue;
+                    ++count;
+                    continue;
                 }
-                else
-                {
-                    if (!RTG_IsPureDpsClass(charInfo.rClass) || desiredRole != lfg::PLAYER_ROLE_DAMAGE)
-                        continue;
-                }
+
+                if (!RTG_ClassCanRole(charInfo.rClass, desiredRole))
+                    continue;
 
                 ++count;
             }
@@ -4442,8 +4432,20 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 else
                     SetEventValue(charInfo.guid, "rtg_pvp_force_role", 0, 0);
             }
+            else
+                SetEventValue(charInfo.guid, "rtg_pvp_force_role", 0, 0);
+
+            SetEventValue(charInfo.guid, "rtg_lfg_force_role", 0, 0);
             if (RTG::HasPrefix(addData, "rtg_lfg:"))
             {
+                unsigned int lfgTeam = 0;
+                unsigned int lfgLevel = 0;
+                unsigned int lfgRole = 0;
+                unsigned int lfgOwner = 0;
+                if (RTG::ParseLfgAddData(addData, lfgTeam, lfgLevel, &lfgRole, &lfgOwner) && lfgRole)
+                    SetEventValue(charInfo.guid, "rtg_lfg_force_role", lfgRole, add_time, addData);
+                else
+                    SetEventValue(charInfo.guid, "rtg_lfg_force_role", 0, 0);
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
             }
             else if (RTG::HasPrefix(addData, "rtg_arena:"))
@@ -5089,11 +5091,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         }
                         else
                         {
-                            // Bootstrap fallback is allowed only for pure DPS fill.
-                            // Tank/healer lanes must come from reliable offline spec truth,
-                            // otherwise RTG can surface bad groups such as Fury/Arms tanks or
-                            // Enhancement healers.
-                            if (roleKnown || desiredRole != lfg::PLAYER_ROLE_DAMAGE || !RTG_IsPureDpsClass(charInfo.rClass))
+                            // RDF queue helpers are now built to the requested role/spec.
+                            // Use offline spec truth first when available, then fall back to
+                            // any class that can legitimately perform the desired role.
+                            if (!RTG_ClassCanRole(charInfo.rClass, desiredRole))
                                 continue;
                         }
 
@@ -5101,7 +5102,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             continue;
 
                         LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {}) source={}",
-                            charInfo.guid, bucket.owner, desiredRole, charInfo.rClass, pass == 0 ? "known_spec_capable" : "bootstrap_fallback");
+                            charInfo.guid, bucket.owner, desiredRole, charInfo.rClass, pass == 0 ? "known_spec_capable" : "forced_role_capable");
 
                         ++rtgLfgLogged;
                         --capacity;
