@@ -3137,6 +3137,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
         std::vector<ObjectGuid> rtgBgLogout;
+        std::vector<ObjectGuid> rtgArenaIdleDrainLogout;
 
         for (auto const& kv : playerBots)
         {
@@ -3386,8 +3387,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][DRAIN] helper={} queue={} bracket={} reason=no_remaining_demand",
                 botId, desiredQueueType, uint32(bracketId)));
-            if (RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_idle_drain", true))
-                ++rtgArenaIdleDrainCount;
+            rtgArenaIdleDrainLogout.push_back(botGuid);
+            ++rtgArenaIdleDrainCount;
+        }
+
+        for (ObjectGuid const& botGuid : rtgArenaIdleDrainLogout)
+        {
+            RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_idle_drain", true);
         }
     }
 
