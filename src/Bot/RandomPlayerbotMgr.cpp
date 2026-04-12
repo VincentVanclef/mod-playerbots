@@ -1217,8 +1217,11 @@ namespace
 
 static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 1u;
 static constexpr uint32 RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS = 2u;
-static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 12u;
-static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 8u;
+// Retirement needs to drain gradually so a finished battleground does not
+// dump a large logout burst into the same update window where other PvP lanes
+// are still filling or new arenas are forming.
+static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
+static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
 
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
@@ -3379,17 +3382,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 else
                     SetEventValue(botId, queueGraceKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
 
-                if (!noLongerNeeded && desiredPresence && !activeDesiredPresence && dispatchSince &&
-                    nowTs > dispatchSince && (nowTs - dispatchSince) >= RTG_GetDispatchStallThresholdSeconds() &&
-                    !bot->InBattleground() && !bot->InArena())
-                {
-                    RTG_RuntimeBreadcrumb(fmt::format(
-                        "[RTG][{}][STALE_QUEUE] helper={} queue={} waited={} forcing_retire=1",
-                        laneTag, botId, desiredQueueType, nowTs - dispatchSince));
-                    RTG_ClearQueueHelperState(botId);
-                    rtgBgLogout.push_back(botGuid);
-                    continue;
-                }
+                // Desired queue presence means the helper is already committed to the
+                // live battleground/arena lane (queued or invited) even if it has not
+                // transitioned into the active instance yet. Do not recycle it as a
+                // stale dispatch here; that causes replacement churn on live refill /
+                // finish-fill waves and cascades into mass retirement later.
 
                 if (noLongerNeeded)
                 {
@@ -3458,17 +3455,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 RTG_RuntimeBreadcrumb(fmt::format(
                     "[RTG][{}][STALE_DISPATCH] helper={} queue={} waited={} forcing_retire=1",
-                    laneTag, botId, desiredQueueType, nowTs - dispatchSince));
-                RTG_ClearQueueHelperState(botId);
-                rtgBgLogout.push_back(botGuid);
-                continue;
-            }
-
-            if (!noLongerNeeded && desiredPresence && !activeDesiredPresence && dispatchSince &&
-                nowTs > dispatchSince && (nowTs - dispatchSince) >= RTG_GetDispatchStallThresholdSeconds())
-            {
-                RTG_RuntimeBreadcrumb(fmt::format(
-                    "[RTG][{}][STALE_QUEUE] helper={} queue={} waited={} forcing_retire=1",
                     laneTag, botId, desiredQueueType, nowTs - dispatchSince));
                 RTG_ClearQueueHelperState(botId);
                 rtgBgLogout.push_back(botGuid);
@@ -4961,10 +4947,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     }
                     else if (!activeInDesiredBgState)
                     {
-                        uint32 dispatchSince = GetEventValue(botId, RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) ? "rtg_arena_dispatch_since" : "rtg_bg_dispatch_since");
-                        uint32 nowTs = NowSeconds();
-                        if (dispatchSince && nowTs >= dispatchSince && (nowTs - dispatchSince) < RTG_GetDispatchStallThresholdSeconds())
-                            ++it->second.queuedFresh;
+                        // Once a helper has entered the correct queue / invite state it
+                        // should continue to suppress replacement demand until it either
+                        // becomes active or loses that queue presence. Time-limiting this
+                        // bucket causes valid reserve fillers to age into artificial
+                        // shortages, which then triggers stale-queue churn.
+                        ++it->second.queuedFresh;
                     }
                     else if (managedBot && it->second.isArena && RTG_GetStrictPrimaryRoleForBot(managedBot) == lfg::PLAYER_ROLE_HEALER)
                         ++it->second.currentHealerCount;
