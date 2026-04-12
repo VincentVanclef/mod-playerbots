@@ -2723,6 +2723,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
             }
         }
+
+        for (auto const& request : rtgRdfLogoutRequests)
+            RTG_RequestQueueHelperLogout(request.first, request.second.c_str(), true);
     }
 
     // ------------------------------------------------------------------
@@ -4866,10 +4869,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 }
             }
         }
-
-        for (auto const& request : rtgRdfLogoutRequests)
-            RTG_RequestQueueHelperLogout(request.first, request.second.c_str(), true);
-    }
 
             std::vector<RtgLfgBucket> orderedLfgBuckets;
             std::vector<RtgBgBucket> orderedBgBuckets;
