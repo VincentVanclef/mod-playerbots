@@ -2441,6 +2441,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
     if (sPlayerbotAIConfig.rtgEventDriven)
     {
+        std::vector<std::pair<ObjectGuid, std::string>> rtgRdfLogoutRequests;
+
         for (auto const& kv : playerBots)
         {
             Player* bot = kv.second;
@@ -2497,7 +2499,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                         group->RemoveMember(bot->GetGUID());
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=disposed_from_dungeon immediateLogout=1", botId, desiredOwner));
                     RTG_LeaveBotOnlyGroup(bot);
-                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_disposed", true);
+                    rtgRdfLogoutRequests.emplace_back(bot->GetGUID(), "rtg_lfg_disposed");
                 }
                 else if (!orphanedSince)
                 {
@@ -2513,7 +2515,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     if (group && !groupHasRealPlayer)
                         group->RemoveMember(bot->GetGUID());
                     RTG_LeaveBotOnlyGroup(bot);
-                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_orphaned", true);
+                    rtgRdfLogoutRequests.emplace_back(bot->GetGUID(), "rtg_lfg_orphaned");
                 }
                 continue;
             }
@@ -2533,7 +2535,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     if (group && !groupHasRealPlayer)
                         group->RemoveMember(bot->GetGUID());
                     RTG_LeaveBotOnlyGroup(bot);
-                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_returned_world", true);
+                    rtgRdfLogoutRequests.emplace_back(bot->GetGUID(), "rtg_lfg_returned_world");
                 }
                 continue;
             }
@@ -2653,7 +2655,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                         RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
                         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                         RTG_ClearQueueHelperState(botId);
-                        RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_prepare_role_mismatch");
+                        rtgRdfLogoutRequests.emplace_back(bot->GetGUID(), "rtg_lfg_prepare_role_mismatch");
                         continue;
                     }
 
@@ -2698,7 +2700,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                         SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
                         RTG_ClearQueueHelperState(botId);
-                        RTG_RequestQueueHelperLogout(bot->GetGUID(), tankLoadoutMismatch ? "rtg_lfg_runtime_tank_loadout_mismatch" : "rtg_lfg_runtime_role_mismatch");
+                        rtgRdfLogoutRequests.emplace_back(bot->GetGUID(), tankLoadoutMismatch ? "rtg_lfg_runtime_tank_loadout_mismatch" : "rtg_lfg_runtime_role_mismatch");
                         continue;
                     }
                 }
@@ -4861,10 +4863,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             bucket.phase = phase;
                             bucket.need = plannerNeed;
                             bgBuckets.emplace(key, bucket);
-                        }
-                    }
                 }
             }
+        }
+
+        for (auto const& request : rtgRdfLogoutRequests)
+            RTG_RequestQueueHelperLogout(request.first, request.second.c_str(), true);
+    }
 
             std::vector<RtgLfgBucket> orderedLfgBuckets;
             std::vector<RtgBgBucket> orderedBgBuckets;
