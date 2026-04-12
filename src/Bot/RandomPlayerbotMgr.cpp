@@ -1181,10 +1181,10 @@ namespace
         return true;
     }
 
-    static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 5u;
-    static constexpr uint32 RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS = 2u;
-    static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
-    static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 8u;
+static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 1u;
+static constexpr uint32 RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS = 2u;
+static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 12u;
+static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 8u;
 
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
@@ -3025,6 +3025,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
 				continue;
 			}
+
+            if (RTG_HasActiveLfgTransitionState(botId))
+                continue;
 
 			if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
 				continue;
@@ -6191,6 +6194,7 @@ void RandomPlayerbotMgr::CheckLfgQueue()
             lfg::LfgState botState = sLFGMgr->GetState(managedBot->GetGUID());
             countsInQueuedState = (botState != lfg::LFG_STATE_NONE && botState < lfg::LFG_STATE_DUNGEON);
         }
+        countsInQueuedState = countsInQueuedState || RTG_HasActiveLfgTransitionState(botId);
 
         uint32 roleToCount = desiredRole ? desiredRole : lfg::PLAYER_ROLE_DAMAGE;
         if (countsInQueuedState)
