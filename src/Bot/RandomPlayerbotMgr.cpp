@@ -81,6 +81,7 @@ namespace
 	// --- RDF strict spec-role helper declarations ---
 	static bool RTG_IsPureDpsClass(uint8 cls);
 	static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
+    static bool RTG_TryRecoverRdfHelperToWorld(Player* bot, char const* reason);
     static bool RTG_GroupHasRealPlayer(Group* group);
     static void RTG_LeaveBotOnlyGroup(Player* bot);
     static bool RTG_IsArenaQueueType(BattlegroundQueueTypeId queueTypeId);
