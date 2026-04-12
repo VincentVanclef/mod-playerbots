@@ -140,6 +140,13 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             req.helperQueuedTank + req.helperQueuedHeal + req.helperQueuedDps,
             req.helperAssignedTank + req.helperAssignedHeal + req.helperAssignedDps,
             requestClosed ? 1u : 0u);
+        LOG_INFO("server.loading",
+            "[RTG][RDF][PHASE] owner={} team={} level={} phase={} activeDungeon={} realQueued={} realActive={} helperQueued={} helperAssigned={} requestClosed={}",
+            req.owner, req.team, req.level, phase, req.activeDungeon ? 1u : 0u,
+            req.realQueued, req.realActive,
+            req.helperQueuedTank + req.helperQueuedHeal + req.helperQueuedDps,
+            req.helperAssignedTank + req.helperAssignedHeal + req.helperAssignedDps,
+            requestClosed ? 1u : 0u);
 
         LOG_INFO("playerbots",
             "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
@@ -147,6 +154,11 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
             laneNeedTank, laneNeedHeal, laneNeedDps, outstandingAssigned);
         LOG_WARN("playerbots",
+            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
+            req.owner, req.team, req.level,
+            acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
+            laneNeedTank, laneNeedHeal, laneNeedDps, outstandingAssigned);
+        LOG_INFO("server.loading",
             "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
             req.owner, req.team, req.level,
             acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
@@ -179,6 +191,9 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         LOG_WARN("playerbots",
             "[RTG][RDF][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
             static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
+        LOG_INFO("server.loading",
+            "[RTG][RDF][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
+            static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
 
         mgr.RTG_SetBotEventValue(0, "rtg_lfg_start", globalStart, globalTtl);
         mgr.RTG_SetBotEventValue(0, "rtg_lfg_need_total", cappedNeed, globalTtl);
@@ -189,6 +204,7 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         mgr.RTG_SetBotEventValue(0, "rtg_lfg_need_total", 0, 0);
         LOG_INFO("playerbots", "[RTG][RDF][TOTAL] demandOwners=0 desiredHelpers=0 cappedHelpers=0 anyReady=0 globalStart=0");
         LOG_WARN("playerbots", "[RTG][RDF][TOTAL] demandOwners=0 desiredHelpers=0 cappedHelpers=0 anyReady=0 globalStart=0");
+        LOG_INFO("server.loading", "[RTG][RDF][TOTAL] demandOwners=0 desiredHelpers=0 cappedHelpers=0 anyReady=0 globalStart=0");
     }
 }
 }

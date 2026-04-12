@@ -1001,6 +1001,9 @@ namespace
         if (hasOfflineSpecTruth)
             currentSpecTab = resolvedSpecTab;
         bool specMismatch = hasOfflineSpecTruth && runtimeSpecTab != currentSpecTab;
+        std::string desiredProfile = fmt::format("{}:{}:{}", desiredLevel ? desiredLevel : bot->GetLevel(), uint32(currentSpecTab), desiredRole);
+        std::string currentProfile = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "rtg_lfg_profile_ready");
+        bool profileMismatch = currentProfile != desiredProfile;
 
         if (RTG_RequiresOfflineSpecTruthForRdf(bot->getClass()) && !hasOfflineSpecTruth)
         {
@@ -1023,7 +1026,7 @@ namespace
             return false;
         }
 
-        if (!levelMismatch && !missingTalents && !specMismatch)
+        if (!levelMismatch && !missingTalents && !specMismatch && !profileMismatch)
             return false;
 
         if (desiredLevel && bot->GetLevel() != desiredLevel)
@@ -1033,7 +1036,7 @@ namespace
             bot->SetUInt32Value(PLAYER_XP, 0);
         }
 
-        if (missingTalents || levelMismatch || specMismatch)
+        if (missingTalents || levelMismatch || specMismatch || profileMismatch)
         {
             RTG_ClearQueueHelperBagItems(bot);
             RTG_PurgeQueueHelperMailbox(bot);
@@ -1053,12 +1056,13 @@ namespace
         uint32 preparedRoleMask = RTG_GetActualSpecRoleMask(bot);
         RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), preparedRole);
         RTG_SetCachedRuntimeLfgRoleMask(bot->GetGUID().GetCounter(), preparedRoleMask);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_profile_ready", 1, 86400u, desiredProfile);
 
         if (RTG_QueueDebugEnabled())
         {
-            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} runtimeSpecTab={} resolvedSpecTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={} specMismatch={}",
+            LOG_INFO("playerbots", "[RTG][RDF][PREP] helper={} reason={} desiredRole={} runtimeSpecTab={} resolvedSpecTab={} level={} preparedRole={} preparedMask={} hadTalents={} roleMismatch={} levelMismatch={} specMismatch={} profileMismatch={}",
                 bot->GetGUID().GetCounter(), reason ? reason : "rtg", desiredRole, uint32(runtimeSpecTab), uint32(currentSpecTab), bot->GetLevel(), preparedRole, preparedRoleMask,
-                missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0, specMismatch ? 1 : 0);
+                missingTalents ? 0 : 1, roleMismatch ? 1 : 0, levelMismatch ? 1 : 0, specMismatch ? 1 : 0, profileMismatch ? 1 : 0);
         }
 
         return true;
@@ -1806,6 +1810,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
         SetEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
         SetEventValue(botId, "rtg_dungeon_active", 0, 0);
+        SetEventValue(botId, "rtg_lfg_profile_ready", 0, 0);
     }
 
     currentBots.remove(botId);
@@ -1852,6 +1857,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_join_retry", 0, 0);
     SetEventValue(bot, "rtg_lfg_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_dungeon_active", 0, 0);
+    SetEventValue(bot, "rtg_lfg_profile_ready", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -3082,7 +3088,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			if (grp && (grp->isLFGGroup() || RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand))
+			if (grp && (RTG_GroupHasRealPlayer(grp) || ownerHasRealDemand))
 			{
 				RTG_ClearQueueDebuffs(bot);
 				SetEventValue(botId, "rtg_dungeon_active", NowSeconds(), 7200);
@@ -3102,7 +3108,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		}
 
 		for (ObjectGuid const& botGuid : rtgStaleQueueBots)
-			RTG_RequestSafeBotLogout(botGuid, "rtg_lfg_stale");
+			RTG_RequestQueueHelperLogout(botGuid, "rtg_lfg_stale", true);
 	}
 
 
@@ -3317,6 +3323,50 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 else
                     ++rtgBgRetireCount;
             }
+        }
+
+        uint32 rtgArenaIdleDrainCount = 0;
+        for (auto const& kv : playerBots)
+        {
+            if (rtgArenaIdleDrainCount >= RTG_ARENA_RETIRE_LOGOUTS_PER_TICK)
+                break;
+
+            ObjectGuid botGuid = kv.first;
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = botGuid.GetCounter();
+            if (GetEventValue(botId, "logout"))
+                continue;
+
+            std::string addData = GetEventData(botId, "add");
+            uint32 desiredTeam = 0;
+            uint32 desiredLevel = 0;
+            uint32 desiredQueueType = 0;
+            if (!RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
+                continue;
+            if (!(RTG::IsArenaManagedAddData(addData) || RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType))))
+                continue;
+
+            if (bot->InArena() || bot->InBattleground() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance() ||
+                bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                continue;
+
+            BattlegroundBracketId bracketId = BG_BRACKET_ID_FIRST;
+            uint32 minLevel = desiredLevel;
+            uint32 maxLevel = desiredLevel;
+            bool hasQueueContext = RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType), desiredLevel ? desiredLevel : bot->GetLevel(), bracketId, minLevel, maxLevel);
+            if (!hasQueueContext)
+                continue;
+
+            if (GetEventValue(0, RTG_MakePvpDemandKey(desiredQueueType, uint32(bracketId))) != 0)
+                continue;
+
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][DRAIN] helper={} queue={} bracket={} reason=no_remaining_demand",
+                botId, desiredQueueType, uint32(bracketId)));
+            if (RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_idle_drain", true))
+                ++rtgArenaIdleDrainCount;
         }
     }
 
