@@ -772,7 +772,10 @@ namespace
         Map* map = bot->GetMap();
         if (map && map->Instanceable())
         {
-            bot->TeleportToEntryPoint();
+            if (bot->m_homebindMapId || bot->m_homebindX || bot->m_homebindY || bot->m_homebindZ)
+                bot->TeleportTo(bot->m_homebindMapId, bot->m_homebindX, bot->m_homebindY, bot->m_homebindZ, 0.0f);
+            else
+                bot->TeleportToEntryPoint();
             changed = true;
         }
 
@@ -1942,6 +1945,20 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
                                 entry->target.queueTypeId != BATTLEGROUND_QUEUE_NONE;
         if (claimedPvpHelper && !entry->pendingRetire)
         {
+            std::string addData = GetEventData(botId, "add");
+            bool bgLifecycleManaged = GetEventValue(botId, "rtg_bg_pending") != 0 ||
+                                      GetEventValue(botId, "rtg_bg_queue_grace") != 0 ||
+                                      GetEventValue(botId, "rtg_bg_leave_requested") != 0 ||
+                                      GetEventValue(botId, "rtg_bg_world_return_since") != 0 ||
+                                      GetEventValue(botId, "rtg_bg_retire_when_safe") != 0;
+            bool arenaLifecycleManaged = GetEventValue(botId, "rtg_arena_pending") != 0 ||
+                                         GetEventValue(botId, "rtg_arena_queue_grace") != 0 ||
+                                         GetEventValue(botId, "rtg_arena_leave_requested") != 0 ||
+                                         GetEventValue(botId, "rtg_arena_world_return_since") != 0 ||
+                                         GetEventValue(botId, "rtg_arena_retire_when_safe") != 0;
+            if (RTG_IsManagedPvpAddData(addData) || bgLifecycleManaged || arenaLifecycleManaged)
+                continue;
+
             bool hasQueueState = bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
             RTG::RtgLifecycleResult drainCheck = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
             if (!hasQueueState && drainCheck.decision == RTG::RtgLifecycleDecision::Allow)
@@ -1960,6 +1977,15 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         bool arenaManaged = entry->target.queueTypeId != BATTLEGROUND_QUEUE_NONE &&
                             RTG_IsArenaQueueType(entry->target.queueTypeId);
         char const* retireWhenSafeKey = RTG_GetPvpRetireWhenSafeKey(arenaManaged);
+        char const* pendingKey = arenaManaged ? "rtg_arena_pending" : "rtg_bg_pending";
+        char const* queueGraceKey = arenaManaged ? "rtg_arena_queue_grace" : "rtg_bg_queue_grace";
+        char const* leaveRequestedKey = arenaManaged ? "rtg_arena_leave_requested" : "rtg_bg_leave_requested";
+        char const* worldReturnSinceKey = arenaManaged ? "rtg_arena_world_return_since" : "rtg_bg_world_return_since";
+
+        if (GetEventValue(botId, pendingKey) || GetEventValue(botId, queueGraceKey) ||
+            GetEventValue(botId, leaveRequestedKey) || GetEventValue(botId, worldReturnSinceKey) ||
+            GetEventValue(botId, retireWhenSafeKey))
+            continue;
 
         if (bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
             continue;
@@ -2871,11 +2897,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 			if (!bot || !bot->IsInWorld())
 				continue;
 
-			uint32 botId = botGuid.GetCounter();
+            uint32 botId = botGuid.GetCounter();
+            std::string addData = GetEventData(botId, "add");
 
-			// Never shrink active BG participants
-			if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
-				continue;
+            if (RTG::IsQueueManagedAddData(addData))
+                continue;
+
+            // Never shrink active BG participants
+            if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+                continue;
 
 			// Never shrink bots that are actively queued for LFG or already in dungeon state
 			lfg::LfgState lfgState = sLFGMgr->GetState(bot->GetGUID());
@@ -8044,6 +8074,22 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             uint32 desiredRole = 0;
             uint32 desiredOwner = 0;
             RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner);
+
+            Map* currentMap = bot->GetMap();
+            if (currentMap && currentMap->Instanceable())
+            {
+                RTG_RecoverQueuedDungeonHelper(bot, bot->GetGUID().GetCounter(), "login_dungeon_map");
+                currentMap = bot->GetMap();
+                if (currentMap && currentMap->Instanceable())
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_dungeon_map_recover_failed map={}",
+                        bot->GetGUID().GetCounter(), desiredOwner, currentMap->GetId()));
+                    SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
+                    RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
+                    RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_login_instance_recover_failed");
+                    return;
+                }
+            }
 
             if (desiredLevel && bot->GetLevel() != desiredLevel)
             {
