@@ -165,7 +165,8 @@ namespace
             return false;
 
         desiredLevel = RTG_NormalizeDesiredPvpQueueLevel(desiredLevel ? desiredLevel : bot->GetLevel());
-        std::string readyData = fmt::format("{}:{}", laneTag ? laneTag : "pvp", desiredLevel);
+        uint32 forcedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_pvp_force_role");
+        std::string readyData = fmt::format("{}:{}:{}", laneTag ? laneTag : "pvp", desiredLevel, forcedRole);
         std::string currentReadyData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "rtg_pvp_profile_ready");
 
         bool needRebuild = (bot->GetLevel() != desiredLevel) || currentReadyData != readyData;
@@ -683,6 +684,20 @@ namespace
     static void RTG_ClearOrphanedState(uint32 botId)
     {
         sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_orphan_since", 0, 0);
+    }
+
+    static uint32 RTG_GetRdfReturnWorldRetireSeconds()
+    {
+        return 2u;
+    }
+
+    static void RTG_ClearRdfReturnWorldState(uint32 botId)
+    {
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_pending", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_join_retry", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_lfg_orphan_since", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_dungeon_active", 0, 0);
     }
 
     static bool RTG_HasActiveLfgTransitionState(uint32 botId)
@@ -1768,6 +1783,9 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_pvp_runtime_role", 0, 0);
         SetEventValue(botId, "rtg_add_requested", 0, 0);
         SetEventValue(botId, "rtg_login_dispatch_inflight", 0, 0);
+        SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
+        SetEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
+        SetEventValue(botId, "rtg_dungeon_active", 0, 0);
     }
 
     currentBots.remove(botId);
@@ -1811,6 +1829,9 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_lfg_teleport_attempts", 0, 0);
     SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
     SetEventValue(bot, "rtg_lfg_orphan_since", 0, 0);
+    SetEventValue(bot, "rtg_lfg_join_retry", 0, 0);
+    SetEventValue(bot, "rtg_lfg_world_return_since", 0, 0);
+    SetEventValue(bot, "rtg_dungeon_active", 0, 0);
 
     if (clearLogout)
         SetEventValue(bot, "logout", 0, 0);
@@ -2437,6 +2458,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 uint32 nowTs = uint32(time(nullptr));
                 uint32 orphanedSince = RTG_GetOrphanedSince(botId);
                 bool disposedFromDungeon = bot->HasAura(26013) || bot->HasAura(71041);
+                RTG_ClearProposalLifecycle(botId, bot);
                 SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                 SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
                 if (disposedFromDungeon)
@@ -2453,9 +2475,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     // do not keep it lingering behind the player. Mark the world-return moment
                     // and retire it almost immediately unless it is still unsafe to logout.
                     SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, 90, addData);
+                    SetEventValue(botId, "rtg_lfg_world_return_since", nowTs, 90, addData);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=returned_to_world retireSoon=1", botId, desiredOwner));
                 }
-                else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= 5)
+                else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= RTG_GetRdfReturnWorldRetireSeconds())
                 {
                     if (group && !groupHasRealPlayer)
                         group->RemoveMember(bot->GetGUID());
@@ -2468,12 +2491,15 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             {
                 uint32 nowTs = uint32(time(nullptr));
                 uint32 worldReturnSince = GetEventValue(botId, "rtg_lfg_world_return_since");
+                RTG_ClearProposalLifecycle(botId, bot);
+                SetEventValue(botId, "rtg_lfg_pending", 0, 0);
+                SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
                 if (!worldReturnSince)
                 {
                     SetEventValue(botId, "rtg_lfg_world_return_since", nowTs, 60, addData);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][RETURN_WORLD] helper={} owner={} retireSoon=1", botId, desiredOwner));
                 }
-                else if (nowTs > worldReturnSince && (nowTs - worldReturnSince) >= 5)
+                else if (nowTs > worldReturnSince && (nowTs - worldReturnSince) >= RTG_GetRdfReturnWorldRetireSeconds())
                 {
                     if (group && !groupHasRealPlayer)
                         group->RemoveMember(bot->GetGUID());
@@ -3113,8 +3139,11 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
                                 bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
             bool queueGrace = GetEventValue(botId, queueGraceKey) != 0;
+            bool retireWhenSafe = GetEventValue(botId, retireWhenSafeKey) != 0;
+            bool worldReturnPending = GetEventValue(botId, worldReturnSinceKey) != 0;
+            bool leaveRequested = GetEventValue(botId, leaveRequestedKey) != 0;
 
-            if (!noLongerNeeded && !inQueueState)
+            if (!noLongerNeeded && !inQueueState && !retireWhenSafe && !worldReturnPending && !leaveRequested)
             {
                 SetEventValue(botId, pendingKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
                 SetEventValue(botId, queueGraceKey, 1, RTG_GetQueueGraceTtlSeconds(), addData);
@@ -3186,7 +3215,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 SetEventValue(botId, queueGraceKey, 0, 0);
             }
 
-            bool retireWhenSafe = GetEventValue(botId, retireWhenSafeKey) != 0;
             bool outOfBgState = !RTG_IsBgLifecycleOwned(bot, desiredQueueType);
 
             if (outOfBgState && (retireWhenSafe || noLongerNeeded))
@@ -3211,6 +3239,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (!worldReturnSince)
                 {
                     RTG_LeaveBotOnlyGroup(bot);
+                    SetEventValue(botId, pendingKey, 0, 0);
+                    SetEventValue(botId, queueGraceKey, 0, 0);
+                    SetEventValue(botId, queueRetryKey, 0, 0);
                     SetEventValue(botId, worldReturnSinceKey, nowTs, 60, addData);
                     SetEventValue(botId, leaveRequestedKey, 0, 0);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][{}][RETURN_WORLD] helper={} queue={} retireSoon=1", laneTag, botId, desiredQueueType));
@@ -3305,7 +3336,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 				continue;
 			}
 
-			if (now <= activeSince + 5)
+			if (now <= activeSince + RTG_GetRdfReturnWorldRetireSeconds())
 				continue;
 
 			SetEventValue(botId, "rtg_dungeon_active", 0, 0);
@@ -3313,7 +3344,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 		}
 
 		for (ObjectGuid const& botGuid : rtgFinishedDungeonLogout)
-			RTG_RequestSafeBotLogout(botGuid, "rtg_dungeon_finished");
+			RTG_RequestQueueHelperLogout(botGuid, "rtg_dungeon_finished", true);
 	}
 
 // ---------------------------------------------------------
