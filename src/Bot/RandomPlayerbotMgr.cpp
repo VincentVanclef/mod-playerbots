@@ -4866,6 +4866,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             bucket.phase = phase;
                             bucket.need = plannerNeed;
                             bgBuckets.emplace(key, bucket);
+                        }
+                    }
                 }
             }
         }
