@@ -36,6 +36,7 @@
 #include "RandomItemMgr.h"
 #include "RandomPlayerbotFactory.h"
 #include "RandomPlayerbotMgr.h"
+#include "RtgRdfRoleResolver.h"
 #include "RtgQueueMetadata.h"
 #include "ReputationMgr.h"
 #include "SharedDefines.h"
@@ -127,6 +128,14 @@ namespace
 
         uint8 cls = bot->getClass();
         return isArenaLane ? sPlayerbotAIConfig.rtgArenaClassSpecIndex[cls][specTab] : sPlayerbotAIConfig.rtgBgClassSpecIndex[cls][specTab];
+    }
+
+    static uint32 RTG_GetForcedPvpRole(Player* bot)
+    {
+        if (!bot)
+            return 0u;
+
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(bot->GetGUID().GetCounter(), "rtg_pvp_force_role");
     }
 }
 
@@ -1186,7 +1195,15 @@ void PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_templa
     bool rtgIsArenaLane = false;
     std::string rtgAddData;
     bool rtgQueuePvpHelper = RTG_GetQueuePvpLaneContext(bot, rtgIsArenaLane, rtgAddData);
-    if (rtgQueuePvpHelper && RTG_SelectConfiguredPvpSpecTab(bot, rtgIsArenaLane, specTab))
+    uint32 forcedPvpRole = rtgQueuePvpHelper ? RTG_GetForcedPvpRole(bot) : 0u;
+    uint8 forcedSpecTab = 0;
+    if (rtgQueuePvpHelper && forcedPvpRole && RTG::PreferredSpecTabForClassRole(cls, forcedPvpRole, forcedSpecTab))
+    {
+        specTab = forcedSpecTab;
+        LOG_INFO("playerbots", "[RTG][PVP][SPEC] helper={} lane={} class={} specTab={} forcedRole={} add='{}'",
+            bot->GetGUID().GetCounter(), rtgIsArenaLane ? "arena" : "bg", uint32(cls), specTab, forcedPvpRole, rtgAddData);
+    }
+    else if (rtgQueuePvpHelper && RTG_SelectConfiguredPvpSpecTab(bot, rtgIsArenaLane, specTab))
     {
         uint32 specIndex = RTG_GetConfiguredPvpSpecIndex(bot, rtgIsArenaLane, specTab);
         LOG_INFO("playerbots", "[RTG][PVP][SPEC] helper={} lane={} class={} specTab={} specIndex={} add='{}'",

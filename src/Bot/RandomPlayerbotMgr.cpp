@@ -502,6 +502,24 @@ namespace
         return owner->InBattleground() || owner->InArena();
     }
 
+    static uint32 RTG_StrictPrimaryRoleForClassSpecTab(uint8 cls, uint8 specTab)
+    {
+        uint32 roleMask = RTG_RoleMaskForClassSpecTab(cls, specTab);
+        if (roleMask == lfg::PLAYER_ROLE_HEALER)
+            return lfg::PLAYER_ROLE_HEALER;
+        if (roleMask == lfg::PLAYER_ROLE_TANK)
+            return lfg::PLAYER_ROLE_TANK;
+        return lfg::PLAYER_ROLE_DAMAGE;
+    }
+
+    static uint32 RTG_GetStrictPrimaryRoleForBot(Player* bot)
+    {
+        if (!bot)
+            return lfg::PLAYER_ROLE_DAMAGE;
+
+        return RTG_StrictPrimaryRoleForClassSpecTab(bot->getClass(), AiFactory::GetPlayerSpecTab(bot));
+    }
+
     static bool RTG_PvpClaimAllowsQueue(uint32 botGuid, uint32 desiredQueueType);
 
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
@@ -1746,6 +1764,8 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         SetEventValue(botId, "rtg_arena_retire_when_safe", 0, 0);
         SetEventValue(botId, "rtg_arena_world_return_since", 0, 0);
         SetEventValue(botId, "rtg_arena_queue_retry", 0, 0);
+        SetEventValue(botId, "rtg_pvp_force_role", 0, 0);
+        SetEventValue(botId, "rtg_pvp_runtime_role", 0, 0);
         SetEventValue(botId, "rtg_add_requested", 0, 0);
         SetEventValue(botId, "rtg_login_dispatch_inflight", 0, 0);
     }
@@ -1780,6 +1800,8 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_arena_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_arena_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_arena_queue_retry", 0, 0);
+    SetEventValue(bot, "rtg_pvp_force_role", 0, 0);
+    SetEventValue(bot, "rtg_pvp_runtime_role", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
     SetEventValue(bot, "rtg_login_dispatch_inflight", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
@@ -4177,7 +4199,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 RTG_IsLoginDispatchInflight(charInfo.guid);
         };
 
-        auto countAvailableBgCandidates = [&](uint32 team, bool arenaOnly) -> uint32
+        auto countAvailableBgCandidates = [&](uint32 team, bool arenaOnly, uint32 desiredRole = 0u) -> uint32
         {
             uint32 count = 0;
             for (CharacterInfo const& charInfo : allCharacters)
@@ -4185,6 +4207,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (uint32(IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE) != team)
                     continue;
                 if (isQueueHelperBlocked(charInfo))
+                    continue;
+                if (desiredRole && !RTG::ClassCanRole(charInfo.rClass, desiredRole))
                     continue;
                 ++count;
             }
@@ -4250,7 +4274,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         };
 
         // Lambda to handle bot login logic
-        auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& requestedAddData = "") -> bool
+        auto tryLoginBot = [&](const CharacterInfo& charInfo, std::string const& requestedAddData = "", uint32 forcedPvpRole = 0u) -> bool
         {
             if (isQueueHelperBlocked(charInfo))
                 return false;
@@ -4287,7 +4311,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
             if (RTG_IsManagedPvpAddData(addData))
+            {
                 RTG_SetPvpClaim(charInfo.guid, addData, std::max<uint32>(180u, RTG_GetQueueGraceTtlSeconds() + 180u));
+                if (forcedPvpRole)
+                    SetEventValue(charInfo.guid, "rtg_pvp_force_role", forcedPvpRole, add_time, addData);
+                else
+                    SetEventValue(charInfo.guid, "rtg_pvp_force_role", 0, 0);
+            }
             if (RTG::HasPrefix(addData, "rtg_lfg:"))
             {
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
@@ -4364,6 +4394,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 bool isArena = false;
                 uint32 realQueued = 0;
                 uint32 assignedExtra = 0;
+                uint32 currentHealerCount = 0;
+                uint32 assignedHealerCount = 0;
+                uint32 desiredHealerCount = 0;
                 uint32 currentTeamCount = 0;
                 uint32 need = 0;
                 uint32 phase = 0;
@@ -4371,6 +4404,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             std::map<std::pair<uint32, uint32>, RtgLfgBucket> lfgBuckets;
             std::map<std::pair<uint32, uint32>, uint32> bgQueueTotals;
+            std::map<std::tuple<uint32, uint32, uint32>, uint32> bgRealHealerCounts;
             std::map<std::tuple<uint32, uint32, uint32>, RtgBgBucket> bgBuckets;
             std::map<std::pair<uint32, uint32>, BattlegroundBracketId> bgBrackets;
             std::map<std::pair<uint32, uint32>, uint32> bgTeamSizes;
@@ -4454,6 +4488,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                     auto bgKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetLevel()));
                     ++bgQueueTotals[bgKey];
+                    if (RTG_IsArenaQueueType(queueTypeId) && RTG_GetStrictPrimaryRoleForBot(player) == lfg::PLAYER_ROLE_HEALER)
+                        ++bgRealHealerCounts[std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetTeamId()), static_cast<uint32>(player->GetLevel()))];
                     bgBrackets[bgKey] = pvpDiff->GetBracketId();
                     bgTeamSizes[bgKey] = RTG_IsArenaQueueType(queueTypeId)
                         ? RTG_NormalizeArenaTeamSizeForQueue(queueTypeId)
@@ -4545,6 +4581,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.isArena = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType));
                         bucket.realQueued = bgQueueTotals[std::make_pair(desiredQueueType, dataLevel)];
                         bucket.phase = GetEventValue(0, RTG_MakePvpPhaseKey(desiredQueueType, uint32(bracketId)));
+                        bucket.currentHealerCount = bgRealHealerCounts[key];
+                        bucket.desiredHealerCount = (bucket.isArena && bucket.teamSize >= 3u) ? 1u : 0u;
 
                         BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
                         bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
@@ -4563,7 +4601,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     }
 
                     if (!countsInBgState)
+                    {
                         ++it->second.assignedExtra;
+                        if (GetEventValue(botId, "rtg_pvp_force_role") == lfg::PLAYER_ROLE_HEALER)
+                            ++it->second.assignedHealerCount;
+                    }
+                    else if (managedBot && it->second.isArena && RTG_GetStrictPrimaryRoleForBot(managedBot) == lfg::PLAYER_ROLE_HEALER)
+                        ++it->second.currentHealerCount;
                 }
             }
 
@@ -4597,6 +4641,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.realQueued = static_cast<uint32>(queuePair.second.size());
                         bucket.phase = phase;
                         bucket.need = lc.second;
+                        bucket.currentHealerCount = bgRealHealerCounts[std::make_tuple(queueTypeId, teamId, bucket.level)];
+                        bucket.desiredHealerCount = (bucket.isArena && bucket.teamSize >= 3u) ? 1u : 0u;
 
                         BattlegroundInfo& bgInfo = BattlegroundData[queueTypeId][bracketId];
                         bucket.currentTeamCount = (teamId == TEAM_ALLIANCE)
@@ -4702,6 +4748,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                 : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount + plannerNeed);
                             bucket.isArena = RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueTypeId));
                             bucket.realQueued = (team == TEAM_ALLIANCE) ? bgInfo.bgQueueAlliancePlayerCount : bgInfo.bgQueueHordePlayerCount;
+                            bucket.currentHealerCount = bgRealHealerCounts[std::make_tuple(queueTypeId, team, level)];
+                            bucket.desiredHealerCount = (bucket.isArena && bucket.teamSize >= 3u) ? 1u : 0u;
                             bucket.currentTeamCount = (team == TEAM_ALLIANCE)
                                 ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
                                 : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
@@ -5007,38 +5055,51 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 desiredLevel = RTG_NormalizeDesiredPvpQueueLevel(bucket.level);
                 std::string addData = bucket.isArena ? RTG::MakeArenaAddData(bucket.team, desiredLevel, bucket.queueTypeId)
                                                      : RTG::MakeBgAddData(bucket.team, desiredLevel, bucket.queueTypeId);
-                for (auto const& charInfo : allCharacters)
+                for (uint32 pass = 0; pass < 2; ++pass)
                 {
-                    if (!capacity)
-                        return false;
-
-                    uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
-                    if (charTeam != bucket.team)
-                        continue;
-                    if (!tryLoginBot(charInfo, addData))
-                        continue;
-
-                    LOG_INFO("playerbots", bucket.isArena ? "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}" : "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, desiredLevel);
-                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, desiredLevel));
-                    if (bucket.isArena)
+                    bool forceArenaHealer = (pass == 0) && bucket.isArena &&
+                                            bucket.desiredHealerCount > (bucket.currentHealerCount + bucket.assignedHealerCount);
+                    for (auto const& charInfo : allCharacters)
                     {
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
-                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase,
-                            bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][FORM] helper={} queue={} bracket={} team={} level={} teamSize={}",
-                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.teamSize));
+                        if (!capacity)
+                            return false;
+
+                        uint32 charTeam = IsAlliance(charInfo.rRace) ? TEAM_ALLIANCE : TEAM_HORDE;
+                        if (charTeam != bucket.team)
+                            continue;
+                        if (forceArenaHealer && !RTG::ClassCanRole(charInfo.rClass, lfg::PLAYER_ROLE_HEALER))
+                            continue;
+                        if (!tryLoginBot(charInfo, addData, forceArenaHealer ? lfg::PLAYER_ROLE_HEALER : 0u))
+                            continue;
+
+                        LOG_INFO("playerbots", bucket.isArena ? "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}" : "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, desiredLevel);
+                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, desiredLevel));
+                        if (bucket.isArena)
+                        {
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                                charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase,
+                                bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][FORM] helper={} queue={} bracket={} team={} level={} teamSize={}",
+                                charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.teamSize));
+                        }
+                        else
+                        {
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                                charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase,
+                                bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
+                        }
+                        ++rtgBgLogged;
+                        --capacity;
+                        --remainingCapacity;
+                        ++bucket.assignedExtra;
+                        if (forceArenaHealer)
+                        {
+                            ++bucket.assignedHealerCount;
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][HEALER] helper={} queue={} team={} forcedRole=healer",
+                                charInfo.guid, bucket.queueTypeId, bucket.team));
+                        }
+                        return true;
                     }
-                    else
-                    {
-                        RTG_RuntimeBreadcrumb(fmt::format("[RTG][BG][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
-                            charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase,
-                            bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
-                    }
-                    ++rtgBgLogged;
-                    --capacity;
-                    --remainingCapacity;
-                    ++bucket.assignedExtra;
-                    return true;
                 }
                 return false;
             };
@@ -5050,7 +5111,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 if (bucket.assignedExtra >= bucket.need)
                     return false;
 
-                uint32 availableCandidates = countAvailableBgCandidates(bucket.team, bucket.isArena);
+                bool needArenaHealer = bucket.isArena && bucket.desiredHealerCount > (bucket.currentHealerCount + bucket.assignedHealerCount);
+                uint32 availableCandidates = countAvailableBgCandidates(bucket.team, bucket.isArena, needArenaHealer ? lfg::PLAYER_ROLE_HEALER : 0u);
+                if (!availableCandidates && needArenaHealer)
+                    availableCandidates = countAvailableBgCandidates(bucket.team, bucket.isArena);
                 if (!availableCandidates)
                 {
                     if (RTG_QueueDebugEnabled())
@@ -7924,6 +7988,20 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 return;
             }
 
+            uint32 forcedPvpRole = GetEventValue(bot->GetGUID().GetCounter(), "rtg_pvp_force_role");
+            uint32 actualPvpRole = RTG_GetStrictPrimaryRoleForBot(bot);
+            SetEventValue(bot->GetGUID().GetCounter(), "rtg_pvp_runtime_role", actualPvpRole, 1800u, addData);
+            if (forcedPvpRole && forcedPvpRole != actualPvpRole)
+            {
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][PVP][FAIL] helper={} lane={} queue={} forcedRole={} actualRole={} reason=role_mismatch",
+                    bot->GetGUID().GetCounter(), isArenaLane ? "arena" : "bg", desiredQueueType, forcedPvpRole, actualPvpRole));
+                RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
+                RTG_RequestQueueHelperLogout(bot->GetGUID(), isArenaLane ? "rtg_arena_role_mismatch" : "rtg_bg_role_mismatch");
+                return;
+            }
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][PVP][ROLE] helper={} lane={} queue={} role={} forcedRole={}",
+                bot->GetGUID().GetCounter(), isArenaLane ? "arena" : "bg", desiredQueueType, actualPvpRole, forcedPvpRole));
+
             if (RTG::HasPrefix(addData, "rtg_arena:"))
             {
                 SetEventValue(bot->GetGUID().GetCounter(), "rtg_arena_pending", 1, RTG_GetQueueGraceTtlSeconds(), addData);
@@ -8076,6 +8154,8 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     SetEventValue(bot, "rtg_arena_queue_retry", 0, 0);
     SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_arena_retire_when_safe", 0, 0);
+    SetEventValue(bot, "rtg_pvp_force_role", 0, 0);
+    SetEventValue(bot, "rtg_pvp_runtime_role", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
     SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);

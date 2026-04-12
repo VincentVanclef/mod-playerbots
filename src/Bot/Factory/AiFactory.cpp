@@ -79,6 +79,7 @@ namespace
         {
             engine->removeStrategy("healer dps", false);
             engine->removeStrategy("save mana", false);
+            engine->removeStrategy("dps assist", false);
         }
 
         switch (cls)
@@ -129,6 +130,7 @@ namespace
                 {
                     engine->removeStrategy("healer dps", false);
                     engine->removeStrategy("save mana", false);
+                    engine->removeStrategy("dps assist", false);
                 }
                 break;
             default:
@@ -167,7 +169,10 @@ namespace
             engine->removeStrategy("mount", false);
 
         if (PlayerbotAI::IsHeal(player, true))
+        {
             engine->removeStrategy("save mana", false);
+            engine->removeStrategy("dps assist", false);
+        }
 
         if (cls == CLASS_ROGUE)
             engine->addStrategy("stealth", false);
