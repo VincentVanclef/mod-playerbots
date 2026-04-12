@@ -81,6 +81,8 @@ namespace
 	// --- RDF strict spec-role helper declarations ---
 	static bool RTG_IsPureDpsClass(uint8 cls);
 	static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
+    static bool RTG_GroupHasRealPlayer(Group* group);
+    static void RTG_LeaveBotOnlyGroup(Player* bot);
     static bool RTG_IsArenaQueueType(BattlegroundQueueTypeId queueTypeId);
     static bool RTG_IsLoginDispatchInflight(ObjectGuid::LowType botGuid);
 	
@@ -760,10 +762,9 @@ namespace
         bot->ClearUnitState(UNIT_STATE_ALL_STATE);
 
         Group* group = bot->GetGroup();
-        if (group && !group->isLFGGroup())
+        if (group && !RTG_GroupHasRealPlayer(group))
         {
-            if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
-                botAI->LeaveOrDisbandGroup();
+            RTG_LeaveBotOnlyGroup(bot);
             changed = true;
         }
 
@@ -1753,6 +1754,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         return false;
 
     std::string addData = GetEventData(botId, "add");
+    bool lfgManaged = RTG::HasPrefix(addData, "rtg_lfg:");
     bool arenaManaged = RTG::HasPrefix(addData, "rtg_arena:");
     char const* retireWhenSafeKey = RTG_GetPvpRetireWhenSafeKey(arenaManaged);
 
@@ -1762,7 +1764,14 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
         return false;
     }
 
-    if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+    if (lfgManaged)
+    {
+        RTG_TryRecoverRdfHelperToWorld(bot, reason ? reason : "rtg_lfg_logout");
+        RTG_LeaveBotOnlyGroup(bot);
+        if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+            RTG::RtgQueueLedger::Instance().Release(botId, reason ? reason : "rtg_lfg_logout");
+    }
+    else if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
     {
         RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
         if (ledger.Has(botId))
