@@ -202,9 +202,6 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
     {
         mgr.RTG_SetBotEventValue(0, "rtg_lfg_start", 0, 0);
         mgr.RTG_SetBotEventValue(0, "rtg_lfg_need_total", 0, 0);
-        LOG_INFO("playerbots", "[RTG][RDF][TOTAL] demandOwners=0 desiredHelpers=0 cappedHelpers=0 anyReady=0 globalStart=0");
-        LOG_WARN("playerbots", "[RTG][RDF][TOTAL] demandOwners=0 desiredHelpers=0 cappedHelpers=0 anyReady=0 globalStart=0");
-        LOG_INFO("server.loading", "[RTG][RDF][TOTAL] demandOwners=0 desiredHelpers=0 cappedHelpers=0 anyReady=0 globalStart=0");
     }
 }
 }

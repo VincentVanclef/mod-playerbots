@@ -2509,6 +2509,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     SetEventValue(botId, "rtg_lfg_orphan_since", nowTs, 90, addData);
                     SetEventValue(botId, "rtg_lfg_world_return_since", nowTs, 90, addData);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][ORPHAN] helper={} owner={} reason=returned_to_world retireSoon=1", botId, desiredOwner));
+                    if (!bot->IsInCombat() && !bot->IsBeingTeleported() && !bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                    {
+                        if (group && !groupHasRealPlayer)
+                            group->RemoveMember(bot->GetGUID());
+                        RTG_LeaveBotOnlyGroup(bot);
+                        rtgRdfLogoutRequests.emplace_back(bot->GetGUID(), "rtg_lfg_orphaned");
+                    }
                 }
                 else if (nowTs > orphanedSince && (nowTs - orphanedSince) >= RTG_GetRdfReturnWorldRetireSeconds())
                 {
@@ -2529,6 +2536,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 {
                     SetEventValue(botId, "rtg_lfg_world_return_since", nowTs, 60, addData);
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][RETURN_WORLD] helper={} owner={} retireSoon=1", botId, desiredOwner));
+                    if (!bot->IsInCombat() && !bot->IsBeingTeleported() && !bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                    {
+                        if (group && !groupHasRealPlayer)
+                            group->RemoveMember(bot->GetGUID());
+                        RTG_LeaveBotOnlyGroup(bot);
+                        rtgRdfLogoutRequests.emplace_back(bot->GetGUID(), "rtg_lfg_returned_world");
+                    }
                 }
                 else if (nowTs > worldReturnSince && (nowTs - worldReturnSince) >= RTG_GetRdfReturnWorldRetireSeconds())
                 {
