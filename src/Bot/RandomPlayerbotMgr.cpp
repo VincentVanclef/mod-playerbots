@@ -507,6 +507,14 @@ namespace
         if (!bot || !desiredQueueType || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
             return false;
 
+        if (!RTG_PvpClaimAllowsQueue(bot->GetGUID().GetCounter(), desiredQueueType))
+        {
+            RTG_RuntimeBreadcrumb(fmt::format("[RTG][CLAIM][BLOCK] helper={} queue={} reason={} claim='{}'",
+                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg",
+                sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "rtg_pvp_claim")));
+            return false;
+        }
+
         if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
             bot->IsInvitedForBattlegroundInstance())
             return true;
@@ -1200,6 +1208,86 @@ namespace
         return "rtg_bg_retire";
     }
 
+    static bool RTG_IsManagedPvpAddData(std::string const& addData)
+    {
+        return RTG::HasPrefix(addData, "rtg_bg:") || RTG::HasPrefix(addData, "rtg_arena:");
+    }
+
+    static char const* RTG_GetPvpLaneTagFromQueueType(uint32 queueType)
+    {
+        return RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueType)) ? "arena" : "bg";
+    }
+
+    static char const* RTG_GetPvpLaneTagFromAddData(std::string const& addData)
+    {
+        if (RTG::HasPrefix(addData, "rtg_arena:"))
+            return "arena";
+        if (RTG::HasPrefix(addData, "rtg_bg:"))
+            return "bg";
+        return "";
+    }
+
+    static void RTG_SetPvpClaim(uint32 botGuid, std::string const& addData, uint32 ttl)
+    {
+        if (!botGuid || !ttl || !RTG_IsManagedPvpAddData(addData))
+            return;
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botGuid, "rtg_pvp_claim", 1, ttl, addData);
+
+        uint32 team = 0;
+        uint32 level = 0;
+        uint32 queueType = 0;
+        if (RTG::ParseBgAddData(addData, team, level, queueType))
+        {
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botGuid, "rtg_pvp_claim_queue", queueType, ttl, addData);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botGuid, "rtg_pvp_claim_lane", 1, ttl, RTG_GetPvpLaneTagFromQueueType(queueType));
+        }
+        else
+        {
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botGuid, "rtg_pvp_claim_lane", 1, ttl, RTG_GetPvpLaneTagFromAddData(addData));
+        }
+    }
+
+    static void RTG_ClearPvpClaim(uint32 botGuid)
+    {
+        if (!botGuid)
+            return;
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botGuid, "rtg_pvp_claim", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botGuid, "rtg_pvp_claim_queue", 0, 0);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botGuid, "rtg_pvp_claim_lane", 0, 0);
+    }
+
+    static bool RTG_PvpClaimConflicts(uint32 botGuid, std::string const& addData)
+    {
+        if (!botGuid || !RTG_IsManagedPvpAddData(addData))
+            return false;
+
+        std::string claimData = sRandomPlayerbotMgr.RTG_GetBotEventData(botGuid, "rtg_pvp_claim");
+        if (claimData.empty())
+            return false;
+
+        return claimData != addData;
+    }
+
+    static bool RTG_PvpClaimAllowsQueue(uint32 botGuid, uint32 desiredQueueType)
+    {
+        if (!botGuid || !desiredQueueType)
+            return true;
+
+        std::string claimData = sRandomPlayerbotMgr.RTG_GetBotEventData(botGuid, "rtg_pvp_claim");
+        if (claimData.empty())
+            return true;
+
+        uint32 claimTeam = 0;
+        uint32 claimLevel = 0;
+        uint32 claimQueueType = 0;
+        if (!RTG::ParseBgAddData(claimData, claimTeam, claimLevel, claimQueueType))
+            return true;
+
+        return claimQueueType == desiredQueueType;
+    }
+
     static void RTG_ClearQueueDebuffs(Player* bot)
     {
         if (!bot)
@@ -1643,6 +1731,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
 
     if (clearQueueState)
     {
+        RTG_ClearPvpClaim(botId);
         SetEventValue(botId, "add", 0, 0);
         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
         SetEventValue(botId, "rtg_bg_pending", 0, 0);
@@ -1676,6 +1765,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
 
 void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
 {
+    RTG_ClearPvpClaim(bot);
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_lfg_pending", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
@@ -1731,6 +1821,7 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
                 ledger.Remove(botId);
             else if (!hasPendingAdd && !hasPendingLogout)
             {
+                RTG_ClearPvpClaim(botId);
                 if (RTG_QueueOwnershipDebugEnabled())
                     LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} removing stale offline ledger entry state={} queue={}",
                              botId, uint32(entry->state), uint32(entry->target.queueTypeId));
@@ -1768,6 +1859,23 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
                 if (RTG_QueueOwnershipDebugEnabled())
                     LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} transition watchdog reset state={} queue={} instance={}",
                              botId, uint32(entry->state), uint32(entry->target.queueTypeId), entry->ownerInstanceId);
+            }
+        }
+
+        std::string claimData = GetEventData(botId, "rtg_pvp_claim");
+        bool claimedPvpHelper = RTG_IsManagedPvpAddData(claimData) ||
+                                entry->target.queueTypeId != BATTLEGROUND_QUEUE_NONE;
+        if (claimedPvpHelper && !entry->pendingRetire)
+        {
+            bool hasQueueState = bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
+            RTG::RtgLifecycleResult drainCheck = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
+            if (!hasQueueState && drainCheck.decision == RTG::RtgLifecycleDecision::Allow)
+            {
+                bool arenaManaged = RTG_IsManagedPvpAddData(claimData) ? RTG::HasPrefix(claimData, "rtg_arena:")
+                                                                       : RTG_IsArenaQueueType(entry->target.queueTypeId);
+                SetEventValue(botId, RTG_GetPvpRetireWhenSafeKey(arenaManaged), 1, retireRetryTtl, claimData);
+                RTG_RequestSafeBotLogout(bot->GetGUID(), RTG_GetPvpRetireReason(arenaManaged, "audit"), true);
+                continue;
             }
         }
 
@@ -4043,6 +4151,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         {
             return busyAccountIds.find(charInfo.accountId) != busyAccountIds.end() ||
                 GetEventValue(charInfo.guid, "add") ||
+                GetEventValue(charInfo.guid, "rtg_pvp_claim") ||
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
@@ -4136,6 +4245,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             if (RTG_IsLoginDispatchInflight(charInfo.guid))
                 return false;
 
+            if (RTG_PvpClaimConflicts(charInfo.guid, addData))
+            {
+                RTG_RuntimeBreadcrumb(fmt::format("[RTG][CLAIM][SKIP] helper={} requested='{}' claim='{}'",
+                    charInfo.guid, addData, GetEventData(charInfo.guid, "rtg_pvp_claim")));
+                return false;
+            }
+
             if (!addData.empty() && RTG_IsLaneLoginBackoffActive(addData))
             {
                 if (RTG_QueueDebugEnabled())
@@ -4153,6 +4269,8 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             SetEventValue(charInfo.guid, "add", 1, add_time, addData);
             SetEventValue(charInfo.guid, "logout", 0, 0);
+            if (RTG_IsManagedPvpAddData(addData))
+                RTG_SetPvpClaim(charInfo.guid, addData, std::max<uint32>(180u, RTG_GetQueueGraceTtlSeconds() + 180u));
             if (RTG::HasPrefix(addData, "rtg_lfg:"))
             {
                 SetEventValue(charInfo.guid, "rtg_lfg_pending", 1, 45, addData);
@@ -5896,6 +6014,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
             else
                 LOG_DEBUG("playerbots", "Bot #{}: log out", bot);
 
+            RTG_ClearPvpClaim(bot);
             SetEventValue(bot, "add", 0, 0);
             currentBots.remove(bot);
 
@@ -5926,6 +6045,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         if (RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner) && RTG_IsOwnerInBattlegroundMap(desiredOwner))
         {
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][ABANDON] helper={} owner={} reason=owner_in_bg_map", bot, desiredOwner));
+            RTG_ClearPvpClaim(bot);
             SetEventValue(bot, "add", 0, 0);
             SetEventValue(bot, "logout", 0, 0);
             SetEventValue(bot, "rtg_add_requested", 0, 0);
@@ -7772,6 +7892,7 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         {
             bool isArenaLane = RTG::HasPrefix(addData, "rtg_arena:") || RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType));
             desiredLevel = RTG_NormalizeDesiredPvpQueueLevel(desiredLevel);
+            RTG_SetPvpClaim(bot->GetGUID().GetCounter(), addData, std::max<uint32>(180u, RTG_GetQueueGraceTtlSeconds() + 180u));
             if (!RTG_PreparePvpQueueHelperForDesiredLevel(bot, desiredLevel, isArenaLane ? "arena" : "bg"))
             {
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][PVP][FAIL] helper={} lane={} queue={} desiredLevel={} preparedLevel={} reason=profile_not_ready",
@@ -7927,6 +8048,7 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
 void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
 {
     std::string addData = GetEventData(bot, "add");
+    RTG_ClearPvpClaim(bot);
     SetEventValue(bot, "add", 0, 0);
     SetEventValue(bot, "rtg_bg_pending", 0, 0);
     SetEventValue(bot, "rtg_arena_pending", 0, 0);
