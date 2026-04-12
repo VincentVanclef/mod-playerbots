@@ -2430,6 +2430,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (!RTG::ParseLfgAddData(addData, desiredTeam, desiredLevel, &desiredRole, &desiredOwner))
                 continue;
 
+            if (GetEventValue(botId, "logout"))
+                continue;
 
             if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsBeingTeleported())
                 continue;
@@ -2446,17 +2448,19 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool ownerHasRealDemand = desiredOwner && GetEventValue(desiredOwner, "rtg_lfg_real_demand");
             bool groupHasRealPlayer = RTG_GroupHasRealPlayer(group);
             bool safeDetachedGroup = !group || !groupHasRealPlayer;
+            uint32 orphanedSince = RTG_GetOrphanedSince(botId);
+            uint32 worldReturnSince = GetEventValue(botId, "rtg_lfg_world_return_since");
+            bool rdfRetiring = orphanedSince || worldReturnSince;
             bool orphanCandidate = GetEventValue(botId, "rtg_dungeon_active") && !ownerHasRealDemand && safeDetachedGroup && !inDungeonMap && state == lfg::LFG_STATE_NONE;
             bool detachedFromRdf = !ownerHasRealDemand && safeDetachedGroup && !inDungeonMap && state == lfg::LFG_STATE_NONE;
-            if (ownerHasRealDemand || inDungeonMap || state != lfg::LFG_STATE_NONE || (group && groupHasRealPlayer))
+            if (!rdfRetiring && (ownerHasRealDemand || inDungeonMap || state != lfg::LFG_STATE_NONE || (group && groupHasRealPlayer)))
             {
                 RTG_ClearOrphanedState(botId);
                 SetEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
             }
-            else if (orphanCandidate)
+            else if (orphanCandidate || (orphanedSince && !inDungeonMap))
             {
                 uint32 nowTs = uint32(time(nullptr));
-                uint32 orphanedSince = RTG_GetOrphanedSince(botId);
                 bool disposedFromDungeon = bot->HasAura(26013) || bot->HasAura(71041);
                 RTG_ClearProposalLifecycle(botId, bot);
                 SetEventValue(botId, "rtg_lfg_pending", 0, 0);
@@ -2487,10 +2491,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 }
                 continue;
             }
-            else if (detachedFromRdf)
+            else if (detachedFromRdf || worldReturnSince)
             {
                 uint32 nowTs = uint32(time(nullptr));
-                uint32 worldReturnSince = GetEventValue(botId, "rtg_lfg_world_return_since");
                 RTG_ClearProposalLifecycle(botId, bot);
                 SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                 SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
@@ -3142,6 +3145,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool retireWhenSafe = GetEventValue(botId, retireWhenSafeKey) != 0;
             bool worldReturnPending = GetEventValue(botId, worldReturnSinceKey) != 0;
             bool leaveRequested = GetEventValue(botId, leaveRequestedKey) != 0;
+
+            if (noLongerNeeded && !inQueueState && !retireWhenSafe && !worldReturnPending)
+                SetEventValue(botId, retireWhenSafeKey, 1, 120, addData);
 
             if (!noLongerNeeded && !inQueueState && !retireWhenSafe && !worldReturnPending && !leaveRequested)
             {
