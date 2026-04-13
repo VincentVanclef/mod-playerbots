@@ -206,6 +206,17 @@ namespace
             return false;
         }
 
+        if (!bg->isArena())
+        {
+            uint32 assignedQueueType = 0;
+            if (RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != 0 &&
+                !RTG_AssignedBgHelperHasDemand(bot, assignedQueueType))
+            {
+                sNoRealPlayerSince.erase(instanceId);
+                return true;
+            }
+        }
+
         if (RTG_ProtectedPvpHelperIsDraining(bot))
         {
             sNoRealPlayerSince.erase(instanceId);

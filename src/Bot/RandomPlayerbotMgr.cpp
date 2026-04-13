@@ -3454,10 +3454,16 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         if (!GetEventValue(botId, leaveRequestedKey))
                         {
+                            // Mark the helper as draining before issuing the leave
+                            // action so BGLeaveAction sees this as a teardown path
+                            // rather than a protected live-match leave request.
+                            SetEventValue(botId, leaveRequestedKey, nowTs, 5, addData);
+                            SetEventValue(botId, retireWhenSafeKey, 1, 120, addData);
                             bool leaveIssued = RTG_RequestImmediateBgLeave(bot);
                             // Even failed leave attempts need a short backoff so protected
                             // battleground helpers do not get hammered every update tick.
-                            SetEventValue(botId, leaveRequestedKey, nowTs, leaveIssued ? 15 : 5, addData);
+                            if (leaveIssued)
+                                SetEventValue(botId, leaveRequestedKey, nowTs, 15, addData);
                         }
 
                         uint32 leaveRequestedAt = GetEventValue(botId, leaveRequestedKey);
