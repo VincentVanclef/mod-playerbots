@@ -3321,6 +3321,31 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // are actively serving a live battleground or arena with real demand.
             bool noLongerNeeded = drainingLifecycle || !bgHasRealDemand || wrongTeam || !plannerWantsHelper;
 
+            // Some helpers can get stranded on a battleground/arena map after the instance
+            // has effectively ended for them: no queue state, no invite, no active arena/BG
+            // state, no desired presence, but the map pointer still reports a PvP map.
+            // If we keep treating that map-only residue as lifecycle ownership forever,
+            // arena/BG retirement never reaches RETURN_WORLD/LOGOUT and the helper stays
+            // online indefinitely. Only break ownership once lane demand is gone or the
+            // helper is already draining, so active transitions are left alone.
+            Map* currentMap = bot->GetMap();
+            bool strandedMapOnlyLifecycle = noLongerNeeded &&
+                lifecycleOwned &&
+                currentMap && currentMap->IsBattlegroundOrArena() &&
+                !bot->InBattleground() && !bot->InArena() &&
+                !bot->InBattlegroundQueue() && !bot->IsInvitedForBattlegroundInstance() &&
+                !desiredPresence && !activeDesiredPresence;
+            if (strandedMapOnlyLifecycle)
+            {
+                lifecycleOwned = false;
+                if (!worldReturnPending)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format(
+                        "[RTG][{}][STRANDED_MAP] helper={} queue={} map={} forcing_world_return=1",
+                        laneTag, botId, desiredQueueType, currentMap->GetId()));
+                }
+            }
+
             if (activeDesiredPresence)
                 SetEventValue(botId, dispatchSinceKey, 0, 0);
 
