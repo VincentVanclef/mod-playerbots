@@ -1542,6 +1542,23 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
         return false;
     }
 
+    static bool RTG_HasActualBgLifecycle(Player* bot, uint32 desiredQueueType)
+    {
+        if (!bot)
+            return false;
+
+        if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
+            return true;
+
+        if (desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES)
+        {
+            if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)))
+                return true;
+        }
+
+        return false;
+    }
+
     static bool RTG_HasDesiredBgQueuePresence(Player* bot, uint32 desiredQueueType)
     {
         if (!bot || desiredQueueType <= BATTLEGROUND_QUEUE_NONE || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
@@ -1830,6 +1847,11 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     bool lfgManaged = RTG::HasPrefix(addData, "rtg_lfg:");
     bool arenaManaged = RTG::HasPrefix(addData, "rtg_arena:");
     char const* retireWhenSafeKey = RTG_GetPvpRetireWhenSafeKey(arenaManaged);
+    uint32 desiredQueueType = 0;
+    uint32 desiredTeam = 0;
+    uint32 desiredLevel = 0;
+    RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType);
+    bool actualPvpLifecycle = RTG_HasActualBgLifecycle(bot, desiredQueueType);
 
     if (session->isLogingOut() || bot->IsDuringRemoveFromWorld())
     {
@@ -1852,11 +1874,23 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
             RTG::RtgLifecycleResult lifecycle = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
             if (lifecycle.decision != RTG::RtgLifecycleDecision::Allow)
             {
-                ledger.RequestRetire(botId, reason ? reason : "rtg");
-                SetEventValue(botId, retireWhenSafeKey, 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, addData);
-                if (RTG_QueueOwnershipDebugEnabled())
-                    LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} retire delayed reason='{}' detail='{}'", botId, reason ? reason : "rtg", lifecycle.reason);
-                return false;
+                if (!actualPvpLifecycle && clearQueueState)
+                {
+                    char const* laneTag = arenaManaged ? "ARENA" : "BG";
+                    RTG_RuntimeBreadcrumb(fmt::format(
+                        "[RTG][{}][STALE_LEDGER] helper={} queue={} forcing_logout=1",
+                        laneTag, botId, desiredQueueType));
+                    ledger.ClearOwnership(botId, "stale battleground lifecycle cleared on logout");
+                    ledger.ClearRetireRequest(botId);
+                }
+                else
+                {
+                    ledger.RequestRetire(botId, reason ? reason : "rtg");
+                    SetEventValue(botId, retireWhenSafeKey, 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, addData);
+                    if (RTG_QueueOwnershipDebugEnabled())
+                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] helper={} retire delayed reason='{}' detail='{}'", botId, reason ? reason : "rtg", lifecycle.reason);
+                    return false;
+                }
             }
             ledger.Release(botId, reason ? reason : "rtg");
         }
@@ -3473,7 +3507,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 SetEventValue(botId, queueGraceKey, 0, 0);
             }
 
-            bool outOfBgState = !RTG_IsBgLifecycleOwned(bot, desiredQueueType);
+            // Once stranded map-only residue has been downgraded above, keep using the
+            // local lifecycle result here instead of re-reading raw map state.
+            bool outOfBgState = !lifecycleOwned;
 
             if (!noLongerNeeded && outOfBgState && !desiredPresence && dispatchSince &&
                 nowTs > dispatchSince && (nowTs - dispatchSince) >= RTG_GetDispatchStallThresholdSeconds())

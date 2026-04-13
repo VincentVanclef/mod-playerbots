@@ -99,6 +99,23 @@ static bool RTG_IsOrphanQueuedBgHelper(Player* bot, RtgHelperLedgerEntry const& 
     return true;
 }
 
+static bool RTG_HasActualPvpLifecycle(Player* bot, BattlegroundQueueTypeId queueTypeId = BATTLEGROUND_QUEUE_NONE)
+{
+    if (!bot)
+        return false;
+
+    if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
+        return true;
+
+    if (queueTypeId > BATTLEGROUND_QUEUE_NONE && queueTypeId < MAX_BATTLEGROUND_QUEUE_TYPES)
+    {
+        if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
+            return true;
+    }
+
+    return false;
+}
+
 static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry const& entry)
 {
     if (!bot)
@@ -158,12 +175,15 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
                     return entry.ownerType == RtgHelperOwnerType::QueueDemand &&
                            entry.target.queueTypeId == BattlegroundQueueTypeId(queueType) &&
                            entry.target.bracketId == pvpDiff->GetBracketId() &&
-                           entry.state == RtgHelperState::InBattleground;
+                           entry.state == RtgHelperState::InBattleground &&
+                           (bot->InBattleground() || bot->InArena());
                 }
             }
         }
 
-        return entry.ownerType == RtgHelperOwnerType::QueueDemand && entry.state == RtgHelperState::InBattleground;
+        return entry.ownerType == RtgHelperOwnerType::QueueDemand &&
+               entry.state == RtgHelperState::InBattleground &&
+               (bot->InBattleground() || bot->InArena());
     }
 
     if (!parsedBgAddData && (entry.pendingQueueJoin || entry.pendingBgJoin))
@@ -230,7 +250,13 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
         entry->purpose = DetermineBgHelperPurpose(*bgInfo, bot->GetTeamId());
 
     uint32 nowMs = RTG::RTG_GetNowMs32();
-    if (bot->IsInvitedForBattlegroundInstance())
+    bool invitedState = bot->IsInvitedForBattlegroundInstance();
+    bool activeInstanceState = bot->InBattleground() || bot->InArena();
+    bool queuedState = bot->InBattlegroundQueue() || bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId);
+    bool mapOnlyResidue = !invitedState && !activeInstanceState && !queuedState &&
+                          bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena();
+
+    if (invitedState)
     {
         ledger.AssignQueueOwnership(botId, entry->target, entry->purpose, "invited for battleground");
         ledger.MarkState(botId, RtgHelperState::Invited, "invited for battleground");
@@ -245,7 +271,7 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
         return;
     }
 
-    if (bot->InBattleground() || bot->InArena() || (bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena()))
+    if (activeInstanceState)
     {
         uint32 instanceId = bot->GetInstanceId();
         ledger.AssignBattlegroundOwnership(botId, instanceId, "entered battleground");
@@ -260,7 +286,24 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
         return;
     }
 
-    if (bot->InBattlegroundQueue() || bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
+    if (mapOnlyResidue)
+    {
+        bool transitionProtected = entry->protectedUntilMs && nowMs < entry->protectedUntilMs;
+        if (entry->pendingRetire || !transitionProtected)
+        {
+            ledger.ClearOwnership(botId, "map-only battleground residue");
+            ledger.MarkState(botId, entry->pendingRetire ? RtgHelperState::Releasing : RtgHelperState::WorldIdle,
+                entry->pendingRetire ? "map-only battleground residue pending retire" : "map-only battleground residue");
+            return;
+        }
+
+        uint32 instanceId = bot->GetInstanceId();
+        ledger.AssignBattlegroundOwnership(botId, instanceId, "map-only battleground transition");
+        ledger.MarkState(botId, RtgHelperState::InBattleground, "map-only battleground transition");
+        return;
+    }
+
+    if (queuedState)
     {
         ledger.AssignQueueOwnership(botId, entry->target, entry->purpose, "queued for battleground");
         ledger.MarkState(botId, RtgHelperState::Queued, "queued for battleground");
@@ -312,13 +355,15 @@ RtgLifecycleResult EvaluateRetire(Player* bot, uint32 retireRetrySeconds)
     }
 
     bool orphanQueuedBgHelper = RTG_IsOrphanQueuedBgHelper(bot, *entry);
+    bool actualPvpLifecycle = RTG_HasActualPvpLifecycle(bot, entry->target.queueTypeId);
 
     if ((RTG_HelperHasOutstandingDemand(bot, *entry) && !orphanQueuedBgHelper) ||
-        entry->ownerType == RtgHelperOwnerType::Battleground ||
-        entry->state == RtgHelperState::InBattleground ||
-        entry->state == RtgHelperState::Invited ||
-        (entry->state == RtgHelperState::Queued && !orphanQueuedBgHelper) ||
-        entry->state == RtgHelperState::LoggingIn)
+        ((entry->ownerType == RtgHelperOwnerType::Battleground ||
+          entry->state == RtgHelperState::InBattleground ||
+          entry->state == RtgHelperState::Invited ||
+          (entry->state == RtgHelperState::Queued && !orphanQueuedBgHelper)) && actualPvpLifecycle) ||
+        (entry->state == RtgHelperState::LoggingIn &&
+         (actualPvpLifecycle || entry->pendingQueueJoin || entry->pendingBgJoin)))
     {
         result.decision = RtgLifecycleDecision::Delay;
         result.retryAfterMs = retireRetrySeconds * IN_MILLISECONDS;
