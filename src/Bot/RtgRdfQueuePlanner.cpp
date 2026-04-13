@@ -69,6 +69,11 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         if (!requestClosed)
             desiredHelperTotal += acquireHelperNeed;
 
+        uint32 loggedLaneNeedTank = requestClosed ? 0u : laneNeedTank;
+        uint32 loggedLaneNeedHeal = requestClosed ? 0u : laneNeedHeal;
+        uint32 loggedLaneNeedDps = requestClosed ? 0u : laneNeedDps;
+        uint32 laneOpen = requestClosed ? 0u : 1u;
+
         char const* phase = req.activeDungeon
             ? "active_dungeon"
             : (requestClosed ? "dormant" : "forming");
@@ -149,20 +154,20 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             requestClosed ? 1u : 0u);
 
         LOG_INFO("playerbots",
-            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
+            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneOpen={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
             req.owner, req.team, req.level,
             acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
-            laneNeedTank, laneNeedHeal, laneNeedDps, outstandingAssigned);
+            laneOpen, loggedLaneNeedTank, loggedLaneNeedHeal, loggedLaneNeedDps, outstandingAssigned);
         LOG_WARN("playerbots",
-            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
+            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneOpen={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
             req.owner, req.team, req.level,
             acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
-            laneNeedTank, laneNeedHeal, laneNeedDps, outstandingAssigned);
+            laneOpen, loggedLaneNeedTank, loggedLaneNeedHeal, loggedLaneNeedDps, outstandingAssigned);
         LOG_INFO("server.loading",
-            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
+            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneOpen={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
             req.owner, req.team, req.level,
             acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
-            laneNeedTank, laneNeedHeal, laneNeedDps, outstandingAssigned);
+            laneOpen, loggedLaneNeedTank, loggedLaneNeedHeal, loggedLaneNeedDps, outstandingAssigned);
 
         if (!requestClosed)
         {

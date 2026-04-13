@@ -171,6 +171,20 @@ namespace
         return false;
     }
 
+    static bool RTG_ProtectedPvpHelperIsDraining(Player* bot)
+    {
+        if (!bot)
+            return false;
+
+        uint32 botId = bot->GetGUID().GetCounter();
+        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_retire_when_safe") != 0 ||
+               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_world_return_since") != 0 ||
+               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_leave_requested") != 0 ||
+               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_retire_when_safe") != 0 ||
+               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_world_return_since") != 0 ||
+               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_leave_requested") != 0;
+    }
+
     static bool RTG_ProtectedBgHelperMayLeave(Player* bot, Battleground* bg)
     {
         if (!bot || !bg)
@@ -190,6 +204,12 @@ namespace
         {
             sNoRealPlayerSince.erase(instanceId);
             return false;
+        }
+
+        if (RTG_ProtectedPvpHelperIsDraining(bot))
+        {
+            sNoRealPlayerSince.erase(instanceId);
+            return true;
         }
 
         auto itr = sNoRealPlayerSince.find(instanceId);
