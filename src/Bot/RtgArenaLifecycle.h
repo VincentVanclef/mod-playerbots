@@ -23,6 +23,7 @@ struct ArenaTeardownResult
     bool residualAttachment = false;
     bool staleDetachEligible = false;
     bool forceTeardown = false;
+    bool quarantineActive = false;
     bool instanceHasRealPlayers = false;
     char const* blockStage = nullptr;
 };

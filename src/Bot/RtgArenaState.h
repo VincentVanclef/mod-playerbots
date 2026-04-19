@@ -45,6 +45,10 @@ void SetArenaLastSeenLive(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, ui
 uint32 GetArenaLastSeenWorld(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId);
 void SetArenaLastSeenWorld(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, uint32 value, uint32 ttlSeconds,
     std::string const& addData);
+
+bool IsArenaTeardownQuarantined(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId);
+void SetArenaTeardownQuarantine(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, bool enabled, uint32 ttlSeconds,
+    std::string const& addData, char const* reason);
 }
 
 #endif

@@ -670,6 +670,14 @@ namespace
         if (!bot || !desiredQueueType || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
             return false;
 
+        if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
+            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
+        {
+            LOG_INFO("playerbots", "[RTG][ARENA][REQUEUE_BLOCK] helper={} queue={} reason=teardown_quarantine dispatchReason={}",
+                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg");
+            return false;
+        }
+
         if (!RTG_PvpClaimAllowsQueue(bot->GetGUID().GetCounter(), desiredQueueType))
         {
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][CLAIM][BLOCK] helper={} queue={} reason={} claim='{}'",
@@ -1638,6 +1646,11 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
         if (!bot)
             return false;
 
+        if (desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES &&
+            RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
+            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
+            return false;
+
         if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
             return true;
 
@@ -1690,6 +1703,10 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
             return false;
 
         BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+        if (RTG_IsArenaQueueType(queueTypeId) &&
+            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
+            return false;
+
         if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance())
             return true;
 
@@ -1710,6 +1727,10 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
     static bool RTG_IsActiveInDesiredBattleground(Player* bot, uint32 desiredQueueType)
     {
         if (!bot || desiredQueueType <= BATTLEGROUND_QUEUE_NONE || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return false;
+
+        if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
+            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
             return false;
 
         BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
@@ -2084,6 +2105,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_arena_match_birth", 0, 0);
     SetEventValue(bot, "rtg_arena_last_seen_live", 0, 0);
     SetEventValue(bot, "rtg_arena_last_seen_world", 0, 0);
+    SetEventValue(bot, "rtg_arena_teardown_quarantine", 0, 0);
     SetEventValue(bot, "rtg_pvp_force_role", 0, 0);
     SetEventValue(bot, "rtg_pvp_runtime_role", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
@@ -3505,6 +3527,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 RTG::ArenaTeardownResult arenaResult = RTG::ObserveArenaTeardown(*this, bot, desiredQueueType, desiredBracketId,
                     plannerPhase, bgHasRealDemand, plannerTeamNeed, desiredPresence, activeDesiredPresence, lifecycleOwned,
                     worldReturnPending, retireWhenSafe, leaveRequested, addData, RTG_ARENA_DORMANT_STALE_TIMEOUT_SECONDS);
+                if (arenaResult.quarantineActive)
+                {
+                    lifecycleOwned = false;
+                    desiredPresence = false;
+                    activeDesiredPresence = false;
+                    noLongerNeeded = true;
+                }
                 if (arenaResult.forceTeardown)
                 {
                     SetEventValue(botId, pendingKey, 0, 0);
@@ -4750,6 +4779,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             return busyAccountIds.find(charInfo.accountId) != busyAccountIds.end() ||
                 GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "rtg_pvp_claim") ||
+                GetEventValue(charInfo.guid, "rtg_arena_teardown_quarantine") ||
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
@@ -6301,10 +6331,26 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.minLevel = minLevel;
                 arenaInfo.maxLevel = maxLevel;
 
-                if (isRated)
-                    ++arenaInfo.ratedArenaBotCount;
-                else
-                    ++arenaInfo.skirmishArenaBotCount;
+                bool arenaQuarantined = RTG::IsArenaTeardownQuarantined(*this, guid);
+                if (arenaQuarantined)
+                {
+                    if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance())
+                    {
+                        LOG_INFO("playerbots", "[RTG][ARENA][QUEUE_LEAK] helper={} queue={} bracket={} inQueue={} invited={} quarantine=1 state={}",
+                            guid.GetCounter(), uint32(queueTypeId), uint32(bracketId),
+                            bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) ? 1u : 0u,
+                            bot->IsInvitedForBattlegroundInstance() ? 1u : 0u,
+                            RTG::ArenaHelperStateName(RTG::GetArenaHelperState(*this, guid.GetCounter())));
+                    }
+                }
+
+                if (!arenaQuarantined)
+                {
+                    if (isRated)
+                        ++arenaInfo.ratedArenaBotCount;
+                    else
+                        ++arenaInfo.skirmishArenaBotCount;
+                }
 
                 if (bg)
                 {
@@ -6323,7 +6369,8 @@ void RandomPlayerbotMgr::CheckBgQueue()
                         arenaInfo.skirmishArenaInstanceCount = arenaInfo.skirmishArenaInstances.size();
                 }
 
-                RTG::ObserveArenaQueueParticipant(*this, bot, queueTypeId, bracketId, isRated, true);
+                if (!arenaQuarantined)
+                    RTG::ObserveArenaQueueParticipant(*this, bot, queueTypeId, bracketId, isRated, true);
 
                 continue;
             }

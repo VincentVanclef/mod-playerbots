@@ -12,6 +12,7 @@ char const* const kArenaInstanceIdKey = "rtg_arena_instance_id";
 char const* const kArenaMatchBirthKey = "rtg_arena_match_birth";
 char const* const kArenaLastSeenLiveKey = "rtg_arena_last_seen_live";
 char const* const kArenaLastSeenWorldKey = "rtg_arena_last_seen_world";
+char const* const kArenaTeardownQuarantineKey = "rtg_arena_teardown_quarantine";
 }
 
 char const* ArenaHelperStateName(ArenaHelperState state)
@@ -106,5 +107,26 @@ void SetArenaLastSeenWorld(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, u
     std::string const& addData)
 {
     mgr.RTG_SetBotEventValue(botId, kArenaLastSeenWorldKey, value, ttlSeconds, addData);
+}
+
+bool IsArenaTeardownQuarantined(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId)
+{
+    return mgr.RTG_GetBotEventValue(botId, kArenaTeardownQuarantineKey) != 0u;
+}
+
+void SetArenaTeardownQuarantine(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, bool enabled, uint32 ttlSeconds,
+    std::string const& addData, char const* reason)
+{
+    bool oldValue = IsArenaTeardownQuarantined(mgr, botId);
+    if (oldValue == enabled && !reason)
+        return;
+
+    mgr.RTG_SetBotEventValue(botId, kArenaTeardownQuarantineKey, enabled ? 1u : 0u, enabled ? ttlSeconds : 0u, addData);
+    if (oldValue != enabled)
+    {
+        LOG_INFO("playerbots", "[RTG][ARENA][TEARDOWN_QUARANTINE] helper={} enabled={} state={} cycle={} instance={} reason={}",
+            botId, enabled ? 1u : 0u, ArenaHelperStateName(GetArenaHelperState(mgr, botId)), GetArenaHelperCycle(mgr, botId),
+            GetArenaHelperInstanceId(mgr, botId), reason ? reason : "update");
+    }
 }
 }
