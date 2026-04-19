@@ -671,10 +671,12 @@ namespace
             return false;
 
         if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
-            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
+            (RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) ||
+             RTG::GetArenaClosureState(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) == RTG::ArenaClosureState::Pending))
         {
-            LOG_INFO("playerbots", "[RTG][ARENA][REQUEUE_BLOCK] helper={} queue={} reason=teardown_quarantine dispatchReason={}",
-                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg");
+            char const* blockTag = reason && std::string(reason) == "queue_retry" ? "QUEUE_RETRY_BLOCK" : "REUSE_BLOCK";
+            LOG_INFO("playerbots", "[RTG][ARENA][{}] helper={} queue={} reason=closure_pending dispatchReason={}",
+                blockTag, bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg");
             return false;
         }
 
@@ -1648,7 +1650,8 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
 
         if (desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES &&
             RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
-            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
+            (RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) ||
+             RTG::GetArenaClosureState(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) == RTG::ArenaClosureState::Pending))
             return false;
 
         if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
@@ -1704,7 +1707,8 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
 
         BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
         if (RTG_IsArenaQueueType(queueTypeId) &&
-            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
+            (RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) ||
+             RTG::GetArenaClosureState(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) == RTG::ArenaClosureState::Pending))
             return false;
 
         if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance())
@@ -1730,7 +1734,8 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
             return false;
 
         if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
-            RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()))
+            (RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) ||
+             RTG::GetArenaClosureState(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) == RTG::ArenaClosureState::Pending))
             return false;
 
         BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
@@ -2106,6 +2111,9 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_arena_last_seen_live", 0, 0);
     SetEventValue(bot, "rtg_arena_last_seen_world", 0, 0);
     SetEventValue(bot, "rtg_arena_teardown_quarantine", 0, 0);
+    // Keep terminal arena closure truth separate from normal queue-state clears.
+    // A helper that already entered closure must stay non-reusable across logout,
+    // player absence, and later relog until the closure TTL expires.
     SetEventValue(bot, "rtg_pvp_force_role", 0, 0);
     SetEventValue(bot, "rtg_pvp_runtime_role", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
@@ -4780,6 +4788,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "rtg_pvp_claim") ||
                 GetEventValue(charInfo.guid, "rtg_arena_teardown_quarantine") ||
+                GetEventValue(charInfo.guid, "rtg_arena_closure_state") ||
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
                 std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
@@ -6124,6 +6133,65 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
     if (sPlayerbotAIConfig.rtgEventDriven && GetOnlineRealPlayerCount() == 0)
     {
+        std::vector<ObjectGuid> staleArenaLogout;
+        std::vector<uint32> staleArenaPurge;
+
+        for (auto const& kv : playerBots)
+        {
+            ObjectGuid botGuid = kv.first;
+            Player* bot = kv.second;
+            if (!bot || !bot->IsInWorld())
+                continue;
+
+            uint32 botId = botGuid.GetCounter();
+            std::string addData = GetEventData(botId, "add");
+            if (!RTG::HasPrefix(addData, "rtg_arena:"))
+                continue;
+
+            bool closurePending = RTG::GetArenaClosureState(*this, botId) == RTG::ArenaClosureState::Pending;
+            bool quarantine = RTG::IsArenaTeardownQuarantined(*this, botId);
+            bool draining = GetEventValue(botId, "rtg_arena_retire_when_safe") || GetEventValue(botId, "rtg_arena_world_return_since") ||
+                GetEventValue(botId, "rtg_arena_leave_requested");
+            if (!(closurePending || quarantine || draining))
+                continue;
+
+            LOG_INFO("playerbots", "[RTG][ARENA][SESSION_STALE] helper={} reason=no_real_player_session quarantine={} closureState={} inWorld=1",
+                botId, quarantine ? 1u : 0u, RTG::ArenaClosureStateName(RTG::GetArenaClosureState(*this, botId)));
+            staleArenaLogout.push_back(botGuid);
+        }
+
+        for (uint32 botId : currentBots)
+        {
+            std::string addData = GetEventData(botId, "add");
+            if (!RTG::HasPrefix(addData, "rtg_arena:"))
+                continue;
+
+            bool closurePending = RTG::GetArenaClosureState(*this, botId) == RTG::ArenaClosureState::Pending;
+            bool quarantine = RTG::IsArenaTeardownQuarantined(*this, botId);
+            bool draining = GetEventValue(botId, "rtg_arena_retire_when_safe") || GetEventValue(botId, "rtg_arena_world_return_since") ||
+                GetEventValue(botId, "rtg_arena_leave_requested");
+            if (!(closurePending || quarantine || draining))
+                continue;
+
+            staleArenaPurge.push_back(botId);
+        }
+
+        for (ObjectGuid const& botGuid : staleArenaLogout)
+            RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_session_stale", true);
+
+        for (uint32 botId : staleArenaPurge)
+        {
+            if (GetPlayerBot(ObjectGuid(HighGuid::Player, botId)))
+                continue;
+
+            std::string addData = GetEventData(botId, "add");
+            LOG_INFO("playerbots", "[RTG][ARENA][CLOSURE_PURGE] helper={} reason=no_real_player_session", botId);
+            RTG::SetArenaClosureState(*this, botId, RTG::ArenaClosureState::Complete, 1800u, addData, "no_real_player_session");
+            RTG::SetArenaTeardownQuarantine(*this, botId, false, 0u, addData, "no_real_player_session");
+            RTG_ClearQueueHelperState(botId, false);
+            currentBots.remove(botId);
+        }
+
         SetEventValue(0, "rtg_bg_any_real_queued", 0, 0);
         SetEventValue(0, "rtg_bg_any_real_demand", 0, 0);
         SetEventValue(0, "rtg_bg_need_total", 0, 0);
@@ -6331,8 +6399,9 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.minLevel = minLevel;
                 arenaInfo.maxLevel = maxLevel;
 
-                bool arenaQuarantined = RTG::IsArenaTeardownQuarantined(*this, guid.GetCounter());
-                if (arenaQuarantined)
+                bool arenaClosing = RTG::IsArenaTeardownQuarantined(*this, guid.GetCounter()) ||
+                    RTG::GetArenaClosureState(*this, guid.GetCounter()) == RTG::ArenaClosureState::Pending;
+                if (arenaClosing)
                 {
                     if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance())
                     {
@@ -6344,7 +6413,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
                     }
                 }
 
-                if (!arenaQuarantined)
+                if (!arenaClosing)
                 {
                     if (isRated)
                         ++arenaInfo.ratedArenaBotCount;
@@ -6369,7 +6438,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
                         arenaInfo.skirmishArenaInstanceCount = arenaInfo.skirmishArenaInstances.size();
                 }
 
-                if (!arenaQuarantined)
+                if (!arenaClosing)
                     RTG::ObserveArenaQueueParticipant(*this, bot, queueTypeId, bracketId, isRated, true);
 
                 continue;
@@ -8650,6 +8719,17 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
             bool isArenaLane = RTG::HasPrefix(addData, "rtg_arena:") || RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType));
+            if (isArenaLane &&
+                (RTG::IsArenaTeardownQuarantined(*this, bot->GetGUID().GetCounter()) ||
+                 RTG::GetArenaClosureState(*this, bot->GetGUID().GetCounter()) == RTG::ArenaClosureState::Pending))
+            {
+                LOG_INFO("playerbots", "[RTG][ARENA][SESSION_STALE] helper={} queue={} reason=closure_pending_login_block quarantine={} closureState={}",
+                    bot->GetGUID().GetCounter(), desiredQueueType,
+                    RTG::IsArenaTeardownQuarantined(*this, bot->GetGUID().GetCounter()) ? 1u : 0u,
+                    RTG::ArenaClosureStateName(RTG::GetArenaClosureState(*this, bot->GetGUID().GetCounter())));
+                RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_arena_closure_pending", true);
+                return;
+            }
             desiredLevel = RTG_NormalizeDesiredPvpQueueLevel(desiredLevel);
             RTG_SetPvpClaim(bot->GetGUID().GetCounter(), addData, std::max<uint32>(180u, RTG_GetQueueGraceTtlSeconds() + 180u));
             if (!RTG_PreparePvpQueueHelperForDesiredLevel(bot, desiredLevel, isArenaLane ? "arena" : "bg"))

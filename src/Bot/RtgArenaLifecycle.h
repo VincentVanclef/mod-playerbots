@@ -16,6 +16,7 @@ namespace RTG
 struct ArenaTeardownResult
 {
     ArenaHelperState helperState = ArenaHelperState::None;
+    ArenaClosureState closureState = ArenaClosureState::None;
     uint32 cycleId = 0;
     uint32 instanceId = 0;
     uint32 staleSince = 0;

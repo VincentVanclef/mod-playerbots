@@ -251,6 +251,7 @@ ArenaTeardownResult ObserveArenaTeardown(RandomPlayerbotMgr& mgr, Player* bot, u
     result.cycleId = GetArenaHelperCycle(mgr, botId);
     result.instanceHasRealPlayers = ArenaInstanceHasRealPlayers(queueTypeId, bracketId, isRated, instanceId);
     result.quarantineActive = IsArenaTeardownQuarantined(mgr, botId);
+    result.closureState = GetArenaClosureState(mgr, botId);
 
     ArenaHelperState currentState = GetArenaHelperState(mgr, botId);
     if ((inQueue || invited || inInstance) &&
@@ -306,6 +307,13 @@ ArenaTeardownResult ObserveArenaTeardown(RandomPlayerbotMgr& mgr, Player* bot, u
 
     if ((retireWhenSafe || leaveRequested || worldReturnPending) && !result.quarantineActive)
     {
+        if (result.closureState == ArenaClosureState::None)
+        {
+            SetArenaClosureState(mgr, botId, ArenaClosureState::Pending, 1800u, addData, "match_end");
+            LOG_INFO("playerbots", "[RTG][ARENA][CLOSURE_BEGIN] helper={} cycle={} instance={} reason=match_end",
+                botId, result.cycleId, result.instanceId);
+            result.closureState = ArenaClosureState::Pending;
+        }
         SetArenaTeardownQuarantine(mgr, botId, true, 300u, addData, "teardown_start");
         result.quarantineActive = true;
     }
@@ -322,8 +330,18 @@ ArenaTeardownResult ObserveArenaTeardown(RandomPlayerbotMgr& mgr, Player* bot, u
         LogArenaTeardown(bot, desiredQueueType, "TEARDOWN", "state", result, desiredPresence, activeDesiredPresence,
             lifecycleOwned, worldReturnPending, retireWhenSafe, leaveRequested);
     if (result.dormantNoDemand && !worldReturnPending && result.blockStage)
+    {
         LogArenaTeardown(bot, desiredQueueType, "TEARDOWN_BLOCK", result.blockStage, result, desiredPresence,
             activeDesiredPresence, lifecycleOwned, worldReturnPending, retireWhenSafe, leaveRequested);
+        if (result.closureState == ArenaClosureState::Pending || result.quarantineActive)
+        {
+            LOG_INFO("playerbots",
+                "[RTG][ARENA][CLOSURE_BLOCK] helper={} cycle={} instance={} stage={} closureState={} quarantine={} instanceHasRealPlayers={}",
+                botId, result.cycleId, result.instanceId, result.blockStage,
+                ArenaClosureStateName(result.closureState), result.quarantineActive ? 1u : 0u,
+                result.instanceHasRealPlayers ? 1u : 0u);
+        }
+    }
 
     if (result.quarantineActive && result.instanceHasRealPlayers)
     {
@@ -351,17 +369,21 @@ ArenaTeardownResult ObserveArenaTeardown(RandomPlayerbotMgr& mgr, Player* bot, u
         result.forceTeardown = nowTs > result.staleSince && (nowTs - result.staleSince) >= staleTimeoutSeconds;
         if (result.forceTeardown)
         {
+            SetArenaClosureState(mgr, botId, ArenaClosureState::Pending, 1800u, addData, "stale_instance_timeout");
             SetArenaHelperState(mgr, botId, ArenaHelperState::RetirePending, 120u, addData, "stale_instance_timeout");
             LOG_INFO("playerbots", "[RTG][ARENA][TEARDOWN_FORCE] helper={} cycle={} instance={} reason=stale_instance_timeout staleFor={} instanceHasRealPlayers={}",
                 botId, result.cycleId, result.instanceId, nowTs - result.staleSince, result.instanceHasRealPlayers ? 1u : 0u);
+            result.closureState = ArenaClosureState::Pending;
         }
     }
     else if (result.quarantineActive && !result.instanceHasRealPlayers && !desiredPresence && !activeDesiredPresence && !inInstance)
     {
         result.forceTeardown = true;
+        SetArenaClosureState(mgr, botId, ArenaClosureState::Pending, 1800u, addData, "player_exit_cleanup");
         SetArenaHelperState(mgr, botId, ArenaHelperState::RetirePending, 120u, addData, "player_exit_cleanup");
         LOG_INFO("playerbots", "[RTG][ARENA][TEARDOWN_FORCE] helper={} cycle={} instance={} reason=player_exit_cleanup quarantine=1",
             botId, result.cycleId, result.instanceId);
+        result.closureState = ArenaClosureState::Pending;
     }
     else if (result.staleSince)
         mgr.RTG_SetBotEventValue(botId, "rtg_arena_stale_instance_since", 0u, 0u);
@@ -371,6 +393,8 @@ ArenaTeardownResult ObserveArenaTeardown(RandomPlayerbotMgr& mgr, Player* bot, u
 
 void MarkArenaHelperRetired(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, std::string const& addData, char const* reason)
 {
+    SetArenaClosureState(mgr, botId, ArenaClosureState::Complete, 1800u, addData, reason ? reason : "retired");
+    LOG_INFO("playerbots", "[RTG][ARENA][CLOSURE_PURGE] helper={} reason={}", botId, reason ? reason : "retired");
     SetArenaHelperState(mgr, botId, ArenaHelperState::Retired, 120u, addData, reason ? reason : "retired");
     mgr.RTG_SetBotEventValue(botId, "rtg_arena_stale_instance_since", 0u, 0u, addData);
     SetArenaTeardownQuarantine(mgr, botId, false, 0u, addData, reason ? reason : "retired");

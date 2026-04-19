@@ -21,7 +21,15 @@ enum class ArenaHelperState : uint32
     Retired = 7
 };
 
+enum class ArenaClosureState : uint32
+{
+    None = 0,
+    Pending = 1,
+    Complete = 2
+};
+
 char const* ArenaHelperStateName(ArenaHelperState state);
+char const* ArenaClosureStateName(ArenaClosureState state);
 
 ArenaHelperState GetArenaHelperState(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId);
 void SetArenaHelperState(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, ArenaHelperState state, uint32 ttlSeconds,
@@ -48,6 +56,10 @@ void SetArenaLastSeenWorld(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, u
 
 bool IsArenaTeardownQuarantined(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId);
 void SetArenaTeardownQuarantine(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, bool enabled, uint32 ttlSeconds,
+    std::string const& addData, char const* reason);
+
+ArenaClosureState GetArenaClosureState(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId);
+void SetArenaClosureState(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, ArenaClosureState state, uint32 ttlSeconds,
     std::string const& addData, char const* reason);
 }
 

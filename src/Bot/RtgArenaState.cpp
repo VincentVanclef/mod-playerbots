@@ -13,6 +13,7 @@ char const* const kArenaMatchBirthKey = "rtg_arena_match_birth";
 char const* const kArenaLastSeenLiveKey = "rtg_arena_last_seen_live";
 char const* const kArenaLastSeenWorldKey = "rtg_arena_last_seen_world";
 char const* const kArenaTeardownQuarantineKey = "rtg_arena_teardown_quarantine";
+char const* const kArenaClosureStateKey = "rtg_arena_closure_state";
 }
 
 char const* ArenaHelperStateName(ArenaHelperState state)
@@ -26,6 +27,16 @@ char const* ArenaHelperStateName(ArenaHelperState state)
         case ArenaHelperState::ReturnedWorld: return "returned_world";
         case ArenaHelperState::RetirePending: return "retire_pending";
         case ArenaHelperState::Retired: return "retired";
+        default: return "none";
+    }
+}
+
+char const* ArenaClosureStateName(ArenaClosureState state)
+{
+    switch (state)
+    {
+        case ArenaClosureState::Pending: return "closure_pending";
+        case ArenaClosureState::Complete: return "closure_complete";
         default: return "none";
     }
 }
@@ -126,6 +137,28 @@ void SetArenaTeardownQuarantine(RandomPlayerbotMgr& mgr, ObjectGuid::LowType bot
     {
         LOG_INFO("playerbots", "[RTG][ARENA][TEARDOWN_QUARANTINE] helper={} enabled={} state={} cycle={} instance={} reason={}",
             botId, enabled ? 1u : 0u, ArenaHelperStateName(GetArenaHelperState(mgr, botId)), GetArenaHelperCycle(mgr, botId),
+            GetArenaHelperInstanceId(mgr, botId), reason ? reason : "update");
+    }
+}
+
+ArenaClosureState GetArenaClosureState(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId)
+{
+    return ArenaClosureState(mgr.RTG_GetBotEventValue(botId, kArenaClosureStateKey));
+}
+
+void SetArenaClosureState(RandomPlayerbotMgr& mgr, ObjectGuid::LowType botId, ArenaClosureState state, uint32 ttlSeconds,
+    std::string const& addData, char const* reason)
+{
+    ArenaClosureState oldState = GetArenaClosureState(mgr, botId);
+    if (oldState == state && !reason)
+        return;
+
+    mgr.RTG_SetBotEventValue(botId, kArenaClosureStateKey, uint32(state), state == ArenaClosureState::None ? 0u : ttlSeconds, addData);
+    if (oldState != state)
+    {
+        LOG_INFO("playerbots", "[RTG][ARENA][CLOSURE] helper={} state={} prev={} quarantine={} cycle={} instance={} reason={}",
+            botId, ArenaClosureStateName(state), ArenaClosureStateName(oldState),
+            IsArenaTeardownQuarantined(mgr, botId) ? 1u : 0u, GetArenaHelperCycle(mgr, botId),
             GetArenaHelperInstanceId(mgr, botId), reason ? reason : "update");
     }
 }
