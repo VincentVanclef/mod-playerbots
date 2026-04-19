@@ -6331,7 +6331,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.minLevel = minLevel;
                 arenaInfo.maxLevel = maxLevel;
 
-                bool arenaQuarantined = RTG::IsArenaTeardownQuarantined(*this, guid);
+                bool arenaQuarantined = RTG::IsArenaTeardownQuarantined(*this, guid.GetCounter());
                 if (arenaQuarantined)
                 {
                     if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance())
