@@ -138,32 +138,8 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
             req.helperQueuedTank + req.helperQueuedHeal + req.helperQueuedDps,
             req.helperAssignedTank + req.helperAssignedHeal + req.helperAssignedDps,
             requestClosed ? 1u : 0u);
-        LOG_WARN("playerbots",
-            "[RTG][RDF][PHASE] owner={} team={} level={} phase={} activeDungeon={} realQueued={} realActive={} helperQueued={} helperAssigned={} requestClosed={}",
-            req.owner, req.team, req.level, phase, req.activeDungeon ? 1u : 0u,
-            req.realQueued, req.realActive,
-            req.helperQueuedTank + req.helperQueuedHeal + req.helperQueuedDps,
-            req.helperAssignedTank + req.helperAssignedHeal + req.helperAssignedDps,
-            requestClosed ? 1u : 0u);
-        LOG_INFO("server.loading",
-            "[RTG][RDF][PHASE] owner={} team={} level={} phase={} activeDungeon={} realQueued={} realActive={} helperQueued={} helperAssigned={} requestClosed={}",
-            req.owner, req.team, req.level, phase, req.activeDungeon ? 1u : 0u,
-            req.realQueued, req.realActive,
-            req.helperQueuedTank + req.helperQueuedHeal + req.helperQueuedDps,
-            req.helperAssignedTank + req.helperAssignedHeal + req.helperAssignedDps,
-            requestClosed ? 1u : 0u);
 
         LOG_INFO("playerbots",
-            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneOpen={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
-            req.owner, req.team, req.level,
-            acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
-            laneOpen, loggedLaneNeedTank, loggedLaneNeedHeal, loggedLaneNeedDps, outstandingAssigned);
-        LOG_WARN("playerbots",
-            "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneOpen={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
-            req.owner, req.team, req.level,
-            acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
-            laneOpen, loggedLaneNeedTank, loggedLaneNeedHeal, loggedLaneNeedDps, outstandingAssigned);
-        LOG_INFO("server.loading",
             "[RTG][RDF][DEMAND] owner={} team={} level={} needT={} needH={} needD={} acquireNeed={} laneOpen={} laneNeedT={} laneNeedH={} laneNeedD={} assignedOutstanding={}",
             req.owner, req.team, req.level,
             acquireNeedTank, acquireNeedHeal, acquireNeedDps, acquireHelperNeed,
@@ -191,16 +167,6 @@ void RtgRdfQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr,
         uint32 cappedNeed = std::min<uint32>(desiredHelperTotal, sPlayerbotAIConfig.rtgLfgMaxBots);
 
         LOG_INFO("playerbots",
-            "[RTG][LFG][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
-            static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
-
-        LOG_INFO("playerbots",
-            "[RTG][RDF][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
-            static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
-        LOG_WARN("playerbots",
-            "[RTG][RDF][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
-            static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
-        LOG_INFO("server.loading",
             "[RTG][RDF][TOTAL] demandOwners={} desiredHelpers={} cappedHelpers={} anyReady={} globalStart={}",
             static_cast<uint32>(requests.size()), desiredHelperTotal, cappedNeed, anyReady ? 1u : 0u, globalStart);
 

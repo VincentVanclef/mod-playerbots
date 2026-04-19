@@ -74,6 +74,20 @@ static Unit* RTG_GetStickyTarget(Player* bot, ObjectGuid guid)
 
     return unit;
 }
+
+static bool RTG_ShouldHonorQueuedRdfRole(Player* player, uint32 queuedRole)
+{
+    if (!player || !queuedRole)
+        return false;
+
+    ObjectGuid::LowType botId = player->GetGUID().GetCounter();
+    bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
+                           sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
+    if (!queuedLfgActive)
+        return false;
+
+    return RTG::QueuedRoleOverrideAllowed(player, queuedRole);
+}
 }
 
 std::vector<std::string> PlayerbotAI::dispel_whitelist = {
@@ -2252,10 +2266,8 @@ bool PlayerbotAI::IsTank(Player* player, bool bySpec)
         }
 
         ObjectGuid::LowType botId = player->GetGUID().GetCounter();
-        uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
-        bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
-                               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
-        if (queuedRole && queuedLfgActive)
+        uint32 queuedRole = RTG::NormalizeQueuedRoleMask(sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role"));
+        if (RTG_ShouldHonorQueuedRdfRole(player, queuedRole))
             return (queuedRole & lfg::PLAYER_ROLE_TANK) != 0;
     }
     if (!bySpec && botAi)
@@ -2309,10 +2321,8 @@ bool PlayerbotAI::IsHeal(Player* player, bool bySpec)
         }
 
         ObjectGuid::LowType botId = player->GetGUID().GetCounter();
-        uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
-        bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
-                               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
-        if (queuedRole && queuedLfgActive)
+        uint32 queuedRole = RTG::NormalizeQueuedRoleMask(sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role"));
+        if (RTG_ShouldHonorQueuedRdfRole(player, queuedRole))
             return (queuedRole & lfg::PLAYER_ROLE_HEALER) != 0;
     }
     if (!bySpec && botAi)
@@ -2365,10 +2375,8 @@ bool PlayerbotAI::IsDps(Player* player, bool bySpec)
         }
 
         ObjectGuid::LowType botId = player->GetGUID().GetCounter();
-        uint32 queuedRole = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role");
-        bool queuedLfgActive = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_pending") ||
-                               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_dungeon_active");
-        if (queuedRole && queuedLfgActive)
+        uint32 queuedRole = RTG::NormalizeQueuedRoleMask(sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_lfg_strategy_role"));
+        if (RTG_ShouldHonorQueuedRdfRole(player, queuedRole))
             return (queuedRole & lfg::PLAYER_ROLE_DAMAGE) != 0;
     }
     if (!bySpec && botAi)

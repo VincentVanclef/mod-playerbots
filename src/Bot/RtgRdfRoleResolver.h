@@ -22,6 +22,7 @@ bool OfflineSpecCanPerformRole(ObjectGuid::LowType guid, uint8 cls, uint32 role)
 uint32 GetActualSpecRoleMask(Player* bot);
 uint32 GetActualSpecRole(Player* bot);
 bool ActualSpecCanPerformRole(Player* bot, uint32 role);
+bool QueuedRoleOverrideAllowed(Player* bot, uint32 role);
 uint32 NormalizeQueuedRoleMask(uint32 roleMask);
 uint32 TargetLfgRoleCount(uint32 role);
 uint32 ActualRoleForBot(Player* bot);

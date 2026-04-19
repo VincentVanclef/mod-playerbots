@@ -14,6 +14,21 @@
 
 namespace RTG
 {
+namespace
+{
+uint32 CountSupportedRoles(uint32 roleMask)
+{
+    uint32 count = 0;
+    if (roleMask & lfg::PLAYER_ROLE_TANK)
+        ++count;
+    if (roleMask & lfg::PLAYER_ROLE_HEALER)
+        ++count;
+    if (roleMask & lfg::PLAYER_ROLE_DAMAGE)
+        ++count;
+    return count;
+}
+}
+
 bool ClassCanRole(uint8 cls, uint32 role)
 {
     switch (role)
@@ -364,6 +379,22 @@ bool ActualSpecCanPerformRole(Player* bot, uint32 role)
         return role == lfg::PLAYER_ROLE_DAMAGE;
 
     return SpecTabCanPerformRole(bot->getClass(), static_cast<uint8>(AiFactory::GetPlayerSpecTab(bot)), role);
+}
+
+bool QueuedRoleOverrideAllowed(Player* bot, uint32 role)
+{
+    if (!bot || !role)
+        return false;
+
+    uint32 queuedRole = NormalizeQueuedRoleMask(role);
+    if (!queuedRole)
+        return false;
+
+    uint32 actualRoleMask = GetActualSpecRoleMask(bot);
+    if (!actualRoleMask || (actualRoleMask & queuedRole) != queuedRole)
+        return false;
+
+    return CountSupportedRoles(actualRoleMask) > 1u;
 }
 
 uint32 NormalizeQueuedRoleMask(uint32 roleMask)

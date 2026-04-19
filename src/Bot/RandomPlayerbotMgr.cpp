@@ -104,6 +104,19 @@ namespace
         LOG_INFO("server.loading", "{}", message);
     }
 
+    static uint32 RTG_GetDemandCheckIntervalSeconds()
+    {
+        return std::max<uint32>(1u, sPlayerbotAIConfig.rtgDemandCheckSeconds);
+    }
+
+    static void RTG_LogLaneProof(char const* lane, uint32 helper, char const* stage, std::string const& details)
+    {
+        if (!lane || !helper)
+            return;
+
+        LOG_INFO("playerbots", "[RTG][{}][PROOF] helper={} stage={} {}", lane, helper, stage ? stage : "unknown", details);
+    }
+
     static uint32 RTG_GetQueueGraceTtlSeconds()
     {
         return std::max<uint32>(20u, sPlayerbotAIConfig.rtgQueueGraceSeconds);
@@ -584,6 +597,9 @@ namespace
         }
 
         char const* laneTag = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) ? "arena" : "bg";
+        char const* proofLane = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) ? "ARENA" : "BG";
+        RTG_LogLaneProof(proofLane, bot->GetGUID().GetCounter(), "dispatch",
+            fmt::format("queue={} result={} reason={}", desiredQueueType, queued ? 1 : 0, reason ? reason : "rtg"));
 
         if (queued)
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane={} queue={} reason={}",
@@ -616,6 +632,13 @@ namespace
             return false;
 
         bool joined = botAI->DoSpecificAction("lfg join", Event(), true);
+        uint32 desiredTeam = 0;
+        uint32 desiredLevel = 0;
+        uint32 desiredRole = 0;
+        uint32 desiredOwner = 0;
+        RTG::ParseLfgAddData(sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add"), desiredTeam, desiredLevel, &desiredRole, &desiredOwner);
+        RTG_LogLaneProof("LFG", botId, "dispatch",
+            fmt::format("owner={} role={} result={} reason={}", desiredOwner, desiredRole, joined ? 1 : 0, reason ? reason : "rtg"));
         if (joined)
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][DISPATCH][SUCCESS] helper={} lane=rdf reason={}", bot->GetGUID().GetCounter(), reason ? reason : "rtg"));
         else
@@ -3865,21 +3888,25 @@ if (sPlayerbotAIConfig.enabled && !sPlayerbotAIConfig.rtgEventDriven) // sanity
             sRandomPlayerbotMgr.CheckPlayers();
     }
 
-	if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
+    time_t now = time(nullptr);
+
+    if (sPlayerbotAIConfig.randomBotJoinBG /* && !players.empty()*/)
     {
-        if (time(nullptr) > (BgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? 5 : 35)))
+        uint32 bgQueueCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? RTG_GetDemandCheckIntervalSeconds() : 35u;
+        if (now > (BgCheckTimer + bgQueueCheckInterval))
         {
             sRandomPlayerbotMgr.CheckBgQueue();
-            BgCheckTimer = time(nullptr);
+            BgCheckTimer = now;
         }
     }
 
     if (sPlayerbotAIConfig.randomBotJoinLfg /* && !players.empty()*/)
     {
-        if (time(nullptr) > (LfgCheckTimer + (sPlayerbotAIConfig.rtgEventDriven ? 5 : 30)))
+        uint32 lfgQueueCheckInterval = sPlayerbotAIConfig.rtgEventDriven ? RTG_GetDemandCheckIntervalSeconds() : 30u;
+        if (now > (LfgCheckTimer + lfgQueueCheckInterval))
         {
             sRandomPlayerbotMgr.CheckLfgQueue();
-            LfgCheckTimer = time(nullptr);
+            LfgCheckTimer = now;
         }
     }
 
@@ -6318,7 +6345,8 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         return;
     }
 
-    if (!LfgCheckTimer || time(nullptr) > (LfgCheckTimer + 30))
+    uint32 lfgTimerResetWindow = sPlayerbotAIConfig.rtgEventDriven ? RTG_GetDemandCheckIntervalSeconds() : 30u;
+    if (!LfgCheckTimer || time(nullptr) > (LfgCheckTimer + lfgTimerResetWindow))
         LfgCheckTimer = time(nullptr);
 
     LOG_DEBUG("playerbots", "Checking LFG Queue...");
@@ -8406,6 +8434,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             RTG_SetCachedRuntimeLfgRoleMask(bot->GetGUID().GetCounter(), RTG_GetActualSpecRoleMask(bot));
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LFG][LOGIN] helper={} team={} level={} role={} owner={}",
                 bot->GetGUID().GetCounter(), bot->GetTeamId(), bot->GetLevel(), desiredRole, desiredOwner));
+            RTG_LogLaneProof("LFG", bot->GetGUID().GetCounter(), "login",
+                fmt::format("owner={} role={} team={} level={}", desiredOwner, desiredRole, bot->GetTeamId(), bot->GetLevel()));
         }
         else if (RTG::ParseBgAddData(addData, desiredTeam, desiredLevel, desiredQueueType))
         {
@@ -8476,6 +8506,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
 
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN] helper={} queue={} team={} level={}",
                 bot->GetGUID().GetCounter(), desiredQueueType, bot->GetTeamId(), bot->GetLevel()));
+            RTG_LogLaneProof(isArenaLane ? "ARENA" : "BG", bot->GetGUID().GetCounter(), "login",
+                fmt::format("queue={} team={} level={}", desiredQueueType, bot->GetTeamId(), bot->GetLevel()));
             RTG_DispatchImmediateBgQueueJoin(bot, desiredQueueType, "login_success");
         }
     }
