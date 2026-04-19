@@ -7,15 +7,29 @@
 #include "LFGMgr.h"
 #include "ObjectMgr.h"
 #include "Player.h"
+#include "PlayerbotAIConfig.h"
 #include "SpellMgr.h"
 #include "SharedDefines.h"
 
+#include <ctime>
 #include <map>
+#include <mutex>
+#include <unordered_map>
 
 namespace RTG
 {
 namespace
 {
+struct RTG_OfflineSpecCacheEntry
+{
+    uint8 specTab = 0;
+    bool hasSpecData = false;
+    uint32 expiresAt = 0;
+};
+
+std::mutex sOfflineSpecCacheLock;
+std::unordered_map<uint64, RTG_OfflineSpecCacheEntry> sOfflineSpecCache;
+
 uint32 CountSupportedRoles(uint32 roleMask)
 {
     uint32 count = 0;
@@ -26,6 +40,49 @@ uint32 CountSupportedRoles(uint32 roleMask)
     if (roleMask & lfg::PLAYER_ROLE_DAMAGE)
         ++count;
     return count;
+}
+
+uint64 MakeOfflineSpecCacheKey(ObjectGuid::LowType guid, uint8 cls)
+{
+    return (uint64(cls) << 32) | uint64(guid);
+}
+
+uint32 GetOfflineSpecCacheTtlSeconds()
+{
+    uint32 demandSeconds = std::max<uint32>(1u, sPlayerbotAIConfig.rtgDemandCheckSeconds);
+    return std::max<uint32>(5u, std::min<uint32>(30u, demandSeconds * 3u));
+}
+
+bool TryGetOfflineSpecCache(ObjectGuid::LowType guid, uint8 cls, uint8& specTab, bool& hasSpecData)
+{
+    uint32 now = static_cast<uint32>(time(nullptr));
+    uint64 cacheKey = MakeOfflineSpecCacheKey(guid, cls);
+
+    std::lock_guard<std::mutex> guard(sOfflineSpecCacheLock);
+    auto itr = sOfflineSpecCache.find(cacheKey);
+    if (itr == sOfflineSpecCache.end())
+        return false;
+
+    if (itr->second.expiresAt <= now)
+    {
+        sOfflineSpecCache.erase(itr);
+        return false;
+    }
+
+    specTab = itr->second.specTab;
+    hasSpecData = itr->second.hasSpecData;
+    return true;
+}
+
+void StoreOfflineSpecCache(ObjectGuid::LowType guid, uint8 cls, uint8 specTab, bool hasSpecData)
+{
+    RTG_OfflineSpecCacheEntry entry;
+    entry.specTab = specTab;
+    entry.hasSpecData = hasSpecData;
+    entry.expiresAt = static_cast<uint32>(time(nullptr)) + GetOfflineSpecCacheTtlSeconds();
+
+    std::lock_guard<std::mutex> guard(sOfflineSpecCacheLock);
+    sOfflineSpecCache[MakeOfflineSpecCacheKey(guid, cls)] = entry;
 }
 }
 
@@ -321,16 +378,36 @@ static bool ComputeOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& sp
     return true;
 }
 
+static bool ResolveOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab, bool* hasSpecData = nullptr)
+{
+    bool cachedHasSpecData = false;
+    if (TryGetOfflineSpecCache(guid, cls, specTab, cachedHasSpecData))
+    {
+        if (hasSpecData)
+            *hasSpecData = cachedHasSpecData;
+        return true;
+    }
+
+    bool resolvedHasSpecData = false;
+    bool ok = ComputeOfflineSpecTab(guid, cls, specTab, &resolvedHasSpecData);
+    if (ok)
+        StoreOfflineSpecCache(guid, cls, specTab, resolvedHasSpecData);
+
+    if (hasSpecData)
+        *hasSpecData = resolvedHasSpecData;
+    return ok;
+}
+
 bool GetOfflineSpecTab(ObjectGuid::LowType guid, uint8 cls, uint8& specTab)
 {
-    return ComputeOfflineSpecTab(guid, cls, specTab, nullptr);
+    return ResolveOfflineSpecTab(guid, cls, specTab, nullptr);
 }
 
 bool HasOfflineSpecData(ObjectGuid::LowType guid, uint8 cls, uint8* specTab)
 {
     uint8 resolvedSpec = DefaultSpecTabForClass(cls);
     bool hasSpecData = false;
-    ComputeOfflineSpecTab(guid, cls, resolvedSpec, &hasSpecData);
+    ResolveOfflineSpecTab(guid, cls, resolvedSpec, &hasSpecData);
     if (specTab)
         *specTab = resolvedSpec;
     return hasSpecData;

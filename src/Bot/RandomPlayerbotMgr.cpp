@@ -1956,6 +1956,17 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     if (RTG_QueueDebugEnabled())
         LOG_INFO("playerbots", "[RTGDBG][LOGOUT] request bot={} reason={} addData='{}'", botId, reason ? reason : "rtg", addData);
     RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGOUT] request helper={} reason={}", botId, reason ? reason : "rtg"));
+    if (lfgManaged)
+    {
+        RTG_LogLaneProof("LFG", botId, "retire",
+            fmt::format("reason={} clearQueueState={}", reason ? reason : "rtg", clearQueueState ? 1u : 0u));
+    }
+    else if (!addData.empty())
+    {
+        RTG_LogLaneProof(arenaManaged ? "ARENA" : "BG", botId, "retire",
+            fmt::format("queue={} reason={} clearQueueState={}",
+                desiredQueueType, reason ? reason : "rtg", clearQueueState ? 1u : 0u));
+    }
     if (arenaManaged)
     {
         RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][END] helper={} reason={} add='{}'", botId, reason ? reason : "rtg", addData));
@@ -5428,6 +5439,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                         LOG_INFO("playerbots", "[RTG][LFG][ACQUIRE] Logged helper bot {} for owner {} as desired role {} (class {}) source={}",
                             charInfo.guid, bucket.owner, desiredRole, charInfo.rClass, pass == 0 ? "known_spec_capable" : "forced_role_capable");
+                        RTG_LogLaneProof("LFG", charInfo.guid, "acquire",
+                            fmt::format("owner={} role={} class={} source={}",
+                                bucket.owner, desiredRole, charInfo.rClass, pass == 0 ? "known_spec_capable" : "forced_role_capable"));
 
                         ++rtgLfgLogged;
                         --capacity;
@@ -5523,6 +5537,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                         LOG_INFO("playerbots", bucket.isArena ? "[RTG][ARENA][ACQUIRE] Logged helper bot {} for queue {} team {} level {}" : "[RTG][BG][ACQUIRE] Logged helper bot {} for queue {} team {} level {}", charInfo.guid, bucket.queueTypeId, bucket.team, desiredLevel);
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][ACQUIRE] helper={} queue={} team={} level={}", charInfo.guid, bucket.queueTypeId, bucket.team, desiredLevel));
+                        RTG_LogLaneProof(bucket.isArena ? "ARENA" : "BG", charInfo.guid, "acquire",
+                            fmt::format("queue={} bracket={} team={} level={} phase={}",
+                                bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase));
                         if (bucket.isArena)
                         {
                             RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
