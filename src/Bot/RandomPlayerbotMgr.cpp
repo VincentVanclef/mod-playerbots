@@ -97,11 +97,31 @@ namespace
         return sPlayerbotAIConfig.rtgEventDriven && sPlayerbotAIConfig.rtgQueueOwnershipEnable && sPlayerbotAIConfig.rtgQueueOwnershipDebug;
     }
 
+    static bool RTG_RuntimeBreadcrumbShouldWarn(std::string const& message)
+    {
+        return message.find("[FAIL]") != std::string::npos ||
+               message.find("[STALL]") != std::string::npos ||
+               message.find("[LOGIN][FAIL]") != std::string::npos;
+    }
+
     static void RTG_RuntimeBreadcrumb(std::string const& message)
     {
-        LOG_WARN("playerbots", "{}", message);
         LOG_INFO("playerbots", "{}", message);
-        LOG_INFO("server.loading", "{}", message);
+        if (RTG_RuntimeBreadcrumbShouldWarn(message))
+            LOG_WARN("playerbots", "{}", message);
+        if (RTG_QueueDebugEnabled())
+            LOG_INFO("server.loading", "{}", message);
+    }
+
+    static char const* RTG_GetProofLaneFromAddData(std::string const& addData)
+    {
+        if (RTG::HasPrefix(addData, "rtg_lfg:"))
+            return "LFG";
+        if (RTG::HasPrefix(addData, "rtg_arena:"))
+            return "ARENA";
+        if (RTG::HasPrefix(addData, "rtg_bg:"))
+            return "BG";
+        return nullptr;
     }
 
     static uint32 RTG_GetDemandCheckIntervalSeconds()
@@ -115,6 +135,12 @@ namespace
             return;
 
         LOG_INFO("playerbots", "[RTG][{}][PROOF] helper={} stage={} {}", lane, helper, stage ? stage : "unknown", details);
+    }
+
+    static void RTG_LogProofFromAddData(std::string const& addData, uint32 helper, char const* stage, std::string const& details)
+    {
+        if (char const* lane = RTG_GetProofLaneFromAddData(addData))
+            RTG_LogLaneProof(lane, helper, stage, details);
     }
 
     static uint32 RTG_GetQueueGraceTtlSeconds()
@@ -1920,34 +1946,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     }
 
     if (clearQueueState)
-    {
-        RTG_ClearPvpClaim(botId);
-        SetEventValue(botId, "add", 0, 0);
-        SetEventValue(botId, "rtg_lfg_pending", 0, 0);
-        SetEventValue(botId, "rtg_bg_pending", 0, 0);
-        SetEventValue(botId, "rtg_bg_queue_grace", 0, 0);
-        SetEventValue(botId, "rtg_bg_dispatch_since", 0, 0);
-        SetEventValue(botId, "rtg_bg_retire_when_safe", 0, 0);
-        SetEventValue(botId, "rtg_bg_world_return_since", 0, 0);
-        SetEventValue(botId, "rtg_bg_leave_requested", 0, 0);
-        SetEventValue(botId, "rtg_bg_queue_retry", 0, 0);
-        SetEventValue(botId, "rtg_arena_pending", 0, 0);
-        SetEventValue(botId, "rtg_arena_queue_grace", 0, 0);
-        SetEventValue(botId, "rtg_arena_dispatch_since", 0, 0);
-        SetEventValue(botId, "rtg_arena_retire_when_safe", 0, 0);
-        SetEventValue(botId, "rtg_arena_world_return_since", 0, 0);
-        SetEventValue(botId, "rtg_arena_leave_requested", 0, 0);
-        SetEventValue(botId, "rtg_arena_queue_retry", 0, 0);
-        SetEventValue(botId, "rtg_pvp_force_role", 0, 0);
-        SetEventValue(botId, "rtg_pvp_runtime_role", 0, 0);
-        SetEventValue(botId, "rtg_add_requested", 0, 0);
-        SetEventValue(botId, "rtg_login_dispatch_inflight", 0, 0);
-        SetEventValue(botId, "rtg_lfg_join_retry", 0, 0);
-        SetEventValue(botId, "rtg_lfg_world_return_since", 0, 0);
-        SetEventValue(botId, "rtg_dungeon_active", 0, 0);
-        SetEventValue(botId, "rtg_lfg_force_role", 0, 0);
-        SetEventValue(botId, "rtg_lfg_profile_ready", 0, 0);
-    }
+        RTG_ClearQueueHelperState(botId, false);
 
     currentBots.remove(botId);
     RTG_PrepareBotForLogout(bot);
@@ -2771,6 +2770,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][WAIT_TELEPORT] helper={} owner={} state={} grouped={} attempts={} reason=dispatch_blocked",
                             botId, desiredOwner, uint32(state), group ? 1 : 0, teleportAttempts));
+                        RTG_LogLaneProof("LFG", botId, "teleport_blocked",
+                            fmt::format("owner={} reason=dispatch_blocked state={} grouped={} attempts={}",
+                                desiredOwner, uint32(state), group ? 1 : 0, teleportAttempts));
                     }
                 }
                 else
@@ -2783,6 +2785,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 {
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=teleport_not_resolved state={} attempts={} grouped={}",
                         botId, desiredOwner, uint32(state), teleportAttempts, group ? 1 : 0));
+                    RTG_LogLaneProof("LFG", botId, "teleport_fail",
+                        fmt::format("owner={} reason=teleport_not_resolved state={} attempts={} grouped={}",
+                            desiredOwner, uint32(state), teleportAttempts, group ? 1 : 0));
                     RTG_ClearProposalLifecycle(botId, bot);
                 }
 
@@ -2815,6 +2820,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 {
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=proposal_not_resolved proposal={} acceptAge={} state={}",
                         botId, desiredOwner, proposalLockId, acceptSentAt ? (nowTs - acceptSentAt) : 0, uint32(state)));
+                    RTG_LogLaneProof("LFG", botId, "proposal_fail",
+                        fmt::format("owner={} reason=proposal_not_resolved proposal={} acceptAge={} state={}",
+                            desiredOwner, proposalLockId, acceptSentAt ? (nowTs - acceptSentAt) : 0, uint32(state)));
                     RTG_ClearProposalLifecycle(botId, bot);
                 }
                 else
@@ -2843,6 +2851,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=prepare_role_mismatch desiredRole={} class={} specTab={}",
                             botId, desiredOwner, desiredRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                        RTG_LogLaneProof("LFG", botId, "login_fail",
+                            fmt::format("owner={} reason=prepare_role_mismatch desiredRole={} class={} specTab={}",
+                                desiredOwner, desiredRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
                         RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
                         SetEventValue(botId, "rtg_lfg_pending", 0, 0);
                         RTG_ClearQueueHelperState(botId);
@@ -2885,6 +2896,10 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     {
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={} tankLoadoutMismatch={}",
                             botId, desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u, tankLoadoutMismatch ? 1u : 0u));
+                        RTG_LogLaneProof("LFG", botId, "dispatch_fail",
+                            fmt::format("owner={} reason=runtime_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={} tankLoadoutMismatch={}",
+                                desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot),
+                                strictHybridMismatch ? 1u : 0u, tankLoadoutMismatch ? 1u : 0u));
                         RTG_SetCachedRuntimeLfgRole(botId, actualRole);
                         RTG_SetCachedRuntimeLfgRoleMask(botId, actualRoleMask);
                         RTG_BlockBotForDesiredLfgRole(botId, desiredRole);
@@ -2904,8 +2919,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     bool joined = RTG_DispatchImmediateLfgJoin(bot, "login_or_idle");
                     SetEventValue(botId, "rtg_lfg_join_retry", 1, joined ? 2 : 4, addData);
                     if (!joined)
+                    {
                         RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=join_dispatch_failed role={} state={} grouped={} combat={} dead={}",
                             botId, desiredOwner, desiredRole, uint32(state), group ? 1 : 0, bot->IsInCombat() ? 1 : 0, bot->isDead() ? 1 : 0));
+                        RTG_LogLaneProof("LFG", botId, "dispatch_fail",
+                            fmt::format("owner={} reason=join_dispatch_failed role={} state={} grouped={} combat={} dead={}",
+                                desiredOwner, desiredRole, uint32(state), group ? 1 : 0, bot->IsInCombat() ? 1 : 0, bot->isDead() ? 1 : 0));
+                    }
                 }
             }
             else if (state < lfg::LFG_STATE_DUNGEON)
@@ -8360,6 +8380,8 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 {
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_dungeon_map_recover_failed map={}",
                         bot->GetGUID().GetCounter(), desiredOwner, currentMap->GetId()));
+                    RTG_LogLaneProof("LFG", bot->GetGUID().GetCounter(), "login_fail",
+                        fmt::format("owner={} reason=login_dungeon_map_recover_failed map={}", desiredOwner, currentMap->GetId()));
                     SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
                     RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
                     RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_lfg_login_instance_recover_failed");
@@ -8386,6 +8408,9 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 {
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_prepare_role_mismatch desiredRole={} class={} specTab={}",
                         bot->GetGUID().GetCounter(), desiredOwner, desiredRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
+                    RTG_LogLaneProof("LFG", bot->GetGUID().GetCounter(), "login_fail",
+                        fmt::format("owner={} reason=login_prepare_role_mismatch desiredRole={} class={} specTab={}",
+                            desiredOwner, desiredRole, bot->getClass(), AiFactory::GetPlayerSpecTab(bot)));
                     RTG_BlockBotForDesiredLfgRole(bot->GetGUID().GetCounter(), desiredRole);
                     SetEventValue(bot->GetGUID().GetCounter(), "rtg_lfg_pending", 0, 0);
                     RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
@@ -8430,6 +8455,10 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
                 {
                     RTG_RuntimeBreadcrumb(fmt::format("[RTG][RDF][FAIL] helper={} owner={} reason=login_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={} tankLoadoutMismatch={}",
                         bot->GetGUID().GetCounter(), desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot), strictHybridMismatch ? 1u : 0u, tankLoadoutMismatch ? 1u : 0u));
+                    RTG_LogLaneProof("LFG", bot->GetGUID().GetCounter(), "login_fail",
+                        fmt::format("owner={} reason=login_role_mismatch desiredRole={} actualRole={} actualMask={} class={} specTab={} strictMismatch={} tankLoadoutMismatch={}",
+                            desiredOwner, desiredRole, actualRole, actualRoleMask, bot->getClass(), AiFactory::GetPlayerSpecTab(bot),
+                            strictHybridMismatch ? 1u : 0u, tankLoadoutMismatch ? 1u : 0u));
                     RTG_SetCachedRuntimeLfgRole(bot->GetGUID().GetCounter(), actualRole);
                     RTG_SetCachedRuntimeLfgRoleMask(bot->GetGUID().GetCounter(), actualRoleMask);
                     RTG_BlockBotForDesiredLfgRole(bot->GetGUID().GetCounter(), desiredRole);
@@ -8463,6 +8492,9 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             {
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][PVP][FAIL] helper={} lane={} queue={} desiredLevel={} preparedLevel={} reason=profile_not_ready",
                     bot->GetGUID().GetCounter(), isArenaLane ? "arena" : "bg", desiredQueueType, desiredLevel, bot->GetLevel()));
+                RTG_LogLaneProof(isArenaLane ? "ARENA" : "BG", bot->GetGUID().GetCounter(), "login_fail",
+                    fmt::format("queue={} reason=profile_not_ready desiredLevel={} preparedLevel={}",
+                        desiredQueueType, desiredLevel, bot->GetLevel()));
                 if (isArenaLane)
                     SetEventValue(bot->GetGUID().GetCounter(), "rtg_arena_pending", 0, 0);
                 else
@@ -8480,6 +8512,9 @@ void RandomPlayerbotMgr::OnBotLoginInternal(Player* const bot)
             {
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][PVP][FAIL] helper={} lane={} queue={} forcedRole={} actualRole={} reason=role_mismatch",
                     bot->GetGUID().GetCounter(), isArenaLane ? "arena" : "bg", desiredQueueType, forcedPvpRole, actualPvpRole));
+                RTG_LogLaneProof(isArenaLane ? "ARENA" : "BG", bot->GetGUID().GetCounter(), "login_fail",
+                    fmt::format("queue={} reason=role_mismatch forcedRole={} actualRole={}",
+                        desiredQueueType, forcedPvpRole, actualPvpRole));
                 RTG_ClearQueueHelperState(bot->GetGUID().GetCounter());
                 RTG_RequestQueueHelperLogout(bot->GetGUID(), isArenaLane ? "rtg_arena_role_mismatch" : "rtg_bg_role_mismatch");
                 return;
@@ -8634,33 +8669,7 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
 void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
 {
     std::string addData = GetEventData(bot, "add");
-    RTG_ClearPvpClaim(bot);
-    SetEventValue(bot, "add", 0, 0);
-    SetEventValue(bot, "rtg_bg_pending", 0, 0);
-    SetEventValue(bot, "rtg_bg_dispatch_since", 0, 0);
-    SetEventValue(bot, "rtg_arena_pending", 0, 0);
-    SetEventValue(bot, "rtg_arena_dispatch_since", 0, 0);
-    SetEventValue(bot, "rtg_bg_queue_grace", 0, 0);
-    SetEventValue(bot, "rtg_arena_pending", 0, 0);
-    SetEventValue(bot, "rtg_arena_queue_grace", 0, 0);
-    SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
-    SetEventValue(bot, "rtg_arena_queue_retry", 0, 0);
-    SetEventValue(bot, "rtg_bg_retire_when_safe", 0, 0);
-    SetEventValue(bot, "rtg_bg_leave_requested", 0, 0);
-    SetEventValue(bot, "rtg_arena_retire_when_safe", 0, 0);
-    SetEventValue(bot, "rtg_arena_leave_requested", 0, 0);
-    SetEventValue(bot, "rtg_pvp_force_role", 0, 0);
-    SetEventValue(bot, "rtg_pvp_runtime_role", 0, 0);
-    SetEventValue(bot, "rtg_lfg_pending", 0, 0);
-    SetEventValue(bot, "rtg_lfg_proposal_lock", 0, 0);
-    SetEventValue(bot, "rtg_lfg_accept_sent", 0, 0);
-    SetEventValue(bot, "rtg_lfg_teleport_sent", 0, 0);
-    SetEventValue(bot, "rtg_lfg_accept_proposal", 0, 0);
-    SetEventValue(bot, "rtg_lfg_teleport_attempts", 0, 0);
-    SetEventValue(bot, "rtg_lfg_group_ready_since", 0, 0);
-    SetEventValue(bot, "rtg_lfg_orphan_since", 0, 0);
-    SetEventValue(bot, "rtg_add_requested", 0, 0);
-    SetEventValue(bot, "rtg_login_dispatch_inflight", 0, 0);
+    RTG_ClearQueueHelperState(bot, false);
     SetEventValue(bot, "rtg_login_fail_recent", 1, 180, addData);
     if (reason && std::string(reason) == "bot_loading_guard")
         RTG_ApplyLaneLoginBackoff(addData);
@@ -8668,6 +8677,8 @@ void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot, char const* reason)
     if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
         RTG::RtgQueueLedger::Instance().Remove(bot);
     RTG_RuntimeBreadcrumb(fmt::format("[RTG][LOGIN][FAIL] helper={} add='{}' reason={}", bot, addData, reason ? reason : "unknown"));
+    RTG_LogProofFromAddData(addData, bot, "login_fail",
+        fmt::format("reason={} add='{}'", reason ? reason : "unknown", addData));
 }
 
 Player* RandomPlayerbotMgr::GetRandomPlayer()
