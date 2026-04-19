@@ -243,8 +243,11 @@ namespace
             return;
 
         nextLogAt = nowSecs + 10u;
-        LOG_INFO("server.loading", "[RTG][BG][LEAVE][BLOCK] helper={} status={} map={}",
-            botId, uint32(bg->GetStatus()), bg->GetMapId());
+        char const* laneTag = bg->isArena() ? "ARENA" : "BG";
+        LOG_INFO("playerbots", "[RTG][{}][TEARDOWN_BLOCK] helper={} stage=leave_protected status={} map={} instance={}",
+            laneTag, botId, uint32(bg->GetStatus()), bg->GetMapId(), bg->GetInstanceID());
+        LOG_INFO("server.loading", "[RTG][{}][LEAVE][BLOCK] helper={} status={} map={} instance={}",
+            laneTag, botId, uint32(bg->GetStatus()), bg->GetMapId(), bg->GetInstanceID());
     }
 
     static bool RTG_DirectJoinArenaQueue(Player* bot, BattlegroundQueueTypeId queueTypeId, ArenaType arenaType, bool isRated)

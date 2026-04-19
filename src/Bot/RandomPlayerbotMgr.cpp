@@ -143,6 +143,80 @@ namespace
             RTG_LogLaneProof(lane, helper, stage, details);
     }
 
+    static char const* RTG_GetArenaTeardownBlockStage(Player* bot, uint32 desiredQueueType, bool desiredPresence,
+        bool activeDesiredPresence, bool lifecycleOwned)
+    {
+        if (!bot)
+            return "bot_missing";
+
+        if (bot->InArena())
+            return "in_arena_still_true";
+        if (bot->InBattleground())
+            return "in_battleground_still_true";
+        if (bot->IsInvitedForBattlegroundInstance())
+            return "invite_still_true";
+        if (desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES &&
+            bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)))
+            return "queue_still_true";
+        if (bot->InBattlegroundQueue())
+            return "queue_state_still_true";
+        if (activeDesiredPresence)
+            return "active_presence_still_true";
+        if (desiredPresence)
+            return "desired_presence_still_true";
+        if (bot->GetBattleground())
+            return "bg_pointer_still_true";
+        if (Map* map = bot->GetMap())
+        {
+            if (map->IsBattlegroundOrArena())
+                return "bg_map_still_true";
+        }
+        if (lifecycleOwned)
+            return "lifecycle_owned_still_true";
+
+        return nullptr;
+    }
+
+    static void RTG_LogArenaTeardownState(uint32 helper, uint32 queueType, Player* bot, bool desiredPresence,
+        bool activeDesiredPresence, bool lifecycleOwned, bool worldReturnPending, bool retireWhenSafe,
+        bool leaveRequested, uint32 staleSince, char const* category, char const* stage = nullptr)
+    {
+        if (!bot)
+            return;
+
+        static std::unordered_map<uint64, uint32> sNextArenaTeardownLogAt;
+        uint32 nowTs = static_cast<uint32>(time(nullptr));
+        bool isBlockLog = category && std::string(category) == "TEARDOWN_BLOCK";
+        uint64 logKey = ((uint64(helper) << 32) | uint64(queueType)) ^ (isBlockLog ? 0x1ull : 0ull);
+        uint32& nextLogAt = sNextArenaTeardownLogAt[logKey];
+        if (nextLogAt && nowTs < nextLogAt)
+            return;
+        nextLogAt = nowTs + 10u;
+
+        Battleground* bg = bot->GetBattleground();
+        Map* map = bot->GetMap();
+        uint32 mapId = map ? map->GetId() : 0u;
+        uint32 instanceId = bg ? bg->GetInstanceID() : bot->GetInstanceId();
+        uint32 bgStatus = bg ? uint32(bg->GetStatus()) : 0u;
+
+        LOG_INFO("playerbots",
+            "[RTG][ARENA][{}] helper={} queue={} stage={} inArena={} inBattleground={} invited={} desiredPresence={} activeDesiredPresence={} lifecycleOwned={} map={} instance={} bgStatus={} worldReturnPending={} retireWhenSafe={} leaveRequested={} staleSince={}",
+            category ? category : "TEARDOWN", helper, queueType, stage ? stage : "state",
+            bot->InArena() ? 1 : 0,
+            bot->InBattleground() ? 1 : 0,
+            bot->IsInvitedForBattlegroundInstance() ? 1 : 0,
+            desiredPresence ? 1 : 0,
+            activeDesiredPresence ? 1 : 0,
+            lifecycleOwned ? 1 : 0,
+            mapId,
+            instanceId,
+            bgStatus,
+            worldReturnPending ? 1 : 0,
+            retireWhenSafe ? 1 : 0,
+            leaveRequested ? 1 : 0,
+            staleSince);
+    }
+
     static uint32 RTG_GetQueueGraceTtlSeconds()
     {
         return std::max<uint32>(20u, sPlayerbotAIConfig.rtgQueueGraceSeconds);
@@ -1266,6 +1340,7 @@ namespace
 
 static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 1u;
 static constexpr uint32 RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS = 2u;
+static constexpr uint32 RTG_ARENA_DORMANT_STALE_TIMEOUT_SECONDS = 15u;
 // Retirement needs to drain gradually so a finished battleground does not
 // dump a large logout burst into the same update window where other PvP lanes
 // are still filling or new arenas are forming.
@@ -1625,6 +1700,9 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
             return true;
 
         Battleground* bg = bot->GetBattleground();
+        if (RTG_IsArenaQueueType(queueTypeId))
+            return false;
+
         return bg && bg->GetBgTypeID() == desiredBgType;
     }
 
@@ -1995,6 +2073,7 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_arena_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_arena_leave_requested", 0, 0);
     SetEventValue(bot, "rtg_arena_queue_retry", 0, 0);
+    SetEventValue(bot, "rtg_arena_stale_instance_since", 0, 0);
     SetEventValue(bot, "rtg_pvp_force_role", 0, 0);
     SetEventValue(bot, "rtg_pvp_runtime_role", 0, 0);
     SetEventValue(bot, "rtg_add_requested", 0, 0);
@@ -3403,11 +3482,74 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             bool leaveRequested = GetEventValue(botId, leaveRequestedKey) != 0;
             uint32 dispatchSince = GetEventValue(botId, dispatchSinceKey);
             uint32 nowTs = NowSeconds();
+            uint32 arenaStaleSince = isArenaManaged ? GetEventValue(botId, "rtg_arena_stale_instance_since") : 0u;
             bool drainingLifecycle = retireWhenSafe || worldReturnPending || leaveRequested;
             // Per-lane demand decides lifecycle ownership. A zero global BG need total only
             // means no extra helpers are needed right now; it must not retire helpers that
             // are actively serving a live battleground or arena with real demand.
             bool noLongerNeeded = drainingLifecycle || !bgHasRealDemand || wrongTeam || !plannerWantsHelper;
+            Battleground* currentBg = bot->GetBattleground();
+            Map* currentMap = bot->GetMap();
+            bool arenaDormantNoDemand = isArenaManaged && plannerPhase == 0u && !bgHasRealDemand && plannerTeamNeed == 0u;
+            bool arenaActualQueuePresence = isArenaManaged &&
+                (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) || bot->IsInvitedForBattlegroundInstance());
+            bool arenaActualActivePresence = isArenaManaged &&
+                ((bot->InArena() || bot->InBattleground()) && bot->GetBattlegroundTypeId() == BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType)));
+            bool arenaPointerResidue = isArenaManaged && currentBg && !arenaActualActivePresence;
+            bool arenaMapResidue = isArenaManaged && currentMap && currentMap->IsBattlegroundOrArena() &&
+                !bot->InBattleground() && !bot->InArena();
+            bool arenaResidualAttachment = arenaDormantNoDemand &&
+                (lifecycleOwned || desiredPresence || activeDesiredPresence || arenaActualQueuePresence ||
+                 arenaActualActivePresence || arenaPointerResidue || arenaMapResidue || worldReturnPending ||
+                 retireWhenSafe || leaveRequested);
+            bool arenaStaleDetachEligible = arenaDormantNoDemand &&
+                !desiredPresence && !activeDesiredPresence && !arenaActualQueuePresence && !arenaActualActivePresence &&
+                (lifecycleOwned || arenaPointerResidue || arenaMapResidue);
+
+            if (isArenaManaged)
+            {
+                if (arenaResidualAttachment)
+                    RTG_LogArenaTeardownState(botId, desiredQueueType, bot, desiredPresence, activeDesiredPresence, lifecycleOwned,
+                        worldReturnPending, retireWhenSafe, leaveRequested, arenaStaleSince, "TEARDOWN");
+                else if (arenaStaleSince)
+                    SetEventValue(botId, "rtg_arena_stale_instance_since", 0, 0);
+
+                if (arenaDormantNoDemand && !worldReturnPending)
+                {
+                    if (char const* blockStage = RTG_GetArenaTeardownBlockStage(bot, desiredQueueType, desiredPresence, activeDesiredPresence, lifecycleOwned))
+                        RTG_LogArenaTeardownState(botId, desiredQueueType, bot, desiredPresence, activeDesiredPresence, lifecycleOwned,
+                            worldReturnPending, retireWhenSafe, leaveRequested, arenaStaleSince, "TEARDOWN_BLOCK", blockStage);
+                }
+
+                if (arenaStaleDetachEligible)
+                {
+                    if (!arenaStaleSince)
+                    {
+                        arenaStaleSince = nowTs;
+                        SetEventValue(botId, "rtg_arena_stale_instance_since", arenaStaleSince, 120, addData);
+                    }
+                    else
+                        SetEventValue(botId, "rtg_arena_stale_instance_since", arenaStaleSince, 120, addData);
+
+                    if (nowTs > arenaStaleSince && (nowTs - arenaStaleSince) >= RTG_ARENA_DORMANT_STALE_TIMEOUT_SECONDS)
+                    {
+                        RTG_RuntimeBreadcrumb(fmt::format(
+                            "[RTG][ARENA][TEARDOWN_FORCE] helper={} queue={} reason=dormant_instance_stale staleFor={} map={} instance={}",
+                            botId, desiredQueueType, nowTs - arenaStaleSince, currentMap ? currentMap->GetId() : 0u,
+                            currentBg ? currentBg->GetInstanceID() : bot->GetInstanceId()));
+                        SetEventValue(botId, pendingKey, 0, 0);
+                        SetEventValue(botId, queueGraceKey, 0, 0);
+                        SetEventValue(botId, queueRetryKey, 0, 0);
+                        SetEventValue(botId, retireWhenSafeKey, 1, 120, addData);
+                        lifecycleOwned = false;
+                        desiredPresence = false;
+                        activeDesiredPresence = false;
+                        inQueueState = false;
+                    }
+                }
+                else if (arenaStaleSince)
+                    SetEventValue(botId, "rtg_arena_stale_instance_since", 0, 0);
+            }
 
             // Some helpers can get stranded on a battleground/arena map after the instance
             // has effectively ended for them: no queue state, no invite, no active arena/BG
@@ -3416,7 +3558,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // arena/BG retirement never reaches RETURN_WORLD/LOGOUT and the helper stays
             // online indefinitely. Only break ownership once lane demand is gone or the
             // helper is already draining, so active transitions are left alone.
-            Map* currentMap = bot->GetMap();
             bool strandedMapOnlyLifecycle = noLongerNeeded &&
                 lifecycleOwned &&
                 currentMap && currentMap->IsBattlegroundOrArena() &&
@@ -3503,7 +3644,6 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                 if (noLongerNeeded)
                 {
-                    Battleground* currentBg = bot->GetBattleground();
                     if ((currentBg || bot->InArena()) && !RTG_BattlegroundHasRealPlayers(currentBg))
                     {
                         if (!GetEventValue(botId, leaveRequestedKey))
