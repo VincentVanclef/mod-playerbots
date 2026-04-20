@@ -5,6 +5,7 @@
 
 #include "AttackAction.h"
 
+#include "Battleground.h"
 #include "CreatureAI.h"
 #include "Event.h"
 #include "LastMovementValue.h"
@@ -17,6 +18,41 @@
 
 namespace
 {
+    static Player* RTG_GetArenaRelationPlayer(Unit* unit)
+    {
+        if (!unit)
+            return nullptr;
+
+        if (Player* player = unit->ToPlayer())
+            return player;
+
+        if (Unit* owner = unit->GetOwner())
+            return owner->ToPlayer();
+
+        return nullptr;
+    }
+
+    static bool RTG_ArenaFriendlyToBot(Player* bot, Unit* unit)
+    {
+        if (!bot || !unit)
+            return false;
+
+        bool genericFriendly = bot->IsFriendlyTo(unit);
+        if (!bot->InArena())
+            return genericFriendly;
+
+        Player* otherPlayer = RTG_GetArenaRelationPlayer(unit);
+        if (!otherPlayer || !otherPlayer->InArena())
+            return genericFriendly;
+
+        Battleground* botBg = bot->GetBattleground();
+        Battleground* otherBg = otherPlayer->GetBattleground();
+        if (!botBg || !otherBg || botBg != otherBg)
+            return genericFriendly;
+
+        return bot->GetBgTeamId() == otherPlayer->GetBgTeamId();
+    }
+
     static bool RTG_ShouldSuppressHealerPull(PlayerbotAI* botAI, Player* bot, Unit* target)
     {
         if (!botAI || !bot || !target || !botAI->IsHeal(bot, true))
@@ -153,7 +189,7 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
         return false;
     }
 
-    if (bot->IsFriendlyTo(target))
+    if (RTG_ArenaFriendlyToBot(bot, target))
     {
         if (verbose)
             botAI->TellError(std::string(target->GetName()) + " is friendly to me.");

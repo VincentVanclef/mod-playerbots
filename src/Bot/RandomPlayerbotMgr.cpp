@@ -3676,6 +3676,46 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 arenaResult = RTG::ObserveArenaTeardown(*this, bot, desiredQueueType, desiredBracketId,
                     plannerPhase, bgHasRealDemand, plannerTeamNeed, desiredPresence, activeDesiredPresence, lifecycleOwned,
                     worldReturnPending, retireWhenSafe, leaveRequested, addData, RTG_ARENA_DORMANT_STALE_TIMEOUT_SECONDS);
+
+                bool arenaLiveMatchHold =
+                    arenaResult.instanceHasRealPlayers &&
+                    (arenaResult.helperState == RTG::ArenaHelperState::Queued ||
+                     arenaResult.helperState == RTG::ArenaHelperState::Invited ||
+                     arenaResult.helperState == RTG::ArenaHelperState::InInstance);
+
+                // Arena helpers that are still part of a real live match must not be
+                // pushed into RETURN_WORLD/RETIRE just because queue demand went quiet
+                // for a moment. If teardown flags were set early, reclaim the helper
+                // back into live ownership and let the actual arena end drive closure.
+                if (arenaLiveMatchHold)
+                {
+                    bool hadPrematureDrain = retireWhenSafe || worldReturnPending || leaveRequested ||
+                        arenaResult.quarantineActive || arenaResult.closureState == RTG::ArenaClosureState::Pending;
+                    if (hadPrematureDrain)
+                    {
+                        LOG_INFO("playerbots",
+                            "[RTG][ARENA][LIVE_MATCH_HOLD] helper={} queue={} cycle={} instance={} state={} clearedDrain={} plannerPhase={} teamNeed={}",
+                            botId, desiredQueueType, arenaResult.cycleId, arenaResult.instanceId,
+                            RTG::ArenaHelperStateName(arenaResult.helperState), 1u, plannerPhase, plannerTeamNeed);
+                    }
+
+                    SetEventValue(botId, retireWhenSafeKey, 0, 0);
+                    SetEventValue(botId, worldReturnSinceKey, 0, 0);
+                    SetEventValue(botId, leaveRequestedKey, 0, 0);
+                    RTG_SetBotEventValue(botId, "rtg_arena_stale_instance_since", 0u, 0u, addData);
+                    RTG::SetArenaTeardownQuarantine(*this, botId, false, 0u, addData, "live_match_hold");
+                    RTG::SetArenaClosureState(*this, botId, RTG::ArenaClosureState::None, 0u, addData, "live_match_hold");
+
+                    arenaResult.quarantineActive = false;
+                    arenaResult.closureState = RTG::ArenaClosureState::None;
+                    drainingLifecycle = false;
+                    retireWhenSafe = false;
+                    worldReturnPending = false;
+                    leaveRequested = false;
+                    lifecycleOwned = true;
+                    noLongerNeeded = false;
+                }
+
                 if (arenaResult.quarantineActive)
                 {
                     lifecycleOwned = false;
