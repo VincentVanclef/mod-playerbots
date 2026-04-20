@@ -5600,7 +5600,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.isArena = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType));
                         bucket.realQueued = bgQueueTotals[std::make_pair(desiredQueueType, dataLevel)];
                         bucket.phase = GetEventValue(0, RTG_MakePvpPhaseKey(desiredQueueType, uint32(bracketId)));
-                        bucket.currentHealerCount = bgRealHealerCounts[key];
+                        bucket.currentHealerCount = bgRealHealerCounts[std::make_tuple(desiredQueueType, dataTeam, dataLevel)];
                         bucket.desiredHealerCount = (bucket.isArena && bucket.teamSize >= 3u) ? 1u : 0u;
 
                         BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
