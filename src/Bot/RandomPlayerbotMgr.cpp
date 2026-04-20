@@ -1565,9 +1565,9 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
         {
             auto clearArenaMarker = [&](char const* key)
             {
-                if (mgr.GetEventValue(botId, key))
+                if (mgr.RTG_GetBotEventValue(botId, key))
                 {
-                    mgr.SetEventValue(botId, key, 0, 0);
+                    mgr.RTG_SetBotEventValue(botId, key, 0u, 0u, addData);
                     ++removedMarkers;
                 }
             };
@@ -4031,14 +4031,34 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             GetEventValue(0, RTG_MakePvpDemandKey(9u, BG_BRACKET_ID_FIRST)) == 0u)
         {
             uint32 activeInstances = 0u;
+            uint32 reusableArenaHelpersAvailable = 0u;
             for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
                 activeInstances += BattlegroundData[9u][bracket].skirmishArenaInstanceCount + BattlegroundData[9u][bracket].ratedArenaInstanceCount;
+
+            for (auto const& reusableKv : playerBots)
+            {
+                Player* reusableBot = reusableKv.second;
+                if (!reusableBot || !reusableBot->IsInWorld())
+                    continue;
+                uint32 reusableBotId = reusableKv.first.GetCounter();
+                if (GetEventValue(reusableBotId, "logout"))
+                    continue;
+                if (RTG::GetArenaClosureState(*this, reusableBotId) == RTG::ArenaClosureState::Pending ||
+                    RTG::IsArenaTeardownQuarantined(*this, reusableBotId))
+                    continue;
+                if (reusableBot->InArena() || reusableBot->InBattleground() || reusableBot->InBattlegroundQueue() ||
+                    reusableBot->IsInvitedForBattlegroundInstance() || reusableBot->IsBeingTeleported() ||
+                    reusableBot->HasUnitState(UNIT_STATE_IN_FLIGHT) || reusableBot->IsInCombat())
+                    continue;
+
+                ++reusableArenaHelpersAvailable;
+            }
 
             LOG_INFO("playerbots",
                 "[RTG][ARENA][SUMMARY] queue=9 activeInstances={} closingHelpers={} stuckHelpers={} forcedTerminalClosures={} reusableArenaHelpersAvailable={}",
                 activeInstances, rtgArenaClosingHelpers, rtgArenaStuckHelpers,
                 GetEventValue(0, "rtg_arena_terminal_forced_cycle"),
-                countAvailableBgCandidates(TEAM_ALLIANCE, true) + countAvailableBgCandidates(TEAM_HORDE, true));
+                reusableArenaHelpersAvailable);
             SetEventValue(0, "rtg_arena_terminal_forced_cycle", 0, 0);
         }
     }
