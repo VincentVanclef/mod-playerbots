@@ -665,6 +665,45 @@ namespace
 
     static bool RTG_PvpClaimAllowsQueue(uint32 botGuid, uint32 desiredQueueType);
 
+    static void RTG_RecordArenaJoinAttemptResult(Player* bot, uint32 desiredQueueType, bool queued, char const* reason)
+    {
+        if (!bot || !RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)))
+            return;
+
+        ObjectGuid::LowType botId = bot->GetGUID().GetCounter();
+        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+        bool activeState =
+            bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
+            bot->IsInvitedForBattlegroundInstance() ||
+            bot->InBattleground() ||
+            bot->InArena();
+
+        if (queued || activeState)
+        {
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_arena_join_fail_since", 0u, 0u, addData);
+            sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_arena_join_fail_count", 0u, 0u, addData);
+            return;
+        }
+
+        uint32 nowTs = NowSeconds();
+        uint32 failSince = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_join_fail_since");
+        uint32 failCount = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_join_fail_count") + 1u;
+        if (!failSince)
+            failSince = nowTs;
+
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_arena_join_fail_since", failSince, 120u, addData);
+        sRandomPlayerbotMgr.RTG_SetBotEventValue(botId, "rtg_arena_join_fail_count", failCount, 120u, addData);
+        LOG_INFO("playerbots",
+            "[RTG][ARENA][JOIN_FAIL] helper={} queue={} reason={} failCount={} failAge={} inWorld={} inQueue={} invited={} inBg={} inArena={}",
+            botId, desiredQueueType, reason ? reason : "rtg", failCount,
+            nowTs > failSince ? (nowTs - failSince) : 0u,
+            bot->IsInWorld() ? 1u : 0u,
+            bot->InBattlegroundQueue() ? 1u : 0u,
+            bot->IsInvitedForBattlegroundInstance() ? 1u : 0u,
+            bot->InBattleground() ? 1u : 0u,
+            bot->InArena() ? 1u : 0u);
+    }
+
     static bool RTG_DispatchImmediateBgQueueJoin(Player* bot, uint32 desiredQueueType, char const* reason)
     {
         if (!bot || !desiredQueueType || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
@@ -703,6 +742,7 @@ namespace
 
         if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)))
         {
+            RTG_RecordArenaJoinAttemptResult(bot, desiredQueueType, queued, reason);
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][JOIN] helper={} queue={} result={} reason={}",
                 bot->GetGUID().GetCounter(), desiredQueueType, queued ? 1 : 0, reason ? reason : "rtg"));
         }
@@ -2200,6 +2240,8 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_arena_terminal_since", 0, 0);
     SetEventValue(bot, "rtg_arena_terminal_visits", 0, 0);
     SetEventValue(bot, "rtg_arena_terminal_force_logout", 0, 0);
+    SetEventValue(bot, "rtg_arena_join_fail_since", 0, 0);
+    SetEventValue(bot, "rtg_arena_join_fail_count", 0, 0);
     SetEventValue(bot, "rtg_arena_state", 0, 0);
     SetEventValue(bot, "rtg_arena_cycle", 0, 0);
     SetEventValue(bot, "rtg_arena_instance_id", 0, 0);
@@ -3868,6 +3910,35 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             // Once stranded map-only residue has been downgraded above, keep using the
             // local lifecycle result here instead of re-reading raw map state.
             bool outOfBgState = !lifecycleOwned;
+
+            if (isArenaManaged)
+            {
+                uint32 arenaJoinFailSince = GetEventValue(botId, "rtg_arena_join_fail_since");
+                uint32 arenaJoinFailCount = GetEventValue(botId, "rtg_arena_join_fail_count");
+                bool arenaJoinStall =
+                    !noLongerNeeded &&
+                    outOfBgState &&
+                    !desiredPresence &&
+                    !activeDesiredPresence &&
+                    dispatchSince &&
+                    arenaJoinFailCount >= RTG_ARENA_JOIN_FAIL_THRESHOLD &&
+                    nowTs > arenaJoinFailSince &&
+                    (nowTs - arenaJoinFailSince) >= RTG_ARENA_JOIN_FAIL_RECYCLE_SECONDS;
+
+                if (arenaJoinStall)
+                {
+                    LOG_INFO("playerbots",
+                        "[RTG][ARENA][JOIN_STALL_FORCE] helper={} queue={} failCount={} failAge={} dispatchAge={} reason=recycle_failed_joiner",
+                        botId, desiredQueueType, arenaJoinFailCount, nowTs - arenaJoinFailSince,
+                        nowTs > dispatchSince ? (nowTs - dispatchSince) : 0u);
+                    SetEventValue(botId, pendingKey, 0, 0);
+                    SetEventValue(botId, queueGraceKey, 0, 0);
+                    SetEventValue(botId, queueRetryKey, 0, 0);
+                    RTG_ClearQueueHelperState(botId);
+                    rtgBgLogout.push_back(botGuid);
+                    continue;
+                }
+            }
 
             if (!noLongerNeeded && outOfBgState && !desiredPresence && dispatchSince &&
                 nowTs > dispatchSince && (nowTs - dispatchSince) >= RTG_GetDispatchStallThresholdSeconds())
