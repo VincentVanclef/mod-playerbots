@@ -15,6 +15,7 @@
 #include <cmath>
 #include <ctime>
 #include <iomanip>
+#include <limits>
 #include <random>
 #include <unordered_map>
 #include <chrono>
@@ -5390,7 +5391,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 uint32 queueTypeId = 0;
                 uint32 owner = 0;
-                uint32 team = 0;
                 uint32 bracketId = 0;
                 uint32 teamSize = 0;
                 std::vector<uint32> realLevels;
@@ -5404,7 +5404,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             std::map<std::pair<uint32, uint32>, BattlegroundBracketId> bgBrackets;
             std::map<std::pair<uint32, uint32>, uint32> bgTeamSizes;
             std::map<std::pair<uint32, uint32>, std::vector<uint32>> bgAdaptiveLevels;
-            std::map<std::tuple<uint32, uint32, uint32, uint32>, RtgArenaOwnerSeed> arenaOwnerSeeds;
+            std::map<std::tuple<uint32, uint32, uint32>, RtgArenaOwnerSeed> arenaOwnerSeeds;
             bool preferredPvpQueueLevelActive = false;
 
             for (Player* player : players)
@@ -5500,12 +5500,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         uint32 owner = ownerGuid.GetCounter();
                         if (owner)
                         {
-                            auto ownerKey = std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()),
-                                static_cast<uint32>(player->GetTeamId()), owner);
+                            auto ownerKey = std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()), owner);
                             RtgArenaOwnerSeed& seed = arenaOwnerSeeds[ownerKey];
                             seed.queueTypeId = static_cast<uint32>(queueTypeId);
                             seed.owner = owner;
-                            seed.team = static_cast<uint32>(player->GetTeamId());
                             seed.bracketId = static_cast<uint32>(pvpDiff->GetBracketId());
                             seed.teamSize = RTG_NormalizeArenaTeamSizeForQueue(queueTypeId);
                             seed.realLevels.push_back(static_cast<uint32>(player->GetLevel()));
@@ -5652,6 +5650,103 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 bracketId = queuePair.first.second;
                 RTG_AdaptiveLevelWindow window = RTG_MakeAdaptiveLevelWindow(queuePair.second, sPlayerbotAIConfig.rtgQueueBotLevel);
                 uint32 phase = GetEventValue(0, RTG_MakePvpPhaseKey(queueTypeId, bracketId));
+                std::map<uint32, RtgArenaOwnerSeed> arenaSeedsForBracket;
+                std::map<uint32, uint32> arenaAssignedOwnerTeams;
+
+                if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueTypeId)))
+                {
+                    for (auto const& ownerPair : arenaOwnerSeeds)
+                    {
+                        RtgArenaOwnerSeed const& seed = ownerPair.second;
+                        if (seed.queueTypeId != queueTypeId || seed.bracketId != bracketId)
+                            continue;
+
+                        arenaSeedsForBracket[seed.owner] = seed;
+                    }
+
+                    if (!arenaSeedsForBracket.empty())
+                    {
+                        std::map<uint32, uint32> remainingRealSlotsByTeam;
+                        std::map<uint32, uint32> assignedOwnersByTeam;
+                        std::map<uint32, uint32> teamNeedByTeam;
+                        uint32 arenaTeamSize = RTG_NormalizeArenaTeamSizeForQueue(BattlegroundQueueTypeId(queueTypeId));
+
+                        for (uint32 teamCandidate : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
+                        {
+                            uint32 teamNeed = GetEventValue(0, RTG_MakePvpTeamNeedKey(queueTypeId, bracketId, teamCandidate));
+                            teamNeedByTeam[teamCandidate] = teamNeed;
+                            remainingRealSlotsByTeam[teamCandidate] = arenaTeamSize > teamNeed ? (arenaTeamSize - teamNeed) : 0u;
+                        }
+
+                        auto findExistingArenaOwnerTeam = [&](uint32 owner) -> uint32
+                        {
+                            for (auto const& existingPair : bgBuckets)
+                            {
+                                RtgBgBucket const& existing = existingPair.second;
+                                if (!existing.isArena || existing.queueTypeId != queueTypeId || existing.bracketId != bracketId || existing.owner != owner)
+                                    continue;
+                                if (existing.currentOwnerCount || existing.assignedExtra || existing.queuedFresh || existing.need)
+                                    return existing.team;
+                            }
+
+                            return std::numeric_limits<uint32>::max();
+                        };
+
+                        for (auto const& ownerPair : arenaSeedsForBracket)
+                        {
+                            RtgArenaOwnerSeed const& seed = ownerPair.second;
+                            uint32 assignedTeam = findExistingArenaOwnerTeam(seed.owner);
+
+                            if (assignedTeam == std::numeric_limits<uint32>::max())
+                            {
+                                for (uint32 teamCandidate : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
+                                {
+                                    if (!remainingRealSlotsByTeam[teamCandidate])
+                                        continue;
+
+                                    if (assignedTeam == std::numeric_limits<uint32>::max() ||
+                                        remainingRealSlotsByTeam[teamCandidate] > remainingRealSlotsByTeam[assignedTeam] ||
+                                        (remainingRealSlotsByTeam[teamCandidate] == remainingRealSlotsByTeam[assignedTeam] &&
+                                         assignedOwnersByTeam[teamCandidate] < assignedOwnersByTeam[assignedTeam]) ||
+                                        (remainingRealSlotsByTeam[teamCandidate] == remainingRealSlotsByTeam[assignedTeam] &&
+                                         assignedOwnersByTeam[teamCandidate] == assignedOwnersByTeam[assignedTeam] &&
+                                         teamNeedByTeam[teamCandidate] > teamNeedByTeam[assignedTeam]))
+                                    {
+                                        assignedTeam = teamCandidate;
+                                    }
+                                }
+                            }
+
+                            if (assignedTeam == std::numeric_limits<uint32>::max())
+                            {
+                                for (uint32 teamCandidate : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
+                                {
+                                    if (assignedTeam == std::numeric_limits<uint32>::max() ||
+                                        teamNeedByTeam[teamCandidate] > teamNeedByTeam[assignedTeam] ||
+                                        (teamNeedByTeam[teamCandidate] == teamNeedByTeam[assignedTeam] &&
+                                         assignedOwnersByTeam[teamCandidate] < assignedOwnersByTeam[assignedTeam]))
+                                    {
+                                        assignedTeam = teamCandidate;
+                                    }
+                                }
+                            }
+
+                            if (assignedTeam == std::numeric_limits<uint32>::max())
+                                continue;
+
+                            arenaAssignedOwnerTeams[seed.owner] = assignedTeam;
+                            ++assignedOwnersByTeam[assignedTeam];
+                            if (remainingRealSlotsByTeam[assignedTeam])
+                                --remainingRealSlotsByTeam[assignedTeam];
+                        }
+                    }
+                    else if (!queuePair.second.empty())
+                    {
+                        LOG_INFO("playerbots",
+                            "[RTG][ARENA][OWNER_BLOCK] queue={} bracket={} realQueued={} reason=no_owner_seed",
+                            queueTypeId, bracketId, static_cast<uint32>(queuePair.second.size()));
+                    }
+                }
 
                 for (uint32 teamId : {uint32(TEAM_ALLIANCE), uint32(TEAM_HORDE)})
                 {
@@ -5662,10 +5757,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueTypeId)))
                     {
                         std::vector<std::tuple<uint32, RtgArenaOwnerSeed>> ownerOrder;
-                        for (auto const& ownerPair : arenaOwnerSeeds)
+                        for (auto const& ownerPair : arenaSeedsForBracket)
                         {
                             RtgArenaOwnerSeed const& seed = ownerPair.second;
-                            if (seed.queueTypeId != queueTypeId || seed.bracketId != bracketId || seed.team != teamId)
+                            auto assignedTeamIt = arenaAssignedOwnerTeams.find(seed.owner);
+                            if (assignedTeamIt == arenaAssignedOwnerTeams.end() || assignedTeamIt->second != teamId)
                                 continue;
 
                             ownerOrder.push_back(std::make_tuple(seed.owner, seed));
@@ -5748,6 +5844,10 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
                                 adaptiveBgBuckets[std::make_tuple(queueTypeId, teamId, bucket.level, bucket.owner)] = bucket;
                             }
+                            continue;
+                        }
+                        else if (arenaSeedsForBracket.empty() && !queuePair.second.empty())
+                        {
                             continue;
                         }
                     }
