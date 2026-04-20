@@ -4074,6 +4074,21 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             }
         }
 
+        bool arenaQueueDormant = GetEventValue(0, RTG_MakePvpPhaseKey(9u, BG_BRACKET_ID_FIRST)) == 0u &&
+            GetEventValue(0, RTG_MakePvpDemandKey(9u, BG_BRACKET_ID_FIRST)) == 0u;
+        uint32 arenaDormantSince = GetEventValue(0, "rtg_arena_dormant_since");
+        uint32 arenaDormantNow = NowSeconds();
+        if (arenaQueueDormant)
+        {
+            if (!arenaDormantSince)
+            {
+                arenaDormantSince = arenaDormantNow;
+                SetEventValue(0, "rtg_arena_dormant_since", arenaDormantSince, 60u);
+            }
+        }
+        else if (arenaDormantSince)
+            SetEventValue(0, "rtg_arena_dormant_since", 0, 0);
+
         uint32 rtgArenaIdleDrainCount = 0;
         uint32 rtgArenaClosingHelpers = 0;
         uint32 rtgArenaStuckHelpers = 0;
@@ -4140,8 +4155,43 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             RTG_RequestQueueHelperLogout(botGuid, forcedTerminal ? "rtg_arena_dormant_sweep" : "rtg_arena_idle_drain", true);
         }
 
-        if (GetEventValue(0, RTG_MakePvpPhaseKey(9u, BG_BRACKET_ID_FIRST)) == 0u &&
-            GetEventValue(0, RTG_MakePvpDemandKey(9u, BG_BRACKET_ID_FIRST)) == 0u)
+        if (arenaQueueDormant && arenaDormantSince && arenaDormantNow > arenaDormantSince &&
+            (arenaDormantNow - arenaDormantSince) >= 5u)
+        {
+            for (auto const& kv : playerBots)
+            {
+                ObjectGuid botGuid = kv.first;
+                Player* bot = kv.second;
+                if (!bot || !bot->IsInWorld())
+                    continue;
+
+                uint32 botId = botGuid.GetCounter();
+                if (GetEventValue(botId, "logout"))
+                    continue;
+
+                std::string addData = GetEventData(botId, "add");
+                if (!RTG::HasPrefix(addData, "rtg_arena:"))
+                    continue;
+
+                bool closurePending = RTG::GetArenaClosureState(*this, botId) == RTG::ArenaClosureState::Pending;
+                bool quarantine = RTG::IsArenaTeardownQuarantined(*this, botId);
+                bool draining = GetEventValue(botId, "rtg_arena_retire_when_safe") || GetEventValue(botId, "rtg_arena_world_return_since") ||
+                    GetEventValue(botId, "rtg_arena_leave_requested");
+                if (!(closurePending || quarantine || draining))
+                    continue;
+
+                if (bot->InArena() || bot->InBattleground() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance() ||
+                    bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+                    continue;
+
+                LOG_INFO("playerbots",
+                    "[RTG][ARENA][FINAL_FORCE] helper={} dormantAge={} reason=dormant_closure_flush closurePending={} quarantine={} draining={}",
+                    botId, arenaDormantNow - arenaDormantSince, closurePending ? 1u : 0u, quarantine ? 1u : 0u, draining ? 1u : 0u);
+                RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_dormant_sweep", true);
+            }
+        }
+
+        if (arenaQueueDormant)
         {
             uint32 activeInstances = 0u;
             uint32 reusableArenaHelpersAvailable = 0u;
