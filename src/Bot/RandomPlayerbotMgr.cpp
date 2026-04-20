@@ -685,7 +685,7 @@ namespace
             return;
         }
 
-        uint32 nowTs = NowSeconds();
+        uint32 nowTs = static_cast<uint32>(time(nullptr));
         uint32 failSince = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_join_fail_since");
         uint32 failCount = sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_join_fail_count") + 1u;
         if (!failSince)
@@ -1392,6 +1392,8 @@ namespace
 static constexpr uint32 RTG_BG_RETURN_WORLD_RETIRE_SECONDS = 1u;
 static constexpr uint32 RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS = 2u;
 static constexpr uint32 RTG_ARENA_DORMANT_STALE_TIMEOUT_SECONDS = 15u;
+static constexpr uint32 RTG_ARENA_JOIN_FAIL_RECYCLE_SECONDS = 12u;
+static constexpr uint32 RTG_ARENA_JOIN_FAIL_THRESHOLD = 3u;
 static constexpr uint32 RTG_ARENA_TERMINAL_LOOP_FORCE_SECONDS = 25u;
 static constexpr uint32 RTG_ARENA_TERMINAL_LOOP_VISIT_THRESHOLD = 3u;
 // Retirement needs to drain gradually so a finished battleground does not
