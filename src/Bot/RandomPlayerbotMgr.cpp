@@ -263,7 +263,8 @@ namespace
         uint32 team = 0;
         uint32 desiredLevel = 0;
         uint32 queueTypeId = 0;
-        if (!RTG::ParseBgAddData(addData, team, desiredLevel, queueTypeId))
+        uint32 owner = 0;
+        if (!RTG::ParseBgAddData(addData, team, desiredLevel, queueTypeId, &owner))
             return addData;
 
         uint32 normalizedLevel = RTG_NormalizeDesiredPvpQueueLevel(desiredLevel);
@@ -271,9 +272,9 @@ namespace
             return addData;
 
         if (RTG::HasPrefix(addData, "rtg_arena:"))
-            return RTG::MakeArenaAddData(team, normalizedLevel, queueTypeId);
+            return RTG::MakeArenaAddData(team, normalizedLevel, queueTypeId, owner);
 
-        return RTG::MakeBgAddData(team, normalizedLevel, queueTypeId);
+        return RTG::MakeBgAddData(team, normalizedLevel, queueTypeId, owner);
     }
 
     static bool RTG_PreparePvpQueueHelperForDesiredLevel(Player* bot, uint32 desiredLevel, char const* laneTag)
@@ -5367,6 +5368,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             struct RtgBgBucket
             {
                 uint32 queueTypeId = 0;
+                uint32 owner = 0;
                 uint32 team = 0;
                 uint32 level = 0;
                 uint32 bracketId = 0;
@@ -5375,6 +5377,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 realQueued = 0;
                 uint32 assignedExtra = 0;
                 uint32 queuedFresh = 0;
+                uint32 currentOwnerCount = 0;
                 uint32 currentHealerCount = 0;
                 uint32 assignedHealerCount = 0;
                 uint32 desiredHealerCount = 0;
@@ -5383,13 +5386,25 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 uint32 phase = 0;
             };
 
+            struct RtgArenaOwnerSeed
+            {
+                uint32 queueTypeId = 0;
+                uint32 owner = 0;
+                uint32 team = 0;
+                uint32 bracketId = 0;
+                uint32 teamSize = 0;
+                std::vector<uint32> realLevels;
+                uint32 realQueued = 0;
+            };
+
             std::map<std::pair<uint32, uint32>, RtgLfgBucket> lfgBuckets;
             std::map<std::pair<uint32, uint32>, uint32> bgQueueTotals;
             std::map<std::tuple<uint32, uint32, uint32>, uint32> bgRealHealerCounts;
-            std::map<std::tuple<uint32, uint32, uint32>, RtgBgBucket> bgBuckets;
+            std::map<std::tuple<uint32, uint32, uint32, uint32>, RtgBgBucket> bgBuckets;
             std::map<std::pair<uint32, uint32>, BattlegroundBracketId> bgBrackets;
             std::map<std::pair<uint32, uint32>, uint32> bgTeamSizes;
             std::map<std::pair<uint32, uint32>, std::vector<uint32>> bgAdaptiveLevels;
+            std::map<std::tuple<uint32, uint32, uint32, uint32>, RtgArenaOwnerSeed> arenaOwnerSeeds;
             bool preferredPvpQueueLevelActive = false;
 
             for (Player* player : players)
@@ -5476,6 +5491,27 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         ? RTG_NormalizeArenaTeamSizeForQueue(queueTypeId)
                         : bgTemplate->GetMaxPlayersPerTeam();
                     bgAdaptiveLevels[std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()))].push_back(static_cast<uint32>(player->GetLevel()));
+
+                    if (RTG_IsArenaQueueType(queueTypeId))
+                    {
+                        if (group)
+                            ownerGuid = RTG_GetStableRealQueueOwnerGuid(player, group);
+
+                        uint32 owner = ownerGuid.GetCounter();
+                        if (owner)
+                        {
+                            auto ownerKey = std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()),
+                                static_cast<uint32>(player->GetTeamId()), owner);
+                            RtgArenaOwnerSeed& seed = arenaOwnerSeeds[ownerKey];
+                            seed.queueTypeId = static_cast<uint32>(queueTypeId);
+                            seed.owner = owner;
+                            seed.team = static_cast<uint32>(player->GetTeamId());
+                            seed.bracketId = static_cast<uint32>(pvpDiff->GetBracketId());
+                            seed.teamSize = RTG_NormalizeArenaTeamSizeForQueue(queueTypeId);
+                            seed.realLevels.push_back(static_cast<uint32>(player->GetLevel()));
+                            ++seed.realQueued;
+                        }
+                    }
                 }
             }
 
@@ -5541,7 +5577,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             ++it->second.assignedDps;
                     }
                 }
-                else if (RTG::ParseBgAddData(addData, dataTeam, dataLevel, desiredQueueType))
+                else if (RTG::ParseBgAddData(addData, dataTeam, dataLevel, desiredQueueType, &ownerId))
                 {
                     BattlegroundBracketId bracketId = BG_BRACKET_ID_FIRST;
                     uint32 minLevel = 0;
@@ -5549,12 +5585,14 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType), dataLevel, bracketId, minLevel, maxLevel))
                         continue;
 
-                    auto key = std::make_tuple(desiredQueueType, dataTeam, dataLevel);
+                    uint32 bucketOwner = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) ? ownerId : 0u;
+                    auto key = std::make_tuple(desiredQueueType, dataTeam, dataLevel, bucketOwner);
                     auto it = bgBuckets.find(key);
                     if (it == bgBuckets.end())
                     {
                         RtgBgBucket bucket;
                         bucket.queueTypeId = desiredQueueType;
+                        bucket.owner = bucketOwner;
                         bucket.team = dataTeam;
                         bucket.level = dataLevel;
                         bucket.bracketId = bracketId;
@@ -5588,21 +5626,26 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         if (GetEventValue(botId, "rtg_pvp_force_role") == lfg::PLAYER_ROLE_HEALER)
                             ++it->second.assignedHealerCount;
                     }
-                    else if (!activeInDesiredBgState)
+                    else
                     {
+                        ++it->second.currentOwnerCount;
+
+                        if (!activeInDesiredBgState)
+                        {
                         // Once a helper has entered the correct queue / invite state it
                         // should continue to suppress replacement demand until it either
                         // becomes active or loses that queue presence. Time-limiting this
                         // bucket causes valid reserve fillers to age into artificial
                         // shortages, which then triggers stale-queue churn.
                         ++it->second.queuedFresh;
+                        }
                     }
-                    else if (managedBot && it->second.isArena && RTG_GetStrictPrimaryRoleForBot(managedBot) == lfg::PLAYER_ROLE_HEALER)
+                    if (managedBot && it->second.isArena && RTG_GetStrictPrimaryRoleForBot(managedBot) == lfg::PLAYER_ROLE_HEALER)
                         ++it->second.currentHealerCount;
                 }
             }
 
-            std::map<std::tuple<uint32, uint32, uint32>, RtgBgBucket> adaptiveBgBuckets;
+            std::map<std::tuple<uint32, uint32, uint32, uint32>, RtgBgBucket> adaptiveBgBuckets;
             for (auto const& queuePair : bgAdaptiveLevels)
             {
                 uint32 queueTypeId = queuePair.first.first;
@@ -5616,6 +5659,99 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (!teamNeed)
                         continue;
 
+                    if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueTypeId)))
+                    {
+                        std::vector<std::tuple<uint32, RtgArenaOwnerSeed>> ownerOrder;
+                        for (auto const& ownerPair : arenaOwnerSeeds)
+                        {
+                            RtgArenaOwnerSeed const& seed = ownerPair.second;
+                            if (seed.queueTypeId != queueTypeId || seed.bracketId != bracketId || seed.team != teamId)
+                                continue;
+
+                            ownerOrder.push_back(std::make_tuple(seed.owner, seed));
+                        }
+
+                        if (!ownerOrder.empty())
+                        {
+                            std::map<uint32, RtgBgBucket> ownerBuckets;
+                            for (auto const& ownerEntry : ownerOrder)
+                            {
+                                RtgArenaOwnerSeed const& seed = std::get<1>(ownerEntry);
+                                RTG_AdaptiveLevelWindow ownerWindow = RTG_MakeAdaptiveLevelWindow(seed.realLevels, sPlayerbotAIConfig.rtgQueueBotLevel);
+                                uint32 bucketLevel = RTG_IsPreferredPvpQueueingActive() ? RTG_GetPreferredPvpQueueLevel() : ownerWindow.avgLevel;
+                                auto existingKey = std::make_tuple(queueTypeId, teamId, bucketLevel, seed.owner);
+
+                                RtgBgBucket bucket;
+                                auto existingIt = bgBuckets.find(existingKey);
+                                if (existingIt != bgBuckets.end())
+                                    bucket = existingIt->second;
+
+                                bucket.queueTypeId = queueTypeId;
+                                bucket.owner = seed.owner;
+                                bucket.team = teamId;
+                                bucket.level = bucketLevel;
+                                bucket.bracketId = bracketId;
+                                bucket.teamSize = seed.teamSize ? seed.teamSize : bgTeamSizes[std::make_pair(queueTypeId, bucketLevel)];
+                                bucket.isArena = true;
+                                bucket.realQueued = seed.realQueued;
+                                bucket.phase = phase;
+                                bucket.desiredHealerCount = (bucket.teamSize >= 3u) ? 1u : 0u;
+
+                                BattlegroundInfo& bgInfo = BattlegroundData[queueTypeId][bracketId];
+                                bucket.currentTeamCount = (teamId == TEAM_ALLIANCE)
+                                    ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
+                                    : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+
+                                ownerBuckets[seed.owner] = bucket;
+                            }
+
+                            uint32 remainingNeed = teamNeed;
+                            while (remainingNeed > 0u)
+                            {
+                                uint32 chosenOwner = 0u;
+                                uint32 chosenDeficit = 0u;
+                                bool chosenHasProvisioned = false;
+
+                                for (auto const& ownerBucketPair : ownerBuckets)
+                                {
+                                    RtgBgBucket const& bucket = ownerBucketPair.second;
+                                    uint32 provisioned = bucket.currentOwnerCount + bucket.assignedExtra;
+                                    uint32 desiredHelpers = bucket.teamSize > bucket.realQueued ? (bucket.teamSize - bucket.realQueued) : 0u;
+                                    uint32 deficit = desiredHelpers > provisioned ? (desiredHelpers - provisioned) : 0u;
+                                    if (!deficit)
+                                        continue;
+
+                                    bool hasProvisioned = provisioned > 0u;
+                                    if (!chosenOwner ||
+                                        (hasProvisioned && !chosenHasProvisioned) ||
+                                        (hasProvisioned == chosenHasProvisioned && deficit > chosenDeficit))
+                                    {
+                                        chosenOwner = ownerBucketPair.first;
+                                        chosenDeficit = deficit;
+                                        chosenHasProvisioned = hasProvisioned;
+                                    }
+                                }
+
+                                if (!chosenOwner)
+                                    break;
+
+                                ++ownerBuckets[chosenOwner].need;
+                                ++ownerBuckets[chosenOwner].assignedExtra;
+                                --remainingNeed;
+                            }
+
+                            for (auto const& ownerBucketPair : ownerBuckets)
+                            {
+                                RtgBgBucket const& bucket = ownerBucketPair.second;
+                                if (!bucket.need && !bucket.currentOwnerCount && !bucket.assignedExtra && !bucket.queuedFresh)
+                                    continue;
+
+                                adaptiveBgBuckets[std::make_tuple(queueTypeId, teamId, bucket.level, bucket.owner)] = bucket;
+                            }
+                            continue;
+                        }
+                    }
+
                     std::unordered_map<uint32, uint32> levelCounts;
                     for (uint32 i = 0; i < teamNeed; ++i)
                         ++levelCounts[RTG_ChooseAdaptiveQueueBotLevel(window, sPlayerbotAIConfig.rtgQueueBotLevel)];
@@ -5624,6 +5760,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     {
                         RtgBgBucket bucket;
                         bucket.queueTypeId = queueTypeId;
+                        bucket.owner = 0;
                         bucket.team = teamId;
                         bucket.level = RTG_IsPreferredPvpQueueingActive() ? RTG_GetPreferredPvpQueueLevel() : lc.first;
                         bucket.bracketId = bracketId;
@@ -5640,7 +5777,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
                             : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
 
-                        adaptiveBgBuckets[std::make_tuple(queueTypeId, teamId, lc.first)] = bucket;
+                        adaptiveBgBuckets[std::make_tuple(queueTypeId, teamId, lc.first, 0u)] = bucket;
                     }
                 }
             }
@@ -5725,12 +5862,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         if (alreadyPlannedAdaptive || !plannerNeed)
                             continue;
 
-                        auto key = std::make_tuple(queueTypeId, team, level);
+                        auto key = std::make_tuple(queueTypeId, team, level, 0u);
                         auto it = bgBuckets.find(key);
                         if (it == bgBuckets.end())
                         {
                             RtgBgBucket bucket;
                             bucket.queueTypeId = queueTypeId;
+                            bucket.owner = 0;
                             bucket.team = team;
                             bucket.level = level;
                             bucket.bracketId = bracketId;
@@ -5814,6 +5952,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return aPriority < bPriority;
                 if (a.isArena != b.isArena)
                     return a.isArena > b.isArena;
+                if (a.isArena)
+                {
+                    uint32 aProvisioned = a.currentOwnerCount + a.assignedExtra;
+                    uint32 bProvisioned = b.currentOwnerCount + b.assignedExtra;
+                    if ((aProvisioned != 0u) != (bProvisioned != 0u))
+                        return aProvisioned != 0u;
+                }
                 if (a.currentTeamCount != b.currentTeamCount)
                     return a.currentTeamCount < b.currentTeamCount;
                 if (a.need != b.need)
@@ -6054,8 +6199,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
 
                 uint32 desiredLevel = RTG_NormalizeDesiredPvpQueueLevel(bucket.level);
-                std::string addData = bucket.isArena ? RTG::MakeArenaAddData(bucket.team, desiredLevel, bucket.queueTypeId)
-                                                     : RTG::MakeBgAddData(bucket.team, desiredLevel, bucket.queueTypeId);
+                std::string addData = bucket.isArena
+                    ? RTG::MakeArenaAddData(bucket.team, desiredLevel, bucket.queueTypeId, bucket.owner)
+                    : RTG::MakeBgAddData(bucket.team, desiredLevel, bucket.queueTypeId);
                 for (uint32 pass = 0; pass < 2; ++pass)
                 {
                     bool forceArenaHealer = (pass == 0) && bucket.isArena &&
@@ -6080,11 +6226,11 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                 bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase));
                         if (bucket.isArena)
                         {
-                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ASSIGN] helper={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
-                                charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase,
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][ASSIGN] helper={} owner={} queue={} bracket={} team={} level={} phase={} needRemaining={}",
+                                charInfo.guid, bucket.owner, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.phase,
                                 bucket.need > bucket.assignedExtra ? (bucket.need - bucket.assignedExtra) : 0u));
-                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][FORM] helper={} queue={} bracket={} team={} level={} teamSize={}",
-                                charInfo.guid, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.teamSize));
+                            RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][FORM] helper={} owner={} queue={} bracket={} team={} level={} teamSize={}",
+                                charInfo.guid, bucket.owner, bucket.queueTypeId, uint32(bucket.bracketId), bucket.team, desiredLevel, bucket.teamSize));
                         }
                         else
                         {
