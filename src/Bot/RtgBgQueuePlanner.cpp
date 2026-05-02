@@ -3,6 +3,9 @@
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "DatabaseEnv.h"
+#include "Group.h"
+#include "LFGMgr.h"
+#include "Map.h"
 #include "Player.h"
 #include "PlayerbotAIConfig.h"
 #include "RandomPlayerbotMgr.h"
@@ -190,6 +193,89 @@ namespace
     {
         return 3u;
     }
+
+    static bool RTG_PlayerHasCompetingPvpQueue(Player* player, BattlegroundQueueTypeId arenaQueueTypeId)
+    {
+        if (!player)
+            return false;
+
+        for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+        {
+            BattlegroundQueueTypeId queuedType = player->GetBattlegroundQueueTypeId(queueSlot);
+            if (queuedType <= BATTLEGROUND_QUEUE_NONE || queuedType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+                continue;
+
+            if (queuedType != arenaQueueTypeId)
+                return true;
+        }
+
+        return false;
+    }
+
+    static bool RTG_PlayerHasLfgCommitment(Player* player)
+    {
+        if (!player)
+            return false;
+
+        Group* group = player->GetGroup();
+        if (group)
+        {
+            lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+            if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+                return true;
+        }
+
+        return sLFGMgr->GetState(player->GetGUID()) != lfg::LFG_STATE_NONE;
+    }
+
+    static bool RTG_ShouldDeferArenaOwner(Player* owner, BattlegroundQueueTypeId arenaQueueTypeId, char const*& reason)
+    {
+        reason = "none";
+        if (!owner || !owner->IsInWorld())
+        {
+            reason = "owner_offline";
+            return true;
+        }
+
+        if (owner->InArena())
+        {
+            reason = "owner_in_arena";
+            return true;
+        }
+
+        if (owner->InBattleground())
+        {
+            reason = "owner_in_battleground";
+            return true;
+        }
+
+        if (owner->IsInvitedForBattlegroundInstance())
+        {
+            reason = "owner_bg_invited";
+            return true;
+        }
+
+        Map* map = owner->GetMap();
+        if (map && (map->IsDungeon() || map->IsRaid()))
+        {
+            reason = "owner_in_dungeon";
+            return true;
+        }
+
+        if (RTG_PlayerHasLfgCommitment(owner))
+        {
+            reason = "owner_lfg_active";
+            return true;
+        }
+
+        if (RTG_PlayerHasCompetingPvpQueue(owner, arenaQueueTypeId))
+        {
+            reason = "owner_competing_pvp_queue";
+            return true;
+        }
+
+        return false;
+    }
 }
 
 namespace RTG
@@ -234,6 +320,18 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(liveTemplate->GetMapId(), player->GetLevel());
             if (!pvpDiff)
                 continue;
+
+            if (RTG_NormalizeArenaTeamSize(liveQueueType))
+            {
+                char const* deferReason = nullptr;
+                if (RTG_ShouldDeferArenaOwner(player, liveQueueType, deferReason))
+                {
+                    RTG_WorldLog("[RTG][ARENA][OWNER_DEFER] queue={} bracket={} owner={} player={} reason={} source=planner_live_scan",
+                        uint32(liveQueueType), uint32(pvpDiff->GetBracketId()), player->GetGUID().GetCounter(),
+                        player->GetGUID().GetCounter(), deferReason ? deferReason : "unknown");
+                    continue;
+                }
+            }
 
             auto &live = liveRealDemand[std::make_pair(uint32(liveQueueType), uint32(pvpDiff->GetBracketId()))];
             if (player->GetTeamId() == TEAM_ALLIANCE)

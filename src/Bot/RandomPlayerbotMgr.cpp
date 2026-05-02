@@ -648,6 +648,89 @@ namespace
         return sLFGMgr->GetState(queueGuid) == lfg::LFG_STATE_NONE;
     }
 
+    static bool RTG_PlayerHasCompetingPvpQueue(Player* player, BattlegroundQueueTypeId arenaQueueTypeId)
+    {
+        if (!player)
+            return false;
+
+        for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+        {
+            BattlegroundQueueTypeId queuedType = player->GetBattlegroundQueueTypeId(queueSlot);
+            if (queuedType <= BATTLEGROUND_QUEUE_NONE || queuedType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+                continue;
+
+            if (queuedType != arenaQueueTypeId)
+                return true;
+        }
+
+        return false;
+    }
+
+    static bool RTG_PlayerHasLfgCommitment(Player* player)
+    {
+        if (!player)
+            return false;
+
+        Group* group = player->GetGroup();
+        if (group)
+        {
+            lfg::LfgState groupState = sLFGMgr->GetState(group->GetGUID());
+            if (group->isLFGGroup() || groupState != lfg::LFG_STATE_NONE)
+                return true;
+        }
+
+        return sLFGMgr->GetState(player->GetGUID()) != lfg::LFG_STATE_NONE;
+    }
+
+    static bool RTG_ShouldDeferArenaOwner(Player* owner, BattlegroundQueueTypeId arenaQueueTypeId, char const*& reason)
+    {
+        reason = "none";
+        if (!owner || !owner->IsInWorld())
+        {
+            reason = "owner_offline";
+            return true;
+        }
+
+        if (owner->InArena())
+        {
+            reason = "owner_in_arena";
+            return true;
+        }
+
+        if (owner->InBattleground())
+        {
+            reason = "owner_in_battleground";
+            return true;
+        }
+
+        if (owner->IsInvitedForBattlegroundInstance())
+        {
+            reason = "owner_bg_invited";
+            return true;
+        }
+
+        Map* map = owner->GetMap();
+        if (map && (map->IsDungeon() || map->IsRaid()))
+        {
+            reason = "owner_in_dungeon";
+            return true;
+        }
+
+        if (RTG_PlayerHasLfgCommitment(owner))
+        {
+            reason = "owner_lfg_active";
+            return true;
+        }
+
+        if (RTG_PlayerHasCompetingPvpQueue(owner, arenaQueueTypeId))
+        {
+            reason = "owner_competing_pvp_queue";
+            return true;
+        }
+
+        return false;
+    }
+
     static uint32 RTG_StrictPrimaryRoleForClassSpecTab(uint8 cls, uint8 specTab)
     {
         uint32 roleMask = RTG::RoleMaskForClassSpecTab(cls, specTab);
@@ -733,6 +816,27 @@ namespace
         if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
             bot->IsInvitedForBattlegroundInstance())
             return true;
+
+        if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)))
+        {
+            uint32 team = 0;
+            uint32 level = 0;
+            uint32 queueType = 0;
+            uint32 owner = 0;
+            std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
+            if (RTG::ParseBgAddData(addData, team, level, queueType, &owner) && owner)
+            {
+                Player* ownerPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(owner));
+                char const* deferReason = nullptr;
+                if (RTG_ShouldDeferArenaOwner(ownerPlayer, BattlegroundQueueTypeId(desiredQueueType), deferReason))
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][OWNER_DEFER] helper={} owner={} queue={} reason={} source=dispatch",
+                        bot->GetGUID().GetCounter(), owner, desiredQueueType, deferReason ? deferReason : "unknown"));
+                    sRandomPlayerbotMgr.RTG_RequestQueueHelperLogout(bot->GetGUID(), "rtg_arena_owner_deferred", true);
+                    return false;
+                }
+            }
+        }
 
         PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
         if (!botAI)
@@ -5431,6 +5535,35 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     return false;
                 }
 
+                char const* participantDeferReason = nullptr;
+                if (RTG_ShouldDeferArenaOwner(player, queueTypeId, participantDeferReason))
+                {
+                    LOG_INFO("playerbots",
+                        "[RTG][ARENA][OWNER_DEFER] queue={} bracket={} owner={} player={} reason={} source={}",
+                        queueId, bracket, owner, playerId, participantDeferReason ? participantDeferReason : "unknown",
+                        source ? source : "unknown");
+                    return false;
+                }
+
+                Player* ownerPlayer = ObjectAccessor::FindConnectedPlayer(ownerGuid);
+                char const* deferReason = nullptr;
+                if (!ownerPlayer && owner != playerId)
+                {
+                    deferReason = "owner_offline";
+                    LOG_INFO("playerbots",
+                        "[RTG][ARENA][OWNER_DEFER] queue={} bracket={} owner={} player={} reason={} source={}",
+                        queueId, bracket, owner, playerId, deferReason, source ? source : "unknown");
+                    return false;
+                }
+
+                if (ownerPlayer && ownerPlayer != player && RTG_ShouldDeferArenaOwner(ownerPlayer, queueTypeId, deferReason))
+                {
+                    LOG_INFO("playerbots",
+                        "[RTG][ARENA][OWNER_DEFER] queue={} bracket={} owner={} player={} reason={} source={}",
+                        queueId, bracket, owner, playerId, deferReason ? deferReason : "unknown", source ? source : "unknown");
+                    return false;
+                }
+
                 auto seenKey = std::make_tuple(queueId, bracket, owner, playerId);
                 if (!arenaOwnerSeedSeen.insert(seenKey).second)
                     return false;
@@ -5529,18 +5662,19 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (player->GetLevel() == RTG_GetPreferredPvpQueueLevel())
                         preferredPvpQueueLevelActive = true;
 
+                    bool isArenaQueue = RTG_IsArenaQueueType(queueTypeId);
+                    if (isArenaQueue && !recordArenaOwnerSeed(player, queueTypeId, pvpDiff->GetBracketId(), false, "primary_scan"))
+                        continue;
+
                     auto bgKey = std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetLevel()));
                     ++bgQueueTotals[bgKey];
-                    if (RTG_IsArenaQueueType(queueTypeId) && RTG_GetStrictPrimaryRoleForBot(player) == lfg::PLAYER_ROLE_HEALER)
+                    if (isArenaQueue && RTG_GetStrictPrimaryRoleForBot(player) == lfg::PLAYER_ROLE_HEALER)
                         ++bgRealHealerCounts[std::make_tuple(static_cast<uint32>(queueTypeId), static_cast<uint32>(player->GetTeamId()), static_cast<uint32>(player->GetLevel()))];
                     bgBrackets[bgKey] = pvpDiff->GetBracketId();
-                    bgTeamSizes[bgKey] = RTG_IsArenaQueueType(queueTypeId)
+                    bgTeamSizes[bgKey] = isArenaQueue
                         ? RTG_NormalizeArenaTeamSizeForQueue(queueTypeId)
                         : bgTemplate->GetMaxPlayersPerTeam();
                     bgAdaptiveLevels[std::make_pair(static_cast<uint32>(queueTypeId), static_cast<uint32>(pvpDiff->GetBracketId()))].push_back(static_cast<uint32>(player->GetLevel()));
-
-                    if (RTG_IsArenaQueueType(queueTypeId))
-                        recordArenaOwnerSeed(player, queueTypeId, pvpDiff->GetBracketId(), false, "primary_scan");
                 }
             }
 
@@ -6381,6 +6515,20 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     bucket.need = 0;
                     return false;
                 }
+                if (bucket.isArena)
+                {
+                    Player* ownerPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(bucket.owner));
+                    char const* deferReason = nullptr;
+                    if (RTG_ShouldDeferArenaOwner(ownerPlayer, BattlegroundQueueTypeId(bucket.queueTypeId), deferReason))
+                    {
+                        LOG_INFO("playerbots",
+                            "[RTG][ARENA][OWNER_DEFER] queue={} bracket={} owner={} team={} need={} reason={} source=acquire",
+                            bucket.queueTypeId, uint32(bucket.bracketId), bucket.owner, bucket.team, bucket.need,
+                            deferReason ? deferReason : "unknown");
+                        bucket.need = 0;
+                        return false;
+                    }
+                }
 
                 uint32 desiredLevel = RTG_NormalizeDesiredPvpQueueLevel(bucket.level);
                 std::string addData = bucket.isArena
@@ -6993,6 +7141,19 @@ void RandomPlayerbotMgr::CheckBgQueue()
             bool isArena = RTG_IsArenaQueueType(queueTypeId);
             if (isArena)
             {
+                if (!player->InArena())
+                {
+                    char const* deferReason = nullptr;
+                    if (RTG_ShouldDeferArenaOwner(player, queueTypeId, deferReason))
+                    {
+                        LOG_INFO("playerbots",
+                            "[RTG][ARENA][OWNER_DEFER] queue={} bracket={} owner={} player={} reason={} source=bg_data_scan",
+                            uint32(queueTypeId), uint32(bracketId), player->GetGUID().GetCounter(),
+                            player->GetGUID().GetCounter(), deferReason ? deferReason : "unknown");
+                        continue;
+                    }
+                }
+
                 bool isRated = false;
                 BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
                 GroupQueueInfo ginfo;
