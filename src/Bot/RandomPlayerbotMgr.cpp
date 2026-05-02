@@ -5554,6 +5554,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             {
                 uint32 queueTypeId = 0;
                 uint32 owner = 0;
+                uint32 team = 0;
                 uint32 bracketId = 0;
                 uint32 teamSize = 0;
                 std::vector<uint32> realLevels;
@@ -5630,6 +5631,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 RtgArenaOwnerSeed& seed = arenaOwnerSeeds[ownerKey];
                 seed.queueTypeId = queueId;
                 seed.owner = owner;
+                seed.team = uint32(player->GetTeamId());
                 seed.bracketId = bracket;
                 seed.teamSize = RTG_NormalizeArenaTeamSizeForQueue(queueTypeId);
                 seed.realLevels.push_back(level);
@@ -5949,7 +5951,9 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         for (auto const& ownerPair : arenaSeedsForBracket)
                         {
                             RtgArenaOwnerSeed const& seed = ownerPair.second;
-                            uint32 assignedTeam = findExistingArenaOwnerTeam(seed.owner);
+                            uint32 assignedTeam = (seed.team == uint32(TEAM_ALLIANCE) || seed.team == uint32(TEAM_HORDE))
+                                ? seed.team
+                                : findExistingArenaOwnerTeam(seed.owner);
 
                             if (assignedTeam == std::numeric_limits<uint32>::max())
                             {
@@ -7165,7 +7169,8 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
         bool inQueue = player->InBattlegroundQueue();
         bool inBg = player->InBattleground();
-        if (!inQueue && !inBg)
+        bool invited = player->IsInvitedForBattlegroundInstance();
+        if (!inQueue && !inBg && !invited)
             continue;
 
         anyRealQueued = true;
@@ -7220,9 +7225,21 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 arenaInfo.maxLevel = maxLevel;
 
                 if (isRated)
+                {
                     ++arenaInfo.ratedArenaPlayerCount;
+                    if (teamId == TEAM_ALLIANCE)
+                        ++arenaInfo.ratedArenaAlliancePlayerCount;
+                    else
+                        ++arenaInfo.ratedArenaHordePlayerCount;
+                }
                 else
+                {
                     ++arenaInfo.skirmishArenaPlayerCount;
+                    if (teamId == TEAM_ALLIANCE)
+                        ++arenaInfo.skirmishArenaAlliancePlayerCount;
+                    else
+                        ++arenaInfo.skirmishArenaHordePlayerCount;
+                }
 
                 if (!player->IsInvitedForBattlegroundInstance() && !player->InBattleground())
                 {
@@ -7272,7 +7289,8 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
         bool inQueue = bot->InBattlegroundQueue();
         bool inBg = bot->InBattleground();
-        if (!inQueue && !inBg)
+        bool invited = bot->IsInvitedForBattlegroundInstance();
+        if (!inQueue && !inBg && !invited)
             continue;
 
         Battleground* bg = bot->GetBattleground();
@@ -7326,9 +7344,21 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 if (!arenaClosing)
                 {
                     if (isRated)
+                    {
                         ++arenaInfo.ratedArenaBotCount;
+                        if (teamId == TEAM_ALLIANCE)
+                            ++arenaInfo.ratedArenaAllianceBotCount;
+                        else
+                            ++arenaInfo.ratedArenaHordeBotCount;
+                    }
                     else
+                    {
                         ++arenaInfo.skirmishArenaBotCount;
+                        if (teamId == TEAM_ALLIANCE)
+                            ++arenaInfo.skirmishArenaAllianceBotCount;
+                        else
+                            ++arenaInfo.skirmishArenaHordeBotCount;
+                    }
                 }
 
                 if (bg)
