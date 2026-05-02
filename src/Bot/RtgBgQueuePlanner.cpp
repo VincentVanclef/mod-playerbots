@@ -291,7 +291,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
     std::set<uint64> seenKeys;
     static std::set<uint64> sPrevSeenKeys;
 
-    std::map<std::pair<uint32, uint32>, RTG_LiveBgDemand> liveRealDemand;
+    std::map<std::pair<uint32, uint32>, RTG_LiveBgDemand> liveBgRealDemand;
+    std::map<std::pair<uint32, uint32>, RTG_LiveBgDemand> liveArenaRealDemand;
     for (Player* player : mgr.GetPlayers())
     {
         if (!player || !player->IsInWorld() || mgr.IsRandomBot(player))
@@ -321,7 +322,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
             if (!pvpDiff)
                 continue;
 
-            if (RTG_NormalizeArenaTeamSize(liveQueueType))
+            bool isArenaQueue = RTG_NormalizeArenaTeamSize(liveQueueType) != 0u;
+            if (isArenaQueue)
             {
                 char const* deferReason = nullptr;
                 if (RTG_ShouldDeferArenaOwner(player, liveQueueType, deferReason))
@@ -333,7 +335,9 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 }
             }
 
-            auto &live = liveRealDemand[std::make_pair(uint32(liveQueueType), uint32(pvpDiff->GetBracketId()))];
+            auto& live = isArenaQueue
+                ? liveArenaRealDemand[std::make_pair(uint32(liveQueueType), uint32(pvpDiff->GetBracketId()))]
+                : liveBgRealDemand[std::make_pair(uint32(liveQueueType), uint32(pvpDiff->GetBracketId()))];
             if (player->GetTeamId() == TEAM_ALLIANCE)
                 ++live.queueAlliance;
             else
@@ -362,8 +366,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 botQueued = isRated ? bgInfo.ratedArenaBotCount : bgInfo.skirmishArenaBotCount;
                 uint32 realQueuedAlliance = 0;
                 uint32 realQueuedHorde = 0;
-                auto liveItr = liveRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
-                if (liveItr != liveRealDemand.end())
+                auto liveItr = liveArenaRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
+                if (liveItr != liveArenaRealDemand.end())
                 {
                     realQueuedAlliance = liveItr->second.queueAlliance;
                     realQueuedHorde = liveItr->second.queueHorde;
@@ -482,8 +486,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
 
             uint32 queueRealAlliance = bgInfo.bgQueueAlliancePlayerCount;
             uint32 queueRealHorde = bgInfo.bgQueueHordePlayerCount;
-            auto liveItr = liveRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
-            if (liveItr != liveRealDemand.end())
+            auto liveItr = liveBgRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
+            if (liveItr != liveBgRealDemand.end())
             {
                 queueRealAlliance = liveItr->second.queueAlliance;
                 queueRealHorde = liveItr->second.queueHorde;
@@ -547,9 +551,8 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 phase = matureTarget > minPerTeam ? 4u : 3u;
                 allianceTarget = matureTarget;
                 hordeTarget = matureTarget;
-                // Once a battleground is already live, count committed queue-side helpers
-                // toward the target so we do not keep acquiring more bots for a slot that
-                // is already reserved but has not transitioned in-world yet.
+                // Live refill can wait on queued helpers, but finish-fill must use active
+                // bodies only. Otherwise stale queue slots suppress the last missing side.
                 uint32 committedAlliance = phase >= 4u
                     ? std::min(allianceTarget, activeCurrentAlliance)
                     : std::min(allianceTarget, std::max(activeCurrentAlliance, queueCurrentAlliance));

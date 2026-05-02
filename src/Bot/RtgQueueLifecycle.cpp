@@ -22,6 +22,39 @@ static bool RTG_IsArenaQueueType(BattlegroundQueueTypeId queueTypeId)
     return uint32(queueTypeId) == 9u;
 }
 
+static bool RTG_HasQueueSlotForType(Player* bot, BattlegroundQueueTypeId queueTypeId)
+{
+    if (!bot || queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+        return false;
+
+    for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+    {
+        if (bot->GetBattlegroundQueueTypeId(queueSlot) == queueTypeId)
+            return true;
+    }
+
+    return false;
+}
+
+static bool RTG_IsActiveInQueueType(Player* bot, BattlegroundQueueTypeId queueTypeId)
+{
+    if (!bot || queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+        return false;
+
+    BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
+    if (bgTypeId == BATTLEGROUND_TYPE_NONE)
+        return false;
+
+    if ((bot->InBattleground() || bot->InArena()) && bot->GetBattlegroundTypeId() == bgTypeId)
+        return true;
+
+    if (!RTG_IsArenaQueueType(queueTypeId))
+        if (Battleground* bg = bot->GetBattleground())
+            return bg->GetBgTypeID() == bgTypeId;
+
+    return false;
+}
+
 static std::string RTG_MakeDemandKey(BattlegroundQueueTypeId queueTypeId, uint32 queueType, uint32 bracketId)
 {
     return RTG_IsArenaQueueType(queueTypeId) ?
@@ -74,7 +107,7 @@ static bool RTG_IsOrphanQueuedBgHelper(Player* bot, RtgHelperLedgerEntry const& 
     if (!bot)
         return false;
 
-    if (!(bot->InBattlegroundQueue() || bot->InBattlegroundQueueForBattlegroundQueueType(entry.target.queueTypeId)))
+    if (!RTG_HasQueueSlotForType(bot, entry.target.queueTypeId))
         return false;
 
     if (bot->InBattleground() || bot->InArena() || (bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena()))
@@ -104,14 +137,17 @@ static bool RTG_HasActualPvpLifecycle(Player* bot, BattlegroundQueueTypeId queue
     if (!bot)
         return false;
 
-    if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
+    if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+        return bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
+
+    if (RTG_HasQueueSlotForType(bot, queueTypeId))
         return true;
 
-    if (queueTypeId > BATTLEGROUND_QUEUE_NONE && queueTypeId < MAX_BATTLEGROUND_QUEUE_TYPES)
-    {
-        if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
-            return true;
-    }
+    if (bot->IsInvitedForBattlegroundInstance() && RTG_HasQueueSlotForType(bot, queueTypeId))
+        return true;
+
+    if (RTG_IsActiveInQueueType(bot, queueTypeId))
+        return true;
 
     return false;
 }
@@ -176,14 +212,14 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
                            entry.target.queueTypeId == BattlegroundQueueTypeId(queueType) &&
                            entry.target.bracketId == pvpDiff->GetBracketId() &&
                            entry.state == RtgHelperState::InBattleground &&
-                           (bot->InBattleground() || bot->InArena());
+                           RTG_IsActiveInQueueType(bot, queueTypeId);
                 }
             }
         }
 
         return entry.ownerType == RtgHelperOwnerType::QueueDemand &&
                entry.state == RtgHelperState::InBattleground &&
-               (bot->InBattleground() || bot->InArena());
+               RTG_IsActiveInQueueType(bot, entry.target.queueTypeId);
     }
 
     if (!parsedBgAddData && (entry.pendingQueueJoin || entry.pendingBgJoin))
@@ -250,11 +286,12 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
         entry->purpose = DetermineBgHelperPurpose(*bgInfo, bot->GetTeamId());
 
     uint32 nowMs = RTG::RTG_GetNowMs32();
-    bool invitedState = bot->IsInvitedForBattlegroundInstance();
-    bool activeInstanceState = bot->InBattleground() || bot->InArena();
-    bool queuedState = bot->InBattlegroundQueue() || bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId);
+    bool validQueueTarget = queueTypeId > BATTLEGROUND_QUEUE_NONE && queueTypeId < MAX_BATTLEGROUND_QUEUE_TYPES;
+    bool queuedState = validQueueTarget ? RTG_HasQueueSlotForType(bot, queueTypeId) : bot->InBattlegroundQueue();
+    bool invitedState = bot->IsInvitedForBattlegroundInstance() && (!validQueueTarget || queuedState);
+    bool activeInstanceState = validQueueTarget ? RTG_IsActiveInQueueType(bot, queueTypeId) : (bot->InBattleground() || bot->InArena());
     bool mapOnlyResidue = !invitedState && !activeInstanceState && !queuedState &&
-                          bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena();
+                          !validQueueTarget && bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena();
 
     if (invitedState)
     {

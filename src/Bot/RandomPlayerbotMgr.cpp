@@ -750,6 +750,8 @@ namespace
     }
 
     static bool RTG_PvpClaimAllowsQueue(uint32 botGuid, uint32 desiredQueueType);
+    static bool RTG_HasQueueSlotForType(Player* player, BattlegroundQueueTypeId queueTypeId);
+    static bool RTG_IsActiveInDesiredQueueType(Player* player, BattlegroundQueueTypeId queueTypeId);
 
     static void RTG_RecordArenaJoinAttemptResult(Player* bot, uint32 desiredQueueType, bool queued, char const* reason)
     {
@@ -758,11 +760,8 @@ namespace
 
         ObjectGuid::LowType botId = bot->GetGUID().GetCounter();
         std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
-        bool activeState =
-            bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
-            bot->IsInvitedForBattlegroundInstance() ||
-            bot->InBattleground() ||
-            bot->InArena();
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+        bool activeState = RTG_HasQueueSlotForType(bot, queueTypeId) || RTG_IsActiveInDesiredQueueType(bot, queueTypeId);
 
         if (queued || activeState)
         {
@@ -813,11 +812,23 @@ namespace
             return false;
         }
 
-        if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
-            bot->IsInvitedForBattlegroundInstance())
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+        if (RTG_HasQueueSlotForType(bot, queueTypeId) || RTG_IsActiveInDesiredQueueType(bot, queueTypeId))
             return true;
 
-        if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)))
+        if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
+        {
+            RTG_RuntimeBreadcrumb(fmt::format(
+                "[RTG][QUEUE][DISPATCH_BLOCK] helper={} queue={} reason={} block=cross_lane_pvp_state inQueue={} invited={} inBg={} inArena={}",
+                bot->GetGUID().GetCounter(), desiredQueueType, reason ? reason : "rtg",
+                bot->InBattlegroundQueue() ? 1u : 0u,
+                bot->IsInvitedForBattlegroundInstance() ? 1u : 0u,
+                bot->InBattleground() ? 1u : 0u,
+                bot->InArena() ? 1u : 0u));
+            return false;
+        }
+
+        if (RTG_IsArenaQueueType(queueTypeId))
         {
             uint32 team = 0;
             uint32 level = 0;
@@ -854,8 +865,8 @@ namespace
                 bot->GetGUID().GetCounter(), desiredQueueType, queued ? 1 : 0, reason ? reason : "rtg"));
         }
 
-        char const* laneTag = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) ? "arena" : "bg";
-        char const* proofLane = RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) ? "ARENA" : "BG";
+        char const* laneTag = RTG_IsArenaQueueType(queueTypeId) ? "arena" : "bg";
+        char const* proofLane = RTG_IsArenaQueueType(queueTypeId) ? "ARENA" : "BG";
         RTG_LogLaneProof(proofLane, bot->GetGUID().GetCounter(), "dispatch",
             fmt::format("queue={} result={} reason={}", desiredQueueType, queued ? 1 : 0, reason ? reason : "rtg"));
 
@@ -1847,6 +1858,39 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 5u;
                uint64(guid.GetCounter());
     }
 
+    static bool RTG_HasQueueSlotForType(Player* player, BattlegroundQueueTypeId queueTypeId)
+    {
+        if (!player || queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return false;
+
+        for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
+        {
+            if (player->GetBattlegroundQueueTypeId(queueSlot) == queueTypeId)
+                return true;
+        }
+
+        return false;
+    }
+
+    static bool RTG_IsActiveInDesiredQueueType(Player* player, BattlegroundQueueTypeId queueTypeId)
+    {
+        if (!player || queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return false;
+
+        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
+        if (desiredBgType == BATTLEGROUND_TYPE_NONE)
+            return false;
+
+        if ((player->InBattleground() || player->InArena()) && player->GetBattlegroundTypeId() == desiredBgType)
+            return true;
+
+        if (!RTG_IsArenaQueueType(queueTypeId))
+            if (Battleground* bg = player->GetBattleground())
+                return bg->GetBgTypeID() == desiredBgType;
+
+        return false;
+    }
+
     static void RTG_RecordBgTeamCounts(BattlegroundInfo& bgInfo, TeamId teamId, bool isBot, bool queueState, bool activeState)
     {
         if (queueState)
@@ -1891,37 +1935,30 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 5u;
         if (!bot)
             return false;
 
+        if (desiredQueueType <= BATTLEGROUND_QUEUE_NONE || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
+
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
         if (desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES &&
-            RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
+            RTG_IsArenaQueueType(queueTypeId) &&
             (RTG::IsArenaTeardownQuarantined(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) ||
              RTG::GetArenaClosureState(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) == RTG::ArenaClosureState::Pending))
             return false;
 
-        if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
+        if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
             return true;
 
-        if (Group* group = bot->GetGroup())
-        {
-            if (group->isBGGroup())
-            {
-                if (!RTG_IsDetachedBotOnlyBgGroup(bot))
+        if (bot->IsInvitedForBattlegroundInstance() && RTG_HasQueueSlotForType(bot, queueTypeId))
+            return true;
+
+        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
+        if (desiredBgType != BATTLEGROUND_TYPE_NONE && (bot->InBattleground() || bot->InArena()) && bot->GetBattlegroundTypeId() == desiredBgType)
+            return true;
+
+        if (!RTG_IsArenaQueueType(queueTypeId))
+            if (Battleground* bg = bot->GetBattleground())
+                if (bg->GetBgTypeID() == desiredBgType)
                     return true;
-            }
-        }
-
-        Map* map = bot->GetMap();
-        if (map && map->IsBattlegroundOrArena())
-            return true;
-
-        if (desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES)
-        {
-            if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)))
-                return true;
-
-            BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(desiredQueueType));
-            if (desiredBgType != BATTLEGROUND_TYPE_NONE && bot->InBattleground() && bot->GetBattlegroundTypeId() == desiredBgType)
-                return true;
-        }
 
         return false;
     }
@@ -1931,14 +1968,19 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 5u;
         if (!bot)
             return false;
 
-        if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance())
+        if (desiredQueueType <= BATTLEGROUND_QUEUE_NONE || desiredQueueType >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
+
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(desiredQueueType);
+        if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
             return true;
 
-        if (desiredQueueType > BATTLEGROUND_QUEUE_NONE && desiredQueueType < MAX_BATTLEGROUND_QUEUE_TYPES)
-        {
-            if (bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)))
-                return true;
-        }
+        if (bot->IsInvitedForBattlegroundInstance() && RTG_HasQueueSlotForType(bot, queueTypeId))
+            return true;
+
+        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
+        if (desiredBgType != BATTLEGROUND_TYPE_NONE && (bot->InBattleground() || bot->InArena()) && bot->GetBattlegroundTypeId() == desiredBgType)
+            return true;
 
         return false;
     }
@@ -1954,12 +1996,15 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 5u;
              RTG::GetArenaClosureState(sRandomPlayerbotMgr, bot->GetGUID().GetCounter()) == RTG::ArenaClosureState::Pending))
             return false;
 
-        if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId) || bot->IsInvitedForBattlegroundInstance())
+        if (bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
             return true;
 
         BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
         if (desiredBgType == BATTLEGROUND_TYPE_NONE)
             return false;
+
+        if (bot->IsInvitedForBattlegroundInstance() && RTG_HasQueueSlotForType(bot, queueTypeId))
+            return true;
 
         if ((bot->InBattleground() || bot->InArena()) && bot->GetBattlegroundTypeId() == desiredBgType)
             return true;
@@ -2449,7 +2494,7 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
         uint32 nowMs = RTG::RTG_GetNowMs32();
         if (transitionState && entry->updatedAtMs && nowMs > entry->updatedAtMs && (nowMs - entry->updatedAtMs) >= maxTransitionMs)
         {
-            if (!bot->InBattleground() && !bot->InArena() && !bot->InBattlegroundQueue() && !bot->IsInvitedForBattlegroundInstance())
+            if (!RTG_HasActualBgLifecycle(bot, uint32(entry->target.queueTypeId)))
             {
                 if (entry->pendingRetire)
                     ledger.MarkState(botId, RTG::RtgHelperState::Releasing, "transition watchdog preserving retire state");
@@ -2484,7 +2529,7 @@ void RandomPlayerbotMgr::RTG_RunQueueOwnershipAudit()
             if (RTG_IsManagedPvpAddData(addData) || bgLifecycleManaged || arenaLifecycleManaged)
                 continue;
 
-            bool hasQueueState = bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance();
+            bool hasQueueState = RTG_HasActualBgLifecycle(bot, uint32(entry->target.queueTypeId));
             RTG::RtgLifecycleResult drainCheck = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
             if (!hasQueueState && drainCheck.decision == RTG::RtgLifecycleDecision::Allow)
             {
@@ -3806,8 +3851,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 RTG::RtgQueueLedger::Instance().ClearRetireRequest(botId);
             }
 
-            bool inQueueState = bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) ||
-                                bot->InBattleground() || bot->InArena() || bot->IsInvitedForBattlegroundInstance();
+            bool inQueueState = desiredPresence || activeDesiredPresence;
             bool queueGrace = GetEventValue(botId, queueGraceKey) != 0;
             bool retireWhenSafe = GetEventValue(botId, retireWhenSafeKey) != 0;
             bool worldReturnPending = GetEventValue(botId, worldReturnSinceKey) != 0;
@@ -5782,6 +5826,28 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             SetEventValue(0, "rtg_preferred_pvp_queueing", preferredPvpQueueLevelActive ? 1u : 0u, preferredPvpQueueLevelActive ? 45u : 0u);
 
+            auto getPvpBucketTeamCount = [](BattlegroundInfo const& bgInfo, uint32 team, uint32 phase, bool isArena) -> uint32
+            {
+                if (isArena)
+                {
+                    if (team == TEAM_ALLIANCE)
+                        return bgInfo.ratedArenaAlliancePlayerCount + bgInfo.skirmishArenaAlliancePlayerCount +
+                               bgInfo.ratedArenaAllianceBotCount + bgInfo.skirmishArenaAllianceBotCount;
+
+                    return bgInfo.ratedArenaHordePlayerCount + bgInfo.skirmishArenaHordePlayerCount +
+                           bgInfo.ratedArenaHordeBotCount + bgInfo.skirmishArenaHordeBotCount;
+                }
+
+                uint32 queued = (team == TEAM_ALLIANCE)
+                    ? (bgInfo.bgQueueAlliancePlayerCount + bgInfo.bgQueueAllianceBotCount)
+                    : (bgInfo.bgQueueHordePlayerCount + bgInfo.bgQueueHordeBotCount);
+                uint32 active = (team == TEAM_ALLIANCE)
+                    ? (bgInfo.bgActiveAlliancePlayerCount + bgInfo.bgActiveAllianceBotCount)
+                    : (bgInfo.bgActiveHordePlayerCount + bgInfo.bgActiveHordeBotCount);
+
+                return phase >= 4u ? active : std::max(active, queued);
+            };
+
             for (uint32 botId : currentBots)
             {
                 if (!GetEventValue(botId, "add"))
@@ -5858,9 +5924,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.desiredHealerCount = (bucket.isArena && bucket.teamSize >= 3u) ? 1u : 0u;
 
                         BattlegroundInfo& bgInfo = BattlegroundData[desiredQueueType][bracketId];
-                        bucket.currentTeamCount = (dataTeam == TEAM_ALLIANCE)
-                            ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                            : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+                        bucket.currentTeamCount = getPvpBucketTeamCount(bgInfo, dataTeam, bucket.phase, bucket.isArena);
                         bucket.need = 0;
 
                         it = bgBuckets.emplace(key, bucket).first;
@@ -6055,9 +6119,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                 bucket.desiredHealerCount = (bucket.teamSize >= 3u) ? 1u : 0u;
 
                                 BattlegroundInfo& bgInfo = BattlegroundData[queueTypeId][bracketId];
-                                bucket.currentTeamCount = (teamId == TEAM_ALLIANCE)
-                                    ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                                    : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+                                bucket.currentTeamCount = getPvpBucketTeamCount(bgInfo, teamId, bucket.phase, bucket.isArena);
 
                                 ownerBuckets[seed.owner] = bucket;
                             }
@@ -6136,9 +6198,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         bucket.desiredHealerCount = (bucket.isArena && bucket.teamSize >= 3u) ? 1u : 0u;
 
                         BattlegroundInfo& bgInfo = BattlegroundData[queueTypeId][bracketId];
-                        bucket.currentTeamCount = (teamId == TEAM_ALLIANCE)
-                            ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                            : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+                        bucket.currentTeamCount = getPvpBucketTeamCount(bgInfo, teamId, bucket.phase, bucket.isArena);
 
                         adaptiveBgBuckets[std::make_tuple(queueTypeId, teamId, lc.first, 0u)] = bucket;
                     }
@@ -6216,9 +6276,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                 continue;
 
                             existing.phase = phase;
-                            existing.currentTeamCount = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+                            existing.currentTeamCount = getPvpBucketTeamCount(bgInfo, team, existing.phase, existing.isArena);
                             alreadyPlannedAdaptive = true;
                         }
 
@@ -6243,16 +6301,12 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             bucket.team = team;
                             bucket.level = level;
                             bucket.bracketId = bracketId;
-                            bucket.teamSize = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount + plannerNeed)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount + plannerNeed);
                             bucket.isArena = RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueTypeId));
+                            bucket.teamSize = getPvpBucketTeamCount(bgInfo, team, phase, bucket.isArena) + plannerNeed;
                             bucket.realQueued = (team == TEAM_ALLIANCE) ? bgInfo.bgQueueAlliancePlayerCount : bgInfo.bgQueueHordePlayerCount;
                             bucket.currentHealerCount = bgRealHealerCounts[std::make_tuple(queueTypeId, team, level)];
                             bucket.desiredHealerCount = (bucket.isArena && bucket.teamSize >= 3u) ? 1u : 0u;
-                            bucket.currentTeamCount = (team == TEAM_ALLIANCE)
-                                ? (bgInfo.bgAlliancePlayerCount + bgInfo.bgAllianceBotCount)
-                                : (bgInfo.bgHordePlayerCount + bgInfo.bgHordeBotCount);
+                            bucket.currentTeamCount = getPvpBucketTeamCount(bgInfo, team, phase, bucket.isArena);
                             bucket.phase = phase;
                             bucket.need = plannerNeed;
                             bgBuckets.emplace(key, bucket);
@@ -6264,7 +6318,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             for (auto& kv : bgBuckets)
             {
                 RtgBgBucket& bucket = kv.second;
-                if (bucket.phase >= 3u && bucket.queuedFresh)
+                if (bucket.phase == 3u && bucket.queuedFresh)
                     bucket.need = bucket.need > bucket.queuedFresh ? (bucket.need - bucket.queuedFresh) : 0u;
             }
             std::vector<RtgLfgBucket> orderedLfgBuckets;
@@ -6768,32 +6822,55 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                 {
                     added = false;
 
+                    auto trySharedPvp = [&](bool arenaFirst) -> bool
+                    {
+                        auto tryArena = [&]() -> bool
+                        {
+                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            {
+                                if (!bucket.isArena)
+                                    continue;
+                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                            return false;
+                        };
+
+                        auto tryBattleground = [&]() -> bool
+                        {
+                            for (RtgBgBucket& bucket : orderedBgBuckets)
+                            {
+                                if (bucket.isArena)
+                                    continue;
+                                if (suppressBgFinishFill && bucket.phase == 4)
+                                    continue;
+                                if (tryFillBgBucketOnce(bucket, sharedSurplus))
+                                    return true;
+                            }
+                            return false;
+                        };
+
+                        if (arenaFirst)
+                            return tryArena() || tryBattleground();
+
+                        return tryBattleground() || tryArena();
+                    };
+
                     auto trySharedArenaThenBg = [&]() -> bool
                     {
-                        for (RtgBgBucket& bucket : orderedBgBuckets)
-                        {
-                            if (!bucket.isArena)
-                                continue;
-                            if (tryFillBgBucketOnce(bucket, sharedSurplus))
-                                return true;
-                        }
-                        for (RtgBgBucket& bucket : orderedBgBuckets)
-                        {
-                            if (bucket.isArena)
-                                continue;
-                            if (suppressBgFinishFill && bucket.phase == 4)
-                                continue;
-                            if (tryFillBgBucketOnce(bucket, sharedSurplus))
-                                return true;
-                        }
-                        return false;
+                        return trySharedPvp(true);
+                    };
+
+                    auto trySharedBgThenArena = [&]() -> bool
+                    {
+                        return trySharedPvp(false);
                     };
 
                     auto tryLane = [&](bool preferBg) -> bool
                     {
                         if (preferBg)
                         {
-                            if (trySharedArenaThenBg())
+                            if (trySharedBgThenArena())
                                 return true;
                             for (RtgLfgBucket& bucket : orderedLfgBuckets)
                             {
@@ -7136,6 +7213,9 @@ void RandomPlayerbotMgr::CheckBgQueue()
             bgInfo.bgInstanceCount = instanceIds.size();
         }
 
+        if (!queueState && !activeState)
+            return;
+
         uint64 seenKey = RTG_MakeBgParticipantKey(uint32(queueTypeId), bracketId, guid, isBot);
         if (!rtgBgParticipantSeen.insert(seenKey).second)
             return;
@@ -7273,6 +7353,9 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
             bool queueState = player->InBattlegroundQueueForBattlegroundQueueType(queueTypeId);
             bool activeState = bg && bg->GetBgTypeID() == BattlegroundMgr::BGTemplateId(queueTypeId);
+            if (!queueState && !activeState)
+                continue;
+
             rtgRecordBgParticipant(player->GetGUID(), teamId, false, queueTypeId, bracketId, minLevel, maxLevel, queueState, activeState,
                                    activeState ? bg->GetInstanceID() : 0);
 
@@ -7386,6 +7469,9 @@ void RandomPlayerbotMgr::CheckBgQueue()
 
             bool queueState = bot->InBattlegroundQueueForBattlegroundQueueType(queueTypeId);
             bool activeState = bg && bg->GetBgTypeID() == BattlegroundMgr::BGTemplateId(queueTypeId);
+            if (!queueState && !activeState)
+                continue;
+
             rtgRecordBgParticipant(guid, teamId, true, queueTypeId, bracketId, minLevel, maxLevel, queueState, activeState,
                                    activeState ? bg->GetInstanceID() : 0);
         }
