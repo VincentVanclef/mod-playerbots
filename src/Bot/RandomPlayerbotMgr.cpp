@@ -1507,7 +1507,7 @@ static constexpr uint32 RTG_ARENA_TERMINAL_LOOP_VISIT_THRESHOLD = 3u;
 // dump a large logout burst into the same update window where other PvP lanes
 // are still filling or new arenas are forming.
 static constexpr uint32 RTG_BG_RETIRE_LOGOUTS_PER_TICK = 4u;
-static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
+static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 5u;
 
     static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
     {
@@ -1568,6 +1568,11 @@ static constexpr uint32 RTG_ARENA_RETIRE_LOGOUTS_PER_TICK = 2u;
     static char const* RTG_GetPvpRetireWhenSafeKey(bool isArenaManaged)
     {
         return isArenaManaged ? "rtg_arena_retire_when_safe" : "rtg_bg_retire_when_safe";
+    }
+
+    static char const* RTG_GetPvpLogoutQueuedKey(bool isArenaManaged)
+    {
+        return isArenaManaged ? "rtg_arena_logout_queued" : "rtg_bg_logout_queued";
     }
 
     static char const* RTG_GetPvpRetireReason(bool isArenaManaged, char const* suffix)
@@ -2239,6 +2244,7 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
     bool lfgManaged = RTG::HasPrefix(addData, "rtg_lfg:");
     bool arenaManaged = RTG::HasPrefix(addData, "rtg_arena:");
     char const* retireWhenSafeKey = RTG_GetPvpRetireWhenSafeKey(arenaManaged);
+    char const* logoutQueuedKey = RTG_GetPvpLogoutQueuedKey(arenaManaged);
     uint32 desiredQueueType = 0;
     uint32 desiredTeam = 0;
     uint32 desiredLevel = 0;
@@ -2300,6 +2306,8 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
 
     currentBots.remove(botId);
     RTG_PrepareBotForLogout(bot);
+    if (!lfgManaged && !addData.empty())
+        SetEventValue(botId, logoutQueuedKey, 1, 60, addData);
     SetEventValue(botId, "logout", 1, 60);
 
     if (RTG_QueueDebugEnabled())
@@ -2341,10 +2349,13 @@ void RandomPlayerbotMgr::RTG_ClearQueueHelperState(uint32 bot, bool clearLogout)
     SetEventValue(bot, "rtg_bg_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_bg_leave_requested", 0, 0);
     SetEventValue(bot, "rtg_bg_queue_retry", 0, 0);
+    SetEventValue(bot, "rtg_bg_logout_queued", 0, 0);
     SetEventValue(bot, "rtg_arena_retire_when_safe", 0, 0);
     SetEventValue(bot, "rtg_arena_world_return_since", 0, 0);
     SetEventValue(bot, "rtg_arena_leave_requested", 0, 0);
     SetEventValue(bot, "rtg_arena_queue_retry", 0, 0);
+    SetEventValue(bot, "rtg_arena_logout_queued", 0, 0);
+    SetEventValue(bot, "rtg_arena_map_return_wait", 0, 0);
     SetEventValue(bot, "rtg_arena_stale_instance_since", 0, 0);
     SetEventValue(bot, "rtg_arena_terminal_since", 0, 0);
     SetEventValue(bot, "rtg_arena_terminal_visits", 0, 0);
@@ -3707,6 +3718,35 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
         std::vector<ObjectGuid> rtgBgLogout;
         std::vector<ObjectGuid> rtgArenaIdleDrainLogout;
 
+        auto holdArenaMapLogout = [&](Player* helper, uint32 helperId, uint32 queueType,
+                                      char const* leaveRequestedKey, std::string const& helperAddData,
+                                      char const* reason) -> bool
+        {
+            if (!helper)
+                return false;
+
+            Map* helperMap = helper->GetMap();
+            if (!helperMap || !helperMap->IsBattlegroundOrArena())
+                return false;
+
+            uint32 nowTs = NowSeconds();
+            if (!GetEventValue(helperId, leaveRequestedKey))
+            {
+                RTG_RequestImmediateBgLeave(helper);
+                SetEventValue(helperId, leaveRequestedKey, nowTs, 15u, helperAddData);
+            }
+
+            if (!GetEventValue(helperId, "rtg_arena_map_return_wait"))
+            {
+                SetEventValue(helperId, "rtg_arena_map_return_wait", nowTs, 15u, helperAddData);
+                RTG_RuntimeBreadcrumb(fmt::format(
+                    "[RTG][ARENA][MAP_RETURN_HOLD] helper={} queue={} map={} reason={} waiting_for_world=1",
+                    helperId, queueType, helperMap->GetId(), reason ? reason : "arena_logout"));
+            }
+
+            return true;
+        };
+
         for (auto const& kv : playerBots)
         {
             ObjectGuid botGuid = kv.first;
@@ -3730,8 +3770,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             char const* worldReturnSinceKey = isArenaManaged ? "rtg_arena_world_return_since" : "rtg_bg_world_return_since";
             char const* dispatchSinceKey = isArenaManaged ? "rtg_arena_dispatch_since" : "rtg_bg_dispatch_since";
             char const* queueRetryKey = RTG_GetPvpQueueRetryKey(isArenaManaged);
+            char const* logoutQueuedKey = RTG_GetPvpLogoutQueuedKey(isArenaManaged);
             char const* laneTag = isArenaManaged ? "ARENA" : "BG";
             uint32 retireDelaySeconds = isArenaManaged ? RTG_ARENA_RETURN_WORLD_RETIRE_SECONDS : RTG_BG_RETURN_WORLD_RETIRE_SECONDS;
+
+            if (GetEventValue(botId, "logout") || GetEventValue(botId, logoutQueuedKey))
+                continue;
 
             bool bgHasRealDemand = false;
             uint32 plannerPhase = 0;
@@ -3875,6 +3919,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
 
                     if (terminalForce)
                     {
+                        if (holdArenaMapLogout(bot, botId, desiredQueueType, leaveRequestedKey, addData, "terminal_force_map_residue"))
+                            continue;
+
                         LOG_INFO("playerbots",
                             "[RTG][ARENA][TERMINAL_FORCE] helper={} queue={} reason=teardown_loop visits={} age={} worldReturn={} retireWhenSafe={} closureState={} state={}",
                             botId, desiredQueueType, terminalVisits, nowTs - terminalSince, worldReturnPending ? 1u : 0u,
@@ -3888,6 +3935,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                         SetEventValue(botId, worldReturnSinceKey, 0, 0);
                         SetEventValue(botId, retireWhenSafeKey, 1, 30u, addData);
                         SetEventValue(botId, "rtg_arena_terminal_force_logout", 1, 60u, addData);
+                        SetEventValue(botId, logoutQueuedKey, 1, 10u, addData);
                         SetEventValue(0, "rtg_arena_terminal_forced_cycle", GetEventValue(0, "rtg_arena_terminal_forced_cycle") + 1u, 60u);
                         rtgBgLogout.push_back(botGuid);
                         continue;
@@ -4016,7 +4064,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                             RTG_RuntimeBreadcrumb(fmt::format(
                                 "[RTG][{}][STALE_LEAVE] helper={} queue={} waited={} forcing_retire=1",
                                 laneTag, botId, desiredQueueType, nowTs - leaveRequestedAt));
-                            RTG_ClearQueueHelperState(botId);
+                            SetEventValue(botId, logoutQueuedKey, 1, isArenaManaged ? 10u : 5u, addData);
                             rtgBgLogout.push_back(botGuid);
                             continue;
                         }
@@ -4083,7 +4131,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     SetEventValue(botId, pendingKey, 0, 0);
                     SetEventValue(botId, queueGraceKey, 0, 0);
                     SetEventValue(botId, queueRetryKey, 0, 0);
-                    RTG_ClearQueueHelperState(botId);
+                    SetEventValue(botId, logoutQueuedKey, 1, 10u, addData);
                     rtgBgLogout.push_back(botGuid);
                     continue;
                 }
@@ -4095,7 +4143,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 RTG_RuntimeBreadcrumb(fmt::format(
                     "[RTG][{}][STALE_DISPATCH] helper={} queue={} waited={} forcing_retire=1",
                     laneTag, botId, desiredQueueType, nowTs - dispatchSince));
-                RTG_ClearQueueHelperState(botId);
+                SetEventValue(botId, logoutQueuedKey, 1, isArenaManaged ? 10u : 5u, addData);
                 rtgBgLogout.push_back(botGuid);
                 continue;
             }
@@ -4135,8 +4183,12 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     continue;
 
                 RTG_LeaveBotOnlyGroup(bot);
+                if (isArenaManaged && holdArenaMapLogout(bot, botId, desiredQueueType, leaveRequestedKey, addData, "retire_map_residue"))
+                    continue;
+
                 SetEventValue(botId, leaveRequestedKey, 0, 0);
                 RTG_RuntimeBreadcrumb(fmt::format("[RTG][RETIRE] allowing helper={} queue={} noLongerNeeded={} retireWhenSafe={}", botId, desiredQueueType, noLongerNeeded ? 1 : 0, retireWhenSafe ? 1 : 0));
+                SetEventValue(botId, logoutQueuedKey, 1, isArenaManaged ? 10u : 5u, addData);
                 rtgBgLogout.push_back(botGuid);
                 continue;
             }
@@ -4210,7 +4262,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 continue;
 
             uint32 botId = botGuid.GetCounter();
-            if (GetEventValue(botId, "logout"))
+            if (GetEventValue(botId, "logout") || GetEventValue(botId, "rtg_arena_logout_queued"))
                 continue;
 
             std::string addData = GetEventData(botId, "add");
@@ -4235,6 +4287,8 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             if (bot->InArena() || bot->InBattleground() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance() ||
                 bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                 continue;
+            if (holdArenaMapLogout(bot, botId, desiredQueueType, "rtg_arena_leave_requested", addData, "dormant_drain_map_residue"))
+                continue;
 
             BattlegroundBracketId bracketId = BG_BRACKET_ID_FIRST;
             uint32 minLevel = desiredLevel;
@@ -4249,6 +4303,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             char const* drainReason = (closurePending || quarantine || draining) ? "rtg_arena_dormant_sweep" : "rtg_arena_idle_drain";
             RTG_RuntimeBreadcrumb(fmt::format("[RTG][ARENA][DRAIN] helper={} queue={} bracket={} reason={}",
                 botId, desiredQueueType, uint32(bracketId), drainReason));
+            SetEventValue(botId, "rtg_arena_logout_queued", 1, 10u, addData);
             rtgArenaIdleDrainLogout.push_back(botGuid);
             ++rtgArenaIdleDrainCount;
         }
@@ -4273,7 +4328,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     continue;
 
                 uint32 botId = botGuid.GetCounter();
-                if (GetEventValue(botId, "logout"))
+                if (GetEventValue(botId, "logout") || GetEventValue(botId, "rtg_arena_logout_queued"))
                     continue;
 
                 std::string addData = GetEventData(botId, "add");
@@ -4290,10 +4345,13 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 if (bot->InArena() || bot->InBattleground() || bot->InBattlegroundQueue() || bot->IsInvitedForBattlegroundInstance() ||
                     bot->IsInCombat() || bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
                     continue;
+                if (holdArenaMapLogout(bot, botId, 9u, "rtg_arena_leave_requested", addData, "final_force_map_residue"))
+                    continue;
 
                 LOG_INFO("playerbots",
                     "[RTG][ARENA][FINAL_FORCE] helper={} dormantAge={} reason=dormant_closure_flush closurePending={} quarantine={} draining={}",
                     botId, arenaDormantNow - arenaDormantSince, closurePending ? 1u : 0u, quarantine ? 1u : 0u, draining ? 1u : 0u);
+                SetEventValue(botId, "rtg_arena_logout_queued", 1, 10u, addData);
                 RTG_RequestQueueHelperLogout(botGuid, "rtg_arena_dormant_sweep", true);
             }
         }
