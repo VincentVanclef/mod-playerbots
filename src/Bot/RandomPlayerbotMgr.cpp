@@ -6010,7 +6010,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                 for (auto const& ownerBucketPair : ownerBuckets)
                                 {
                                     RtgBgBucket const& bucket = ownerBucketPair.second;
-                                    uint32 provisioned = bucket.currentOwnerCount + bucket.assignedExtra;
+                                    uint32 provisioned = bucket.currentOwnerCount + bucket.assignedExtra + bucket.need;
                                     uint32 desiredHelpers = bucket.teamSize > bucket.realQueued ? (bucket.teamSize - bucket.realQueued) : 0u;
                                     uint32 deficit = desiredHelpers > provisioned ? (desiredHelpers - provisioned) : 0u;
                                     if (!deficit)
@@ -6031,7 +6031,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                                     break;
 
                                 ++ownerBuckets[chosenOwner].need;
-                                ++ownerBuckets[chosenOwner].assignedExtra;
                                 --remainingNeed;
                             }
 
@@ -6284,16 +6283,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             bool bgHasPopNeed = false;
             bool bgHasStarterNeed = false;
-            bool arenaDemandActive = false;
             for (RtgBgBucket const& bucket : orderedBgBuckets)
             {
                 if (!bucket.need)
                     continue;
-                if (bucket.isArena)
-                    arenaDemandActive = true;
-                if (bucket.phase == 2)
+                if (!bucket.isArena && bucket.phase == 2)
                     bgHasPopNeed = true;
-                else if (bucket.phase == 1)
+                else if (!bucket.isArena && bucket.phase == 1)
                     bgHasStarterNeed = true;
             }
 
@@ -6651,8 +6647,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                             continue;
                         if (!arenaOnly && bucket.isArena)
                             continue;
-                        if (arenaDemandActive && !bucket.isArena && bucket.phase >= 3)
-                            continue;
                         if (suppressBgFinishFill && bucket.phase == 4)
                             continue;
                         if (tryFillBgBucketOnce(bucket, capacity))
@@ -6724,8 +6718,6 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         for (RtgBgBucket& bucket : orderedBgBuckets)
                         {
                             if (bucket.isArena)
-                                continue;
-                            if (arenaDemandActive && bucket.phase >= 3)
                                 continue;
                             if (suppressBgFinishFill && bucket.phase == 4)
                                 continue;
