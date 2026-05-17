@@ -172,6 +172,7 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
             sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_world_return_since") != 0 ||
             sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_leave_requested") != 0 ||
             sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_logout_queued") != 0 ||
+            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_terminal_force_logout") != 0 ||
             GetArenaClosureState(sRandomPlayerbotMgr, botId) == ArenaClosureState::Pending ||
             IsArenaTeardownQuarantined(sRandomPlayerbotMgr, botId);
 
@@ -317,6 +318,20 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
     bool activeInstanceState = validQueueTarget ? RTG_IsActiveInQueueType(bot, queueTypeId) : (bot->InBattleground() || bot->InArena());
     bool mapOnlyResidue = !invitedState && !activeInstanceState && !queuedState &&
                           !validQueueTarget && bot->GetMap() && bot->GetMap()->IsBattlegroundOrArena();
+    std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+    bool arenaDrainingQueueResidue =
+        queuedState &&
+        validQueueTarget &&
+        (IsArenaManagedAddData(addData) || RTG_IsArenaQueueType(queueTypeId)) &&
+        !invitedState &&
+        !activeInstanceState &&
+        (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_retire_when_safe") != 0 ||
+         sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_world_return_since") != 0 ||
+         sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_leave_requested") != 0 ||
+         sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_logout_queued") != 0 ||
+         sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_terminal_force_logout") != 0 ||
+         GetArenaClosureState(sRandomPlayerbotMgr, botId) == ArenaClosureState::Pending ||
+         IsArenaTeardownQuarantined(sRandomPlayerbotMgr, botId));
 
     if (invitedState)
     {
@@ -362,6 +377,14 @@ void SyncBgHelperState(Player* bot, uint32 desiredQueueType, BattlegroundBracket
         uint32 instanceId = bot->GetInstanceId();
         ledger.AssignBattlegroundOwnership(botId, instanceId, "map-only battleground transition");
         ledger.MarkState(botId, RtgHelperState::InBattleground, "map-only battleground transition");
+        return;
+    }
+
+    if (arenaDrainingQueueResidue)
+    {
+        ledger.ClearOwnership(botId, "arena draining queue residue");
+        ledger.MarkState(botId, RtgHelperState::Releasing, "arena draining queue residue");
+        ledger.Protect(botId, 0, "arena draining queue residue protection cleared");
         return;
     }
 

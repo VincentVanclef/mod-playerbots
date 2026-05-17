@@ -83,12 +83,13 @@ namespace
 
 	// --- RDF strict spec-role helper declarations ---
 	static bool RTG_IsPureDpsClass(uint8 cls);
-	static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
+    static bool RTG_RequiresOfflineSpecTruthForRdf(uint8 cls);
     static bool RTG_RecoverQueuedDungeonHelper(Player* bot, uint32 botId, char const* reason);
     static bool RTG_GroupHasRealPlayer(Group* group);
     static void RTG_LeaveBotOnlyGroup(Player* bot);
     static bool RTG_IsArenaQueueType(BattlegroundQueueTypeId queueTypeId);
     static bool RTG_IsLoginDispatchInflight(ObjectGuid::LowType botGuid);
+    static BattlegroundQueueTypeId RTG_FindBotQueueTypeForLeave(Player* bot);
 	
     static bool RTG_QueueDebugEnabled()
     {
@@ -1482,6 +1483,14 @@ namespace
         if (!botAI)
             return false;
 
+        uint32 queueType = botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Get();
+        if (!queueType)
+        {
+            BattlegroundQueueTypeId queueTypeId = RTG_FindBotQueueTypeForLeave(bot);
+            if (queueTypeId > BATTLEGROUND_QUEUE_NONE && queueTypeId < MAX_BATTLEGROUND_QUEUE_TYPES)
+                botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(uint32(queueTypeId));
+        }
+
         return botAI->DoSpecificAction("bg leave", Event(), true);
     }
 
@@ -2331,16 +2340,19 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
                 bool liveArenaLifecycle =
                     bot->InArena() ||
                     bot->InBattleground() ||
-                    bot->InBattlegroundQueue() ||
-                    bot->IsInvitedForBattlegroundInstance();
+                    bot->IsInvitedForBattlegroundInstance() ||
+                    (!arenaDraining && bot->InBattlegroundQueue());
 
                 if (arenaDraining && !liveArenaLifecycle)
                 {
+                    bool leaveIssued = bot->InBattlegroundQueue() ? RTG_RequestImmediateBgLeave(bot) : false;
                     RTG_RuntimeBreadcrumb(fmt::format(
-                        "[RTG][ARENA][LOGOUT_FORCE_RELEASE] helper={} queue={} reason={} lifecycleReason='{}' add='{}'",
-                        botId, desiredQueueType, reason ? reason : "rtg", lifecycle.reason, addData));
+                        "[RTG][ARENA][LOGOUT_FORCE_RELEASE] helper={} queue={} reason={} lifecycleReason='{}' inQueue={} queueLeaveIssued={} add='{}'",
+                        botId, desiredQueueType, reason ? reason : "rtg", lifecycle.reason,
+                        bot->InBattlegroundQueue() ? 1u : 0u, leaveIssued ? 1u : 0u, addData));
                     ledger.ClearOwnership(botId, "arena drained helper force released on logout");
                     ledger.ClearRetireRequest(botId);
+                    ledger.Protect(botId, 0, "arena drained helper protection cleared on logout");
                 }
                 else if (!actualPvpLifecycle && clearQueueState)
                 {
@@ -3910,6 +3922,46 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             Battleground* currentBg = bot->GetBattleground();
             Map* currentMap = bot->GetMap();
 
+            bool staleDrainingArenaQueue =
+                isArenaManaged &&
+                drainingLifecycle &&
+                bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
+                !bot->IsInvitedForBattlegroundInstance() &&
+                !bot->InArena() &&
+                !bot->InBattleground();
+            if (staleDrainingArenaQueue)
+            {
+                bool leaveIssued = RTG_RequestImmediateBgLeave(bot);
+                SetEventValue(botId, pendingKey, 0, 0);
+                SetEventValue(botId, queueGraceKey, 0, 0);
+                SetEventValue(botId, queueRetryKey, 0, 0);
+                if (!leaveRequested)
+                {
+                    SetEventValue(botId, leaveRequestedKey, nowTs, 15u, addData);
+                    leaveRequested = true;
+                    drainingLifecycle = true;
+                }
+
+                if (sPlayerbotAIConfig.rtgQueueOwnershipEnable)
+                {
+                    RTG::RtgQueueLedger& ledger = RTG::RtgQueueLedger::Instance();
+                    ledger.ClearOwnership(botId, "arena draining helper stale queue cancelled");
+                    ledger.ClearRetireRequest(botId);
+                    ledger.Protect(botId, 0, "arena draining helper stale queue protection cleared");
+                }
+
+                RTG_RuntimeBreadcrumb(fmt::format(
+                    "[RTG][ARENA][STALE_QUEUE_CANCEL] helper={} queue={} reason=draining_queue_after_return leaveIssued={} realDemand={} phase={} teamNeed={} worldReturn={} retireWhenSafe={} add='{}'",
+                    botId, desiredQueueType, leaveIssued ? 1u : 0u, bgHasRealDemand ? 1u : 0u,
+                    plannerPhase, plannerTeamNeed, worldReturnPending ? 1u : 0u, retireWhenSafe ? 1u : 0u, addData));
+
+                lifecycleOwned = false;
+                desiredPresence = false;
+                activeDesiredPresence = false;
+                inQueueState = false;
+                noLongerNeeded = true;
+            }
+
             if (isArenaManaged)
             {
                 arenaResult = RTG::ObserveArenaTeardown(*this, bot, desiredQueueType, desiredBracketId,
@@ -3917,6 +3969,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                     worldReturnPending, retireWhenSafe, leaveRequested, addData, RTG_ARENA_DORMANT_STALE_TIMEOUT_SECONDS);
 
                 bool arenaLiveMatchHold =
+                    !staleDrainingArenaQueue &&
                     arenaResult.instanceHasRealPlayers &&
                     (arenaResult.helperState == RTG::ArenaHelperState::Queued ||
                      arenaResult.helperState == RTG::ArenaHelperState::Invited ||
