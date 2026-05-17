@@ -82,6 +82,13 @@ namespace
         return std::string("rtg_arena_phase:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
     }
 
+    static std::string RTG_MakeArenaRecentActivityKey(uint32 queueType, uint32 bracketId)
+    {
+        return std::string("rtg_arena_recent_activity:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
+    }
+
+    static constexpr uint32 RTG_ARENA_DORMANT_CLEAR_GRACE_SECONDS = 10u;
+
     static std::string RTG_MakeBgActiveStartKey(uint32 queueType, uint32 bracketId)
     {
         return std::string("rtg_bg_active_start:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
@@ -380,17 +387,26 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;
                 uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
                 bool activeMatch = activeInstances > 0;
-                // Arena concurrency must saturate rather than stack. A live match and one
-                // queued real player should still target one concurrent match, not two.
-                // Otherwise solo/skirmish testing creates phantom overlap where the planner
-                // starts a fresh arena before the previous one has fully collapsed.
-                uint32 targetConcurrentMatches = std::min<uint32>(RTG_GetArenaConcurrentMatchCap(), std::max(activeInstances, realQueued));
+                uint32 targetConcurrentMatches = std::min<uint32>(RTG_GetArenaConcurrentMatchCap(), activeInstances + realQueued);
                 if (realQueued > 0)
                     targetConcurrentMatches = std::max<uint32>(1u, targetConcurrentMatches);
                 bool hardDormant = (realQueued == 0u && !activeMatch);
                 bool hasRealDemand = realQueued > 0 && activeInstances < targetConcurrentMatches;
                 bool hasQueueSeed = currentQueued > 0;
-                bool orphanQueueResidue = hardDormant ? (currentQueued > 0) : (!hasRealDemand && !activeMatch && currentQueued > 0);
+                uint32 nowTs = static_cast<uint32>(std::time(nullptr));
+                std::string recentActivityKey = RTG_MakeArenaRecentActivityKey(uint32(queueTypeId), uint32(bracketId));
+                uint32 recentActivity = mgr.RTG_GetGlobalEvent(recentActivityKey);
+                if (realQueued > 0u || activeMatch)
+                {
+                    recentActivity = nowTs;
+                    mgr.RTG_SetGlobalEvent(recentActivityKey, recentActivity, 60u);
+                }
+                bool recentArenaActivity = recentActivity &&
+                    nowTs >= recentActivity &&
+                    (nowTs - recentActivity) < RTG_ARENA_DORMANT_CLEAR_GRACE_SECONDS;
+                hardDormant = hardDormant && !recentArenaActivity;
+                bool orphanQueueResidue = !recentArenaActivity &&
+                    (hardDormant ? (currentQueued > 0) : (!hasRealDemand && !activeMatch && currentQueued > 0));
 
                 // Hard planner gate: once arena is truly dormant (no real queue, no active instance,
                 // no queued helpers), clear state and stop processing entirely.
