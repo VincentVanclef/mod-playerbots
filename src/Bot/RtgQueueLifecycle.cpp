@@ -1,5 +1,6 @@
 #include "RtgQueueLifecycle.h"
 
+#include "RtgArenaState.h"
 #include "RtgQueueMetadata.h"
 #include "BattlegroundMgr.h"
 #include "GameTime.h"
@@ -163,6 +164,21 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
         return true;
 
     std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(botId, "add");
+    bool arenaManaged = IsArenaManagedAddData(addData);
+    if (arenaManaged)
+    {
+        bool arenaDraining =
+            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_retire_when_safe") != 0 ||
+            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_world_return_since") != 0 ||
+            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_leave_requested") != 0 ||
+            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_logout_queued") != 0 ||
+            GetArenaClosureState(sRandomPlayerbotMgr, botId) == ArenaClosureState::Pending ||
+            IsArenaTeardownQuarantined(sRandomPlayerbotMgr, botId);
+
+        if (arenaDraining)
+            return false;
+    }
+
     if (!IsQueueManagedAddData(addData))
     {
         if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") ||
@@ -190,6 +206,7 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
                     uint32 bracketId = uint32(pvpDiff->GetBracketId());
                     BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueType);
                     bool isArenaQueue = RTG_IsArenaQueueType(queueTypeId);
+                    bool ownerBoundArenaHelper = arenaManaged && owner != 0;
                     std::string demandKey = RTG_MakeDemandKey(queueTypeId, queueType, bracketId);
                     std::string phaseKey = RTG_MakePhaseKey(queueTypeId, queueType, bracketId);
                     std::string teamNeedKey = RTG_MakeTeamNeedKey(queueTypeId, queueType, bracketId, team);
@@ -200,10 +217,18 @@ static bool RTG_HelperHasOutstandingDemand(Player* bot, RtgHelperLedgerEntry con
 
                     if (queueDemandActive)
                     {
-                        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_PendingKey(queueTypeId)) ||
-                            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_QueueGraceKey(queueTypeId)) ||
-                            entry.pendingQueueJoin || entry.pendingBgJoin)
-                            return true;
+                        bool helperHasLiveArenaTransition =
+                            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_PendingKey(queueTypeId)) != 0 ||
+                            sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, RTG_QueueGraceKey(queueTypeId)) != 0 ||
+                            entry.pendingQueueJoin ||
+                            entry.pendingBgJoin ||
+                            RTG_HasActualPvpLifecycle(bot, queueTypeId) ||
+                            RTG_HasQueueSlotForType(bot, queueTypeId) ||
+                            bot->IsInvitedForBattlegroundInstance() ||
+                            RTG_IsActiveInQueueType(bot, queueTypeId);
+
+                        if (isArenaQueue || ownerBoundArenaHelper)
+                            return helperHasLiveArenaTransition;
 
                         return true;
                     }

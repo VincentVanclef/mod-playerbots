@@ -2317,7 +2317,32 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
             RTG::RtgLifecycleResult lifecycle = RTG::EvaluateRetire(bot, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds);
             if (lifecycle.decision != RTG::RtgLifecycleDecision::Allow)
             {
-                if (!actualPvpLifecycle && clearQueueState)
+                bool arenaClosurePending = arenaManaged &&
+                    RTG::GetArenaClosureState(*this, botId) == RTG::ArenaClosureState::Pending;
+                bool arenaQuarantine = arenaManaged && RTG::IsArenaTeardownQuarantined(*this, botId);
+                bool arenaDraining = arenaManaged &&
+                    (GetEventValue(botId, "rtg_arena_retire_when_safe") ||
+                     GetEventValue(botId, "rtg_arena_world_return_since") ||
+                     GetEventValue(botId, "rtg_arena_leave_requested") ||
+                     GetEventValue(botId, "rtg_arena_logout_queued") ||
+                     GetEventValue(botId, "rtg_arena_terminal_force_logout") ||
+                     arenaClosurePending ||
+                     arenaQuarantine);
+                bool liveArenaLifecycle =
+                    bot->InArena() ||
+                    bot->InBattleground() ||
+                    bot->InBattlegroundQueue() ||
+                    bot->IsInvitedForBattlegroundInstance();
+
+                if (arenaDraining && !liveArenaLifecycle)
+                {
+                    RTG_RuntimeBreadcrumb(fmt::format(
+                        "[RTG][ARENA][LOGOUT_FORCE_RELEASE] helper={} queue={} reason={} lifecycleReason='{}' add='{}'",
+                        botId, desiredQueueType, reason ? reason : "rtg", lifecycle.reason, addData));
+                    ledger.ClearOwnership(botId, "arena drained helper force released on logout");
+                    ledger.ClearRetireRequest(botId);
+                }
+                else if (!actualPvpLifecycle && clearQueueState)
                 {
                     char const* laneTag = arenaManaged ? "ARENA" : "BG";
                     RTG_RuntimeBreadcrumb(fmt::format(
@@ -2328,6 +2353,25 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
                 }
                 else
                 {
+                    char const* deferLaneTag = arenaManaged ? "ARENA" : "BG";
+                    std::string deferLog = fmt::format(
+                        "[RTG][{}][LOGOUT_DEFER] helper={} queue={} reason={} lifecycleReason='{}' actualPvpLifecycle={} arenaDraining={} inQueue={} invited={} inArena={} inBg={} clearQueueState={} add='{}'",
+                        deferLaneTag,
+                        botId,
+                        desiredQueueType,
+                        reason ? reason : "rtg",
+                        lifecycle.reason,
+                        actualPvpLifecycle ? 1u : 0u,
+                        arenaDraining ? 1u : 0u,
+                        bot->InBattlegroundQueue() ? 1u : 0u,
+                        bot->IsInvitedForBattlegroundInstance() ? 1u : 0u,
+                        bot->InArena() ? 1u : 0u,
+                        bot->InBattleground() ? 1u : 0u,
+                        clearQueueState ? 1u : 0u,
+                        addData);
+                    RTG_RuntimeBreadcrumb(deferLog);
+                    if (RTG_QueueDebugEnabled() || RTG_QueueOwnershipDebugEnabled())
+                        LOG_INFO("playerbots", "[RTGDBG][OWNERSHIP] {}", deferLog);
                     ledger.RequestRetire(botId, reason ? reason : "rtg");
                     SetEventValue(botId, retireWhenSafeKey, 1, sPlayerbotAIConfig.rtgQueueOwnershipRetireRetrySeconds + 30, addData);
                     if (RTG_QueueOwnershipDebugEnabled())
