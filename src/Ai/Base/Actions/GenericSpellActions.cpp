@@ -6,6 +6,7 @@
 #include "GenericSpellActions.h"
 
 #include <ctime>
+#include <unordered_set>
 
 #include "Event.h"
 #include "ItemTemplate.h"
@@ -17,35 +18,126 @@
 #include "WorldPacket.h"
 #include "Group.h"
 #include "Chat.h"
-#include "Language.h"
 #include "GenericBuffUtils.h"
 #include "PlayerbotAI.h"
 
 using ai::buff::MakeAuraQualifierForBuff;
-using ai::buff::UpgradeToGroupIfAppropriate;
+using ai::spell::HasSpellOrCategoryCooldown;
 
-static bool IsSpellcasterClass(uint8 cls)
+namespace
 {
-    switch (cls)
+    std::unordered_set<uint32> const& GetMixedTriggerTrinketSpellIds()
     {
-        case CLASS_MAGE:
-        case CLASS_PRIEST:
-        case CLASS_WARLOCK:
-        case CLASS_DRUID:
-        case CLASS_SHAMAN:
-            return true;
-        default:
+        static std::unordered_set<uint32> const mixedTriggerSpellIds = []()
+        {
+            std::unordered_set<uint32> onUseSpellIds;
+            std::unordered_set<uint32> onEquipSpellIds;
+            std::unordered_set<uint32> mixedSpellIds;
+
+            auto const* itemTemplates = sObjectMgr->GetItemTemplateStore();
+            if (!itemTemplates)
+                return mixedSpellIds;
+
+            auto const markSpellId = [&](int32 spellId, uint8 spellTrigger)
+            {
+                if (spellId <= 0)
+                    return;
+
+                if (spellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+                {
+                    if (onEquipSpellIds.find(spellId) != onEquipSpellIds.end())
+                        mixedSpellIds.insert(spellId);
+
+                    onUseSpellIds.insert(spellId);
+                }
+                else if (spellTrigger == ITEM_SPELLTRIGGER_ON_EQUIP)
+                {
+                    if (onUseSpellIds.find(spellId) != onUseSpellIds.end())
+                        mixedSpellIds.insert(spellId);
+
+                    onEquipSpellIds.insert(spellId);
+                }
+            };
+
+            for (auto const& itr : *itemTemplates)
+            {
+                ItemTemplate const& proto = itr.second;
+                if (proto.InventoryType != INVTYPE_TRINKET)
+                    continue;
+
+                for (uint8 spellIndex = 0; spellIndex < MAX_ITEM_PROTO_SPELLS; ++spellIndex)
+                {
+                    auto const& spellData = proto.Spells[spellIndex];
+                    markSpellId(spellData.SpellId, spellData.SpellTrigger);
+                }
+            }
+
+            return mixedSpellIds;
+        }();
+
+        return mixedTriggerSpellIds;
+    }
+
+    bool IsManaRestoreEffect(SpellEffectInfo const& effectInfo)
+    {
+        return (effectInfo.Effect == SPELL_EFFECT_ENERGIZE &&
+                effectInfo.MiscValue == POWER_MANA) ||
+               (effectInfo.Effect == SPELL_EFFECT_APPLY_AURA &&
+                effectInfo.ApplyAuraName == SPELL_AURA_PERIODIC_ENERGIZE &&
+                effectInfo.MiscValue == POWER_MANA);
+    }
+
+    bool IsManaEfficiencyEffect(SpellEffectInfo const& effectInfo)
+    {
+        return effectInfo.Effect == SPELL_EFFECT_APPLY_AURA &&
+               (((effectInfo.ApplyAuraName == SPELL_AURA_MOD_POWER_REGEN ||
+                  effectInfo.ApplyAuraName == SPELL_AURA_MOD_POWER_REGEN_PERCENT) &&
+                 effectInfo.MiscValue == POWER_MANA) ||
+                effectInfo.ApplyAuraName == SPELL_AURA_MOD_POWER_COST_SCHOOL ||
+                effectInfo.ApplyAuraName == SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT ||
+                effectInfo.ApplyAuraName == SPELL_AURA_MOD_MANA_REGEN_INTERRUPT);
+    }
+
+    bool IsDefensiveTankEffect(SpellEffectInfo const& effectInfo)
+    {
+        if (effectInfo.Effect != SPELL_EFFECT_APPLY_AURA)
             return false;
+
+        uint32 const tankRatingsMask =
+            (1u << CR_DEFENSE_SKILL) |
+            (1u << CR_DODGE) |
+            (1u << CR_PARRY) |
+            (1u << CR_BLOCK) |
+            (1u << CR_HIT_TAKEN_MELEE) |
+            (1u << CR_HIT_TAKEN_RANGED) |
+            (1u << CR_HIT_TAKEN_SPELL) |
+            (1u << CR_CRIT_TAKEN_MELEE) |
+            (1u << CR_CRIT_TAKEN_RANGED) |
+            (1u << CR_CRIT_TAKEN_SPELL);
+
+        switch (effectInfo.ApplyAuraName)
+        {
+            case SPELL_AURA_MOD_RESISTANCE:
+                return (effectInfo.MiscValue & SPELL_SCHOOL_MASK_NORMAL) != 0;
+            case SPELL_AURA_MOD_RATING:
+                return (effectInfo.MiscValue & tankRatingsMask) != 0;
+            case SPELL_AURA_MOD_INCREASE_HEALTH:
+            case SPELL_AURA_MOD_INCREASE_HEALTH_PERCENT:
+            case SPELL_AURA_MOD_PARRY_PERCENT:
+            case SPELL_AURA_MOD_DODGE_PERCENT:
+            case SPELL_AURA_MOD_BLOCK_PERCENT:
+            case SPELL_AURA_MOD_DAMAGE_PERCENT_TAKEN:
+                return true;
+            default:
+                return false;
+        }
     }
 }
 
-
 CastSpellAction::CastSpellAction(PlayerbotAI* botAI, std::string const spell)
-    : Action(botAI, spell), range(botAI->GetRange("spell")), spell(spell)
-{
-}
+    : Action(botAI, spell), range(botAI->GetRange("spell")), spell(spell) {}
 
-bool CastSpellAction::Execute(Event event)
+bool CastSpellAction::Execute(Event /*event*/)
 {
     if (spell == "conjure food" || spell == "conjure water")
     {
@@ -70,18 +162,12 @@ bool CastSpellAction::Execute(Event event)
 
             wstrToLower(wnamepart);
 
-            if (!Utf8FitTo(spell, wnamepart))
-                continue;
-
-            if (spellInfo->Effects[0].Effect != SPELL_EFFECT_CREATE_ITEM)
+            if (!Utf8FitTo(spell, wnamepart) || spellInfo->Effects[0].Effect != SPELL_EFFECT_CREATE_ITEM)
                 continue;
 
             uint32 itemId = spellInfo->Effects[0].ItemType;
             ItemTemplate const* proto = sObjectMgr->GetItemTemplate(itemId);
-            if (!proto)
-                continue;
-
-            if (bot->CanUseItem(proto) != EQUIP_ERR_OK)
+            if (!proto || bot->CanUseItem(proto) != EQUIP_ERR_OK)
                 continue;
 
             if (spellInfo->Id > castId)
@@ -91,25 +177,33 @@ bool CastSpellAction::Execute(Event event)
         return botAI->CastSpell(castId, bot);
     }
 
-    Unit* spellTarget = GetTarget();
-if (spellTarget && IsSpellcasterClass(bot->getClass()) && !botAI->IsInVehicle() && !bot->IsMounted())
-{
-    // If target is outside our generic spell engagement range, start moving in so we don't "wait" for the target to walk in.
-    // Small buffer prevents edge-range jitter.
-    float const buffer = 1.0f;
-    float const desired = range + sPlayerbotAIConfig.contactDistance;
-    if (!bot->IsWithinCombatRange(spellTarget, desired - buffer))
-    {
-        // Don't override "stay" (e.g. parked bots) and don't break channeling spells.
-        if (!botAI->HasStrategy("stay", botAI->GetState()) && bot->GetCurrentSpell(CURRENT_CHANNELED_SPELL) == nullptr)
-        {
-            bot->GetMotionMaster()->MoveChase(spellTarget);
-            return true;
-        }
-    }
+    return botAI->CastSpell(spell, GetTarget());
 }
 
-return botAI->CastSpell(spell, spellTarget);
+bool CastSpellAction::isUseful()
+{
+    if (botAI->IsInVehicle() && !botAI->IsInVehicle(false, false, true))
+        return false;
+
+    if (spell == "mount" && !bot->IsMounted() && !bot->IsInCombat())
+        return true;
+
+    if (spell == "mount" && bot->IsInCombat())
+    {
+        bot->Dismount();
+        return false;
+    }
+
+    Unit* spellTarget = GetTarget();
+    if (!spellTarget || !spellTarget->IsInWorld() || spellTarget->GetMapId() != bot->GetMapId())
+        return false;
+
+    // float combatReach = bot->GetCombatReach() + target->GetCombatReach();
+    // if (!botAI->IsRanged(bot))
+    //     combatReach += 4.0f / 3.0f;
+
+    return AI_VALUE2(bool, "spell cast useful", spell);
+           // && ServerFacade::instance().GetDistance2d(bot, target) <= (range + combatReach);
 }
 
 bool CastSpellAction::isPossible()
@@ -137,54 +231,11 @@ bool CastSpellAction::isPossible()
     }
 
     // Spell* currentSpell = bot->GetCurrentSpell(CURRENT_GENERIC_SPELL); //not used, line marked for removal.
-    Unit* spellTarget = GetTarget();
-
-// Normal castability check.
-if (botAI->CanCastSpell(spell, spellTarget))
-    return true;
-
-// Spellcasters should proactively close the gap to get into spell range instead of waiting for the target.
-if (spellTarget && IsSpellcasterClass(bot->getClass()) && spellTarget->IsInWorld() && spellTarget->GetMapId() == bot->GetMapId())
-{
-    float const desired = range + sPlayerbotAIConfig.contactDistance;
-    if (!bot->IsWithinCombatRange(spellTarget, desired))
-        return true; // allow Execute() to move us into range
+    return botAI->CanCastSpell(spell, GetTarget());
 }
 
-return false;
-}
-
-bool CastSpellAction::isUseful()
-{
-    if (botAI->IsInVehicle() && !botAI->IsInVehicle(false, false, true))
-        return false;
-
-    if (spell == "mount" && !bot->IsMounted() && !bot->IsInCombat())
-        return true;
-
-    if (spell == "mount" && bot->IsInCombat())
-    {
-        bot->Dismount();
-        return false;
-    }
-
-    Unit* spellTarget = GetTarget();
-    if (!spellTarget)
-        return false;
-
-    if (!spellTarget->IsInWorld() || spellTarget->GetMapId() != bot->GetMapId())
-        return false;
-
-    // float combatReach = bot->GetCombatReach() + spellTarget->GetCombatReach();
-    // if (!botAI->IsRanged(bot))
-    //     combatReach += 4.0f / 3.0f;
-
-    return spellTarget &&
-           AI_VALUE2(bool, "spell cast useful",
-                     spell);  // && ServerFacade::instance().GetDistance2d(bot, spellTarget) <= (range + combatReach);
-}
-
-CastMeleeSpellAction::CastMeleeSpellAction(PlayerbotAI* botAI, std::string const spell) : CastSpellAction(botAI, spell)
+CastMeleeSpellAction::CastMeleeSpellAction(
+    PlayerbotAI* botAI, std::string const spell) : CastSpellAction(botAI, spell)
 {
     range = ATTACK_DISTANCE;
 }
@@ -192,16 +243,15 @@ CastMeleeSpellAction::CastMeleeSpellAction(PlayerbotAI* botAI, std::string const
 bool CastMeleeSpellAction::isUseful()
 {
     Unit* target = GetTarget();
-    if (!target)
-        return false;
-
-    if (!bot->IsWithinMeleeRange(target))
+    if (!target || !bot->IsWithinMeleeRange(target))
         return false;
 
     return CastSpellAction::isUseful();
 }
 
-CastMeleeDebuffSpellAction::CastMeleeDebuffSpellAction(PlayerbotAI* botAI, std::string const spell, bool isOwner, float needLifeTime) : CastDebuffSpellAction(botAI, spell, isOwner, needLifeTime)
+CastMeleeDebuffSpellAction::CastMeleeDebuffSpellAction(
+    PlayerbotAI* botAI, std::string const spell, bool isOwner, float needLifeTime) :
+    CastDebuffSpellAction(botAI, spell, isOwner, needLifeTime)
 {
     range = ATTACK_DISTANCE;
 }
@@ -209,10 +259,7 @@ CastMeleeDebuffSpellAction::CastMeleeDebuffSpellAction(PlayerbotAI* botAI, std::
 bool CastMeleeDebuffSpellAction::isUseful()
 {
     Unit* target = GetTarget();
-    if (!target)
-        return false;
-
-    if (!bot->IsWithinMeleeRange(target))
+    if (!target || !bot->IsWithinMeleeRange(target))
         return false;
 
     return CastDebuffSpellAction::isUseful();
@@ -222,35 +269,96 @@ bool CastAuraSpellAction::isUseful()
 {
     if (!GetTarget() || !CastSpellAction::isUseful())
         return false;
+
     Aura* aura = botAI->GetAura(spell, GetTarget(), isOwner, checkDuration);
-    if (!aura)
+    if (!aura || (beforeDuration && aura->GetDuration() < beforeDuration))
         return true;
-    if (beforeDuration && aura->GetDuration() < beforeDuration)
-        return true;
+
     return false;
 }
 
-CastEnchantItemAction::CastEnchantItemAction(PlayerbotAI* botAI, std::string const spell)
-    : CastSpellAction(botAI, spell)
+bool CastBuffSpellAction::isUseful()
 {
-    range = botAI->GetRange("spell");
+    Unit* target = GetTarget();
+    if (!target || !CastSpellAction::isUseful())
+        return false;
+
+    Aura* aura = botAI->GetAura(spell, target, isOwner, checkDuration);
+    return !aura || (beforeDuration && aura->GetDuration() < beforeDuration);
 }
 
-bool CastEnchantItemAction::isPossible()
+bool CastBuffSpellAction::Execute(Event /*event*/)
 {
-    // if (!CastSpellAction::isPossible())
-    // {
-    //     botAI->TellMasterNoFacing("Impossible: " + spell);
-    //     return false;
-    // }
+    return botAI->CastSpell(spell, GetTarget());
+}
 
-    uint32 spellId = AI_VALUE2(uint32, "spell id", spell);
+bool GroupBuffSpellAction::isUseful()
+{
+    Unit* target = GetTarget();
+    if (!target || !CastSpellAction::isUseful())
+        return false;
 
-    // bool ok = AI_VALUE2(Item*, "item for spell", spellId);
-    // Item* item = AI_VALUE2(Item*, "item for spell", spellId);
-    // botAI->TellMasterNoFacing("spell: " + spell + ", spell id: " + std::to_string(spellId) + " item for spell: " +
-    // std::to_string(ok));
-    return spellId && AI_VALUE2(Item*, "item for spell", spellId);
+    if (ai::buff::IsGroupVariantEnabled(bot, spell))
+    {
+        std::string const groupVariant = ai::buff::GroupVariantFor(spell);
+        if (!groupVariant.empty() && botAI->HasAura(groupVariant, target, false, isOwner, -1, checkDuration))
+            return false;
+    }
+
+    Aura* aura = botAI->GetAura(spell, target, isOwner, checkDuration);
+    if (!aura || (beforeDuration && aura->GetDuration() < beforeDuration))
+        return true;
+
+    return false;
+}
+
+bool GroupBuffSpellAction::Execute(Event /*event*/)
+{
+    std::string const castName = ai::buff::UpgradeToGroupIfAppropriate(bot, botAI, spell);
+    return botAI->CastSpell(castName, GetTarget());
+}
+
+CastEnchantItemMainHandAction::CastEnchantItemMainHandAction(
+    PlayerbotAI* botAI, std::string const spell) : CastSpellAction(botAI, spell) {}
+
+bool CastEnchantItemMainHandAction::Execute(Event /*event*/)
+{
+    Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    return item && botAI->CastSpell(spell, bot, item);
+}
+
+bool CastEnchantItemMainHandAction::isPossible()
+{
+    Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_MAINHAND);
+    if (!item || item->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_MISC ||
+        item->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_FISHING_POLE ||
+        item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+    {
+        return false;
+    }
+
+    return botAI->CanCastSpell(spell, bot, item);
+}
+
+CastEnchantItemOffHandAction::CastEnchantItemOffHandAction(
+    PlayerbotAI* botAI, std::string const spell) : CastSpellAction(botAI, spell) {}
+
+bool CastEnchantItemOffHandAction::Execute(Event /*event*/)
+{
+    Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+    return item && botAI->CastSpell(spell, bot, item);
+}
+
+bool CastEnchantItemOffHandAction::isPossible()
+{
+    Item* item = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_OFFHAND);
+    if (!item || item->GetTemplate()->SubClass == ITEM_SUBCLASS_WEAPON_MISC ||
+        item->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
+    {
+        return false;
+    }
+
+    return botAI->CanCastSpell(spell, bot, item);
 }
 
 CastHealingSpellAction::CastHealingSpellAction(PlayerbotAI* botAI, std::string const spell, uint8 estAmount,
@@ -264,7 +372,8 @@ bool CastHealingSpellAction::isUseful() { return CastAuraSpellAction::isUseful()
 
 bool CastAoeHealSpellAction::isUseful() { return CastSpellAction::isUseful(); }
 
-CastCureSpellAction::CastCureSpellAction(PlayerbotAI* botAI, std::string const spell) : CastSpellAction(botAI, spell)
+CastCureSpellAction::CastCureSpellAction(
+    PlayerbotAI* botAI, std::string const spell) : CastSpellAction(botAI, spell)
 {
     range = botAI->GetRange("heal");
 }
@@ -274,25 +383,18 @@ Value<Unit*>* CurePartyMemberAction::GetTargetValue()
     return context->GetValue<Unit*>("party member to dispel", dispelType);
 }
 
-// Make Bots Paladin, druid, mage use the greater buff rank spell
-// TODO Priest doen't verify il he have components
 Value<Unit*>* BuffOnPartyAction::GetTargetValue()
+{
+    return context->GetValue<Unit*>("party member without aura", spell);
+}
+
+Value<Unit*>* GroupBuffOnPartyAction::GetTargetValue()
 {
     return context->GetValue<Unit*>("party member without aura", MakeAuraQualifierForBuff(spell));
 }
 
-bool BuffOnPartyAction::Execute(Event event)
-{
-    std::string castName = spell; // default = mono
-
-    auto SendGroupRP = ai::chat::MakeGroupAnnouncer(bot);
-    castName = ai::buff::UpgradeToGroupIfAppropriate(bot, botAI, castName, /*announceOnMissing=*/true, SendGroupRP);
-
-    return botAI->CastSpell(castName, GetTarget());
-}
-// End greater buff fix
-
-CastShootAction::CastShootAction(PlayerbotAI* botAI) : CastSpellAction(botAI, "shoot")
+CastShootAction::CastShootAction(
+    PlayerbotAI* botAI) : CastSpellAction(botAI, "shoot"), shootSpellId(0)
 {
     if (Item* const pItem = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_RANGED))
     {
@@ -302,15 +404,38 @@ CastShootAction::CastShootAction(PlayerbotAI* botAI) : CastSpellAction(botAI, "s
         {
             case ITEM_SUBCLASS_WEAPON_GUN:
                 spell += " gun";
+                shootSpellId = 3018;
                 break;
             case ITEM_SUBCLASS_WEAPON_BOW:
                 spell += " bow";
+                shootSpellId = 3018;
                 break;
             case ITEM_SUBCLASS_WEAPON_CROSSBOW:
                 spell += " crossbow";
+                shootSpellId = 3018;
+                break;
+            case ITEM_SUBCLASS_WEAPON_THROWN:
+                spell = "throw";
+                shootSpellId = 2764;
                 break;
         }
     }
+}
+
+bool CastShootAction::isPossible()
+{
+    if (shootSpellId)
+        return botAI->CanCastSpell(shootSpellId, GetTarget(), false);
+
+    return CastSpellAction::isPossible();
+}
+
+bool CastShootAction::Execute(Event /*event*/)
+{
+    if (shootSpellId)
+        return botAI->CastSpell(shootSpellId, GetTarget());
+
+    return botAI->CastSpell(spell, GetTarget());
 }
 
 Value<Unit*>* CastDebuffSpellOnAttackerAction::GetTargetValue()
@@ -323,7 +448,8 @@ Value<Unit*>* CastDebuffSpellOnMeleeAttackerAction::GetTargetValue()
     return context->GetValue<Unit*>("melee attacker without aura", spell);
 }
 
-CastBuffSpellAction::CastBuffSpellAction(PlayerbotAI* botAI, std::string const spell, bool checkIsOwner, uint32 beforeDuration)
+CastBuffSpellAction::CastBuffSpellAction(
+    PlayerbotAI* botAI, std::string const spell, bool checkIsOwner, uint32 beforeDuration)
     : CastAuraSpellAction(botAI, spell, checkIsOwner, false, beforeDuration)
 {
     range = botAI->GetRange("spell");
@@ -338,7 +464,7 @@ Value<Unit*>* CastSnareSpellAction::GetTargetValue() { return context->GetValue<
 
 Value<Unit*>* CastCrowdControlSpellAction::GetTargetValue() { return context->GetValue<Unit*>("cc target", getName()); }
 
-bool CastCrowdControlSpellAction::Execute(Event event) { return botAI->CastSpell(getName(), GetTarget()); }
+bool CastCrowdControlSpellAction::Execute(Event /*event*/) { return botAI->CastSpell(getName(), GetTarget()); }
 
 bool CastCrowdControlSpellAction::isPossible() { return botAI->CanCastSpell(getName(), GetTarget()); }
 
@@ -356,13 +482,44 @@ bool CastVehicleSpellAction::isPossible()
 
 bool CastVehicleSpellAction::isUseful() { return botAI->IsInVehicle(false, true); }
 
-bool CastVehicleSpellAction::Execute(Event event)
+bool CastVehicleSpellAction::Execute(Event /*event*/)
 {
     uint32 spellId = AI_VALUE2(uint32, "vehicle spell id", spell);
     return botAI->CastVehicleSpell(spellId, GetTarget());
 }
 
-bool UseTrinketAction::Execute(Event event)
+bool CastEveryManForHimselfAction::isPossible()
+{
+    uint32 spellId = AI_VALUE2(uint32, "spell id", spell);
+    return spellId && bot->HasSpell(spellId) && !HasSpellOrCategoryCooldown(bot, spellId);
+}
+
+bool CastEveryManForHimselfAction::isUseful()
+{
+    return (bot->HasAuraType(SPELL_AURA_MOD_STUN) ||
+            bot->HasAuraType(SPELL_AURA_MOD_FEAR) ||
+            bot->HasAuraType(SPELL_AURA_MOD_ROOT) ||
+            bot->HasAuraType(SPELL_AURA_MOD_CONFUSE) ||
+            bot->HasAuraType(SPELL_AURA_MOD_CHARM))
+           && CastSpellAction::isUseful();
+}
+
+bool CastWillOfTheForsakenAction::isPossible()
+{
+    uint32 spellId = AI_VALUE2(uint32, "spell id", spell);
+    return spellId && bot->HasSpell(spellId) && !HasSpellOrCategoryCooldown(bot, spellId);
+}
+
+bool CastWillOfTheForsakenAction::isUseful()
+{
+    return (bot->HasAuraType(SPELL_AURA_MOD_FEAR) ||
+            bot->HasAuraType(SPELL_AURA_MOD_CHARM) ||
+            bot->HasAuraType(SPELL_AURA_AOE_CHARM) ||
+            bot->HasAuraWithMechanic(1 << MECHANIC_SLEEP))
+           && CastSpellAction::isUseful();
+}
+
+bool UseTrinketAction::Execute(Event /*event*/)
 {
     Item* trinket1 = bot->GetItemByPos(INVENTORY_SLOT_BAG_0, EQUIPMENT_SLOT_TRINKET1);
 
@@ -378,69 +535,141 @@ bool UseTrinketAction::Execute(Event event)
 
 bool UseTrinketAction::UseTrinket(Item* item)
 {
-    if (bot->CanUseItem(item) != EQUIP_ERR_OK)
-        return false;
-
-    if (bot->IsNonMeleeSpellCast(true))
+    if (bot->CanUseItem(item) != EQUIP_ERR_OK || bot->IsNonMeleeSpellCast(true))
         return false;
 
     uint8 bagIndex = item->GetBagSlot();
     uint8 slot = item->GetSlot();
-    // uint8 spell_index = 0; //not used, line marked for removal.
     uint8 cast_count = 1;
     ObjectGuid item_guid = item->GetGUID();
     uint32 glyphIndex = 0;
     uint8 castFlags = 0;
     uint32 targetFlag = TARGET_FLAG_NONE;
     uint32 spellId = 0;
+    int32 itemSpellCooldown = 0;
+    uint32 itemSpellCategory = 0;
+    int32 itemSpellCategoryCooldown = 0;
+
     for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
     {
-        if (item->GetTemplate()->Spells[i].SpellId > 0 && item->GetTemplate()->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+        if (item->GetTemplate()->Spells[i].SpellId > 0 &&
+            item->GetTemplate()->Spells[i].SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
         {
             spellId = item->GetTemplate()->Spells[i].SpellId;
-            const SpellInfo* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+            itemSpellCooldown = item->GetTemplate()->Spells[i].SpellCooldown;
+            itemSpellCategory = item->GetTemplate()->Spells[i].SpellCategory;
+            itemSpellCategoryCooldown = item->GetTemplate()->Spells[i].SpellCategoryCooldown;
+            uint64 const itemCooldownKey = (static_cast<uint64>(item->GetEntry()) << 32) | spellId;
+            uint32 const now = getMSTime();
 
+            if (itemSpellCooldown > 0)
+            {
+                auto const itemCooldownItr = trinketItemCooldownExpiries.find(itemCooldownKey);
+                if (itemCooldownItr != trinketItemCooldownExpiries.end())
+                {
+                    if (itemCooldownItr->second > now)
+                        return false;
+
+                    trinketItemCooldownExpiries.erase(itemCooldownItr);
+                }
+            }
+
+            if (itemSpellCategory && itemSpellCategoryCooldown > 0)
+            {
+                auto const categoryCooldownItr = trinketCategoryCooldownExpiries.find(itemSpellCategory);
+                if (categoryCooldownItr != trinketCategoryCooldownExpiries.end())
+                {
+                    if (categoryCooldownItr->second > now)
+                        return false;
+
+                    trinketCategoryCooldownExpiries.erase(categoryCooldownItr);
+                }
+            }
+
+            const SpellInfo* spellInfo = sSpellMgr->GetSpellInfo(spellId);
             if (!spellInfo || !spellInfo->IsPositive())
                 return false;
 
             bool applyAura = false;
+            bool restoresMana = false;
+            bool improvesManaEfficiency = false;
+            bool defensiveTankEffect = false;
             for (int i = 0; i < MAX_SPELL_EFFECTS; i++)
             {
                 const SpellEffectInfo& effectInfo = spellInfo->Effects[i];
                 if (effectInfo.Effect == SPELL_EFFECT_APPLY_AURA)
-                {
                     applyAura = true;
-                    break;
+
+                restoresMana = restoresMana || IsManaRestoreEffect(effectInfo);
+                improvesManaEfficiency = improvesManaEfficiency || IsManaEfficiencyEffect(effectInfo);
+                defensiveTankEffect = defensiveTankEffect || IsDefensiveTankEffect(effectInfo);
+            }
+
+            if (!applyAura && !restoresMana)
+                return false;
+
+            if (restoresMana || improvesManaEfficiency)
+            {
+                if (!AI_VALUE2(bool, "has mana", "self target"))
+                    return false;
+
+                uint8 const manaPct = AI_VALUE2(uint8, "mana", "self target");
+                if ((restoresMana && manaPct >= sPlayerbotAIConfig.mediumMana) ||
+                    manaPct >= sPlayerbotAIConfig.highMana)
+                {
+                    return false;
                 }
             }
 
-            if (!applyAura)
-                return false;
-
-            uint32 spellProcFlag = spellInfo->ProcFlags;
-
-            // Handle items with procflag "if you kill a target that grants honor or experience"
-            // Bots will "learn" the trinket proc, so CanCastSpell() will be true
-            // e.g. on Item https://www.wowhead.com/wotlk/item=44074/oracle-talisman-of-ablution leading to
-            // constant casting of the proc spell onto themselfes https://www.wowhead.com/wotlk/spell=59787/oracle-ablutions
-            // This will lead to multiple hundreds of entries in m_appliedAuras -> Once killing an enemy -> Big diff time spikes
-            if (spellProcFlag != 0) return false;
-
-            if (!botAI->CanCastSpell(spellId, bot, false))
+            if (defensiveTankEffect)
             {
-                return false;
+                uint8 const healthPct = AI_VALUE2(uint8, "health", "self target");
+                if (healthPct > sPlayerbotAIConfig.lowHealth)
+                    return false;
             }
+
+            auto const& mixedTriggerTrinketSpellIds = GetMixedTriggerTrinketSpellIds();
+            // Exclude trinkets that expose the same spell as both ON_EQUIP and ON_USE across
+            // item templates. Those are equip/proc effects leaking into the active-use path,
+            // as seen with the error versions of Oracle Talisman of Ablution (44870) and
+            // Frenzyheart Insignia of Fury (44869).
+            if (mixedTriggerTrinketSpellIds.find(spellId) != mixedTriggerTrinketSpellIds.end())
+                return false;
+
+            if (!botAI->CanCastSpell(spellId, bot, false, nullptr, item))
+                return false;
+
             break;
         }
     }
+
     if (!spellId)
         return false;
+
     WorldPacket packet(CMSG_USE_ITEM);
     packet << bagIndex << slot << cast_count << spellId << item_guid << glyphIndex << castFlags;
 
     targetFlag = TARGET_FLAG_NONE;
     packet << targetFlag << bot->GetPackGUID();
+
     bot->GetSession()->HandleUseItemOpcode(packet);
+
+    uint32 const now = getMSTime();
+    uint32 const cooldownDelay = bot->GetSpellCooldownDelay(spellId);
+    if (cooldownDelay > 0)
+    {
+        if (itemSpellCooldown > 0)
+        {
+            uint64 const itemCooldownKey = (static_cast<uint64>(item->GetEntry()) << 32) | spellId;
+            trinketItemCooldownExpiries[itemCooldownKey] = now + static_cast<uint32>(itemSpellCooldown);
+        }
+
+        if (itemSpellCategory && itemSpellCategoryCooldown > 0)
+        {
+            trinketCategoryCooldownExpiries[itemSpellCategory] = now + static_cast<uint32>(itemSpellCategoryCooldown);
+        }
+    }
+
     return true;
 }
 
@@ -450,9 +679,8 @@ bool CastDebuffSpellAction::isUseful()
 {
     Unit* target = GetTarget();
     if (!target || !target->IsAlive() || !target->IsInWorld())
-    {
         return false;
-    }
+
     return CastAuraSpellAction::isUseful() &&
            (target->GetHealth() / AI_VALUE(float, "estimated group dps")) >= needLifeTime;
 }

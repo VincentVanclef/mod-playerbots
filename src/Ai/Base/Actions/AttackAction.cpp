@@ -5,89 +5,17 @@
 
 #include "AttackAction.h"
 
-#include "Battleground.h"
 #include "CreatureAI.h"
 #include "Event.h"
 #include "LastMovementValue.h"
 #include "LootObjectStack.h"
 #include "PlayerbotAI.h"
+#include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "ServerFacade.h"
 #include "SharedDefines.h"
 #include "Unit.h"
-
-namespace
-{
-    static Player* RTG_GetArenaRelationPlayer(Unit* unit)
-    {
-        if (!unit)
-            return nullptr;
-
-        if (Player* player = unit->ToPlayer())
-            return player;
-
-        if (Unit* owner = unit->GetOwner())
-            return owner->ToPlayer();
-
-        return nullptr;
-    }
-
-    static bool RTG_ArenaFriendlyToBot(Player* bot, Unit* unit)
-    {
-        if (!bot || !unit)
-            return false;
-
-        bool genericFriendly = bot->IsFriendlyTo(unit);
-        if (!bot->InArena())
-            return genericFriendly;
-
-        Player* otherPlayer = RTG_GetArenaRelationPlayer(unit);
-        if (!otherPlayer || !otherPlayer->InArena())
-            return genericFriendly;
-
-        Battleground* botBg = bot->GetBattleground();
-        Battleground* otherBg = otherPlayer->GetBattleground();
-        if (!botBg || !otherBg || botBg != otherBg)
-            return genericFriendly;
-
-        return bot->GetBgTeamId() == otherPlayer->GetBgTeamId();
-    }
-
-    static bool RTG_ShouldSuppressHealerPull(PlayerbotAI* botAI, Player* bot, Unit* target)
-    {
-        if (!botAI || !bot || !target || !botAI->IsHeal(bot, true))
-            return false;
-
-        Group* group = bot->GetGroup();
-        Map* map = bot->GetMap();
-        bool inDungeonRun = (group && group->isLFGGroup()) || (map && map->IsDungeon());
-        if (!inDungeonRun)
-            return false;
-
-        Unit* botVictim = bot->GetVictim();
-        if (botVictim && botVictim->GetVictim() == bot)
-            return false;
-
-        if (target->GetVictim() == bot)
-            return false;
-
-        if (group)
-        {
-            for (GroupReference* ref = group->GetFirstMember(); ref; ref = ref->next())
-            {
-                Player* member = ref->GetSource();
-                if (!member || !member->IsInWorld())
-                    continue;
-
-                if (member != bot && member->IsInCombat())
-                    return true;
-            }
-        }
-
-        return true;
-    }
-
-}
+#include "WaitForAttackStrategy.h"
 
 bool AttackAction::Execute(Event /*event*/)
 {
@@ -97,20 +25,12 @@ bool AttackAction::Execute(Event /*event*/)
 
     if (!target->IsInWorld())
         return false;
-    Player* bot = botAI ? botAI->GetBot() : nullptr;
-    if (RTG_ShouldSuppressHealerPull(botAI, bot, target))
-    {
-        bot->AttackStop();
-        bot->SetTarget(ObjectGuid::Empty);
-        return false;
-    }
 
     return Attack(target);
 }
 
 bool AttackMyTargetAction::Execute(Event /*event*/)
 {
-    Player* bot = botAI ? botAI->GetBot() : nullptr;
     Player* master = GetMaster();
     if (!master)
         return false;
@@ -119,19 +39,13 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
     if (!guid)
     {
         if (verbose)
-            botAI->TellError("You have no target");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "pull_no_target_error", "You have no target", {}));
 
         return false;
     }
-    Unit* masterTarget = botAI->GetUnit(guid);
-    if (RTG_ShouldSuppressHealerPull(botAI, bot, masterTarget))
-    {
-        bot->AttackStop();
-        bot->SetTarget(ObjectGuid::Empty);
-        return false;
-    }
 
-    botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({ guid });
+    botAI->GetAiObjectContext()->GetValue<GuidVector>("prioritized targets")->Set({guid});
     bool result = Attack(botAI->GetUnit(guid));
     if (result)
         context->GetValue<ObjectGuid>("pull target")->Set(guid);
@@ -141,30 +55,11 @@ bool AttackMyTargetAction::Execute(Event /*event*/)
 
 bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
 {
-    Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
-    bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
-    
-    // Range close (melee/ranged): ensure we actually step into engagement distance instead of stalling
-    bool isRanged = !shouldMelee;
-
-
-    bool sameTarget = oldTarget == target && bot->GetVictim() == target;
-    bool inCombat = botAI->GetState() == BOT_STATE_COMBAT;
-    bool sameAttackMode = bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING) == shouldMelee;
-
-    if (bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == FLIGHT_MOTION_TYPE ||
-        bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
-    {
-        if (verbose)
-            botAI->TellError("I cannot attack in flight");
-
-        return false;
-    }
-
     if (!target)
     {
         if (verbose)
-            botAI->TellError("I have no target");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_no_target_error", "I have no target", {}));
 
         return false;
     }
@@ -172,7 +67,20 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
     if (!target->IsInWorld())
     {
         if (verbose)
-            botAI->TellError(std::string(target->GetName()) + " is no longer in the world.");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_target_not_in_world_error",
+                "%target is no longer in the world.",
+                {{"%target", target->GetName()}}));
+
+        return false;
+    }
+
+    if (bot->GetMotionMaster()->GetCurrentMovementGeneratorType() == FLIGHT_MOTION_TYPE ||
+        bot->HasUnitState(UNIT_STATE_IN_FLIGHT))
+    {
+        if (verbose)
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_in_flight_error", "I cannot attack in flight", {}));
 
         return false;
     }
@@ -184,15 +92,21 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
         sPlayerbotAIConfig.IsPvpProhibited(target->GetZoneId(), target->GetAreaId())))
     {
         if (verbose)
-            botAI->TellError("I cannot attack other players in PvP prohibited areas.");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_pvp_prohibited_error",
+                "I cannot attack other players in PvP prohibited areas.",
+                {}));
 
         return false;
     }
 
-    if (RTG_ArenaFriendlyToBot(bot, target))
+    if (bot->IsFriendlyTo(target))
     {
         if (verbose)
-            botAI->TellError(std::string(target->GetName()) + " is friendly to me.");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_target_friendly_error",
+                "%target is friendly to me.",
+                {{"%target", target->GetName()}}));
 
         return false;
     }
@@ -200,7 +114,10 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
     if (target->isDead())
     {
         if (verbose)
-            botAI->TellError(std::string(target->GetName()) + " is dead.");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_target_dead_error",
+                "%target is dead.",
+                {{"%target", target->GetName()}}));
 
         return false;
     }
@@ -208,39 +125,33 @@ bool AttackAction::Attack(Unit* target, bool /*with_pet*/ /*true*/)
     if (!bot->IsWithinLOSInMap(target))
     {
         if (verbose)
-            botAI->TellError(std::string(target->GetName()) + " is not in my sight.");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_target_not_in_sight_error",
+                "%target is not in my sight.",
+                {{"%target", target->GetName()}}));
 
         return false;
     }
 
-    
-    // Ensure we close to appropriate distance for engagement.
-    // Without this, bots can target something indefinitely while staying just out of range.
-    if (botAI->CanMove())
-    {
-        if (!isRanged)
-        {
-            if (!bot->IsWithinMeleeRange(target))
-            {
-                ReachCombatTo(target, target->GetCombatReach());
-                return false;
-            }
-        }
-        else
-        {
-            float engageDist = sPlayerbotAIConfig.spellDistance;
-            if (engageDist < 10.0f) engageDist = 10.0f;
-            if (bot->GetExactDist2d(target) > engageDist)
-            {
-                ReachCombatTo(target, engageDist);
-                return false;
-            }
-        }
-    }
-if (sameTarget && inCombat && sameAttackMode)
+    // Infantry attacks are not allowed from vehicles drivers.
+    // Check is needed to stop some auto-attack situations.
+    if (botAI->IsInVehicle() && !botAI->IsInVehicle(false, false, true))
+        return false;
+
+    Unit* oldTarget = context->GetValue<Unit*>("current target")->Get();
+    bool shouldMelee = bot->IsWithinMeleeRange(target) || botAI->IsMelee(bot);
+
+    bool sameTarget = oldTarget == target && bot->GetVictim() == target;
+    bool inCombat = botAI->GetState() == BOT_STATE_COMBAT;
+    bool sameAttackMode = bot->HasUnitState(UNIT_STATE_MELEE_ATTACKING) == shouldMelee;
+
+    if (sameTarget && inCombat && sameAttackMode)
     {
         if (verbose)
-            botAI->TellError("I am already attacking " + std::string(target->GetName()) + ".");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_already_attacking_error",
+                "I am already attacking %target.",
+                {{"%target", target->GetName()}}));
 
         return false;
     }
@@ -248,7 +159,8 @@ if (sameTarget && inCombat && sameAttackMode)
     if (!bot->IsValidAttackTarget(target))
     {
         if (verbose)
-            botAI->TellError("I cannot attack an invalid target.");
+            botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "attack_invalid_target_error", "I cannot attack an invalid target.", {}));
 
         return false;
     }
@@ -262,8 +174,7 @@ if (sameTarget && inCombat && sameAttackMode)
     ObjectGuid guid = target->GetGUID();
     bot->SetSelection(target->GetGUID());
 
-        context->GetValue<Unit*>("old target")->Set(oldTarget);
-
+    context->GetValue<Unit*>("old target")->Set(oldTarget);
     context->GetValue<Unit*>("current target")->Set(target);
     context->GetValue<LootObjectStack*>("available loot")->Get()->Add(guid);
 
@@ -281,7 +192,8 @@ if (sameTarget && inCombat && sameAttackMode)
 
     botAI->ChangeEngine(BOT_STATE_COMBAT);
 
-    bot->Attack(target, shouldMelee);
+    if (!WaitForAttackStrategy::ShouldWait(botAI))
+        bot->Attack(target, shouldMelee);
     /* prevent pet dead immediately in group */
     // if (bot->GetMap()->IsDungeon() && bot->GetGroup() && !target->IsInCombat())
     // {

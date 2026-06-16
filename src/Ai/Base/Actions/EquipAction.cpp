@@ -85,8 +85,8 @@ void EquipAction::EquipItem(Item* item)
     if (itemProto->Class == ITEM_CLASS_CONTAINER)
     {
         // Attempt to equip as a bag
-        Bag* pBag = reinterpret_cast<Bag*>(item);
         uint8 newBagSlot = GetSmallestBagSlot();
+
         if (newBagSlot > 0)
         {
             uint16 src = ((bagIndex << 8) | slot);
@@ -154,9 +154,11 @@ void EquipAction::EquipItem(Item* item)
             calculator.SetOverflowPenalty(false);
 
             // Calculate item scores once and store them
-            float newItemScore = calculator.CalculateItem(itemId);
-            float mainHandScore = mainHandItem ? calculator.CalculateItem(mainHandItem->GetTemplate()->ItemId) : 0.0f;
-            float offHandScore = offHandItem ? calculator.CalculateItem(offHandItem->GetTemplate()->ItemId) : 0.0f;
+            float newItemScore = calculator.CalculateItem(itemId, item->GetItemRandomPropertyId());
+            float mainHandScore = mainHandItem
+                ? calculator.CalculateItem(mainHandItem->GetTemplate()->ItemId, mainHandItem->GetItemRandomPropertyId()) : 0.0f;
+            float offHandScore = offHandItem
+                ? calculator.CalculateItem(offHandItem->GetTemplate()->ItemId, offHandItem->GetItemRandomPropertyId()) : 0.0f;
 
             // Determine where this weapon can go
             bool canGoMain = (invType == INVTYPE_WEAPON ||
@@ -364,12 +366,12 @@ ItemIds EquipAction::SelectInventoryItemsToEquip()
     return items;
 }
 
-bool EquipUpgradesTriggeredAction::Execute(Event event)
+bool EquipUpgradesPacketAction::Execute(Event event)
 {
     if (!sPlayerbotAIConfig.autoEquipUpgradeLoot && !sRandomPlayerbotMgr.IsRandomBot(bot))
         return false;
-
-    if (event.GetSource() == "trade status")
+    std::string const source = event.GetSource();
+    if (source == "trade status")
     {
         WorldPacket p(event.getPacket());
         p.rpos(0);
@@ -380,7 +382,7 @@ bool EquipUpgradesTriggeredAction::Execute(Event event)
             return false;
     }
 
-    if (event.GetSource() == "item push result")
+    else if (source == "item push result")
     {
         WorldPacket p(event.getPacket());
         p.rpos(0);
@@ -406,7 +408,7 @@ bool EquipUpgradesTriggeredAction::Execute(Event event)
     return true;
 }
 
-bool EquipUpgradeAction::Execute(Event event)
+bool EquipUpgradeAction::Execute(Event /*event*/)
 {
     ItemIds items = SelectInventoryItemsToEquip();
     EquipItems(items);

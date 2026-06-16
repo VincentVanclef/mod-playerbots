@@ -4,15 +4,20 @@
  */
 
 #include "CheckMountStateAction.h"
+#include "AreaDefines.h"
 #include "BattleGroundTactics.h"
 #include "BattlegroundEY.h"
 #include "BattlegroundWS.h"
+#include "DBCStores.h"
 #include "Event.h"
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 #include "ServerFacade.h"
 #include "SpellAuraEffects.h"
+
+static constexpr uint32 SPELL_COLD_WEATHER_FLYING = 54197;
+static constexpr float PARACHUTE_LAND_THRESHOLD = 15.0f;
 
 // Define the static map / init bool for caching bot preferred mount data globally
 std::unordered_map<uint32, PreferredMountCache> CheckMountStateAction::mountCache;
@@ -53,6 +58,92 @@ MountData CollectMountData(const Player* bot)
         data.allSpells[index][speed].push_back(spellId);
     }
     return data;
+}
+
+bool CheckMountStateAction::Execute(Event /*event*/)
+{
+    // Forced flight dismount:
+    // Bots get stale flight movement flags after a forced dismount (e.g: Dalaran) because the post landing dismount cleanup
+    // needs MSG_MOVE_FALL_LAND (a client opcode) and client movement packets. The stale flags cause the bot to be stuck with
+    // the parachute, or even keep the bot hovering indefinitely and block MMAP routing.
+    // Note: Without MSG_MOVE_FALL_LAND, HandleFall doesn't trigger, meaning bots don't get fall damage in forced dismounts anyway,
+    // so the parachute usage here is more of an immersion feature.
+    if (bot->HasFeatherFallAura())
+    {
+        float floorZ = bot->GetMapHeight(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
+        if (floorZ != INVALID_HEIGHT && floorZ != VMAP_INVALID_HEIGHT_VALUE &&
+            bot->GetPositionZ() - floorZ <= PARACHUTE_LAND_THRESHOLD)
+            bot->RemoveAurasByType(SPELL_AURA_FEATHER_FALL);
+    }
+    ClearStaleFlightFlags();
+
+    // Determine if there are no attackers
+    bool noAttackers = !AI_VALUE2(bool, "combat", "self target") || !AI_VALUE(uint8, "attacker count");
+    bool enemy = AI_VALUE(Unit*, "enemy player target");
+    bool dps = AI_VALUE(Unit*, "dps target");
+    bool shouldDismount = false;
+    bool shouldMount = false;
+
+    Unit* currentTarget = AI_VALUE(Unit*, "current target");
+    if (currentTarget)
+    {
+        float dismountDistance = CalculateDismountDistance();
+        float mountDistance = CalculateMountDistance();
+        float combatReach = bot->GetCombatReach() + currentTarget->GetCombatReach();
+        float distanceToTarget = bot->GetExactDist(currentTarget);
+
+        shouldDismount = (distanceToTarget <= dismountDistance + combatReach);
+        shouldMount = (distanceToTarget > mountDistance + combatReach);
+    }
+    else
+    {
+        shouldMount = true;
+    }
+
+    // If should dismount, or master (if any) is no longer in travel form, yet bot still is, remove the shapeshifts
+    if (shouldDismount ||
+        (masterInShapeshiftForm != FORM_TRAVEL && botInShapeshiftForm == FORM_TRAVEL) ||
+        (masterInShapeshiftForm != FORM_FLIGHT && botInShapeshiftForm == FORM_FLIGHT && master && !master->IsMounted()) ||
+        (masterInShapeshiftForm != FORM_FLIGHT_EPIC && botInShapeshiftForm == FORM_FLIGHT_EPIC && master && !master->IsMounted()))
+        botAI->RemoveShapeshift();
+
+    if (shouldDismount && bot->IsMounted())
+    {
+        Dismount();
+        return true;
+    }
+
+    bool inBattleground = bot->InBattleground();
+    bool const noRealMaster = (!master || master == bot);
+
+    // If there is a master and bot not in BG, follow master's mount state regardless of group leader
+    if (!noRealMaster && !inBattleground)
+    {
+        if (ShouldFollowMasterMountState(master, noAttackers, shouldMount))
+            return Mount();
+
+        else if (ShouldDismountForMaster(master) && bot->IsMounted())
+        {
+            Dismount();
+            return true;
+        }
+
+        return false;
+    }
+
+    // No real master (random bot or self-bot) OR bot in BG
+    if ((noRealMaster || inBattleground) && !bot->IsMounted() &&
+        noAttackers && shouldMount && !bot->IsInCombat())
+        return Mount();
+
+    if (!bot->IsFlying() && shouldDismount && bot->IsMounted() &&
+        (enemy || dps || (!noAttackers && bot->IsInCombat())))
+    {
+        Dismount();
+        return true;
+    }
+
+    return false;
 }
 
 bool CheckMountStateAction::isUseful()
@@ -99,11 +190,6 @@ bool CheckMountStateAction::isUseful()
     // BG Logic
     if (bot->InBattleground())
     {
-        // In WSG (489) and EotS (566), mounts are disabled by BG rules; avoid mount-cast spam/jitter.
-                uint32 mapId = bot->GetMapId();
-                if (mapId == 489 || mapId == 566)
-                    return false;
-
         // Do not use when carrying BG Flags
         if (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
             return false;
@@ -115,76 +201,6 @@ bool CheckMountStateAction::isUseful()
     }
 
     return true;
-}
-
-bool CheckMountStateAction::Execute(Event /*event*/)
-{
-    // Determine if there are no attackers
-    bool noAttackers = !AI_VALUE2(bool, "combat", "self target") || !AI_VALUE(uint8, "attacker count");
-    bool enemy = AI_VALUE(Unit*, "enemy player target");
-    bool dps = AI_VALUE(Unit*, "dps target");
-    bool shouldDismount = false;
-    bool shouldMount = false;
-
-    Unit* currentTarget = AI_VALUE(Unit*, "current target");
-    if (currentTarget)
-    {
-        float dismountDistance = CalculateDismountDistance();
-        float mountDistance = CalculateMountDistance();
-        float combatReach = bot->GetCombatReach() + currentTarget->GetCombatReach();
-        float distanceToTarget = bot->GetExactDist(currentTarget);
-
-        shouldDismount = (distanceToTarget <= dismountDistance + combatReach);
-        shouldMount = (distanceToTarget > mountDistance + combatReach);
-    }
-    else
-    {
-        shouldMount = true;
-    }
-
-    // If should dismount, or master (if any) is no longer in travel form, yet bot still is, remove the shapeshifts
-    if (shouldDismount ||
-        (masterInShapeshiftForm != FORM_TRAVEL && botInShapeshiftForm == FORM_TRAVEL) ||
-        (masterInShapeshiftForm != FORM_FLIGHT && botInShapeshiftForm == FORM_FLIGHT && master && !master->IsMounted()) ||
-        (masterInShapeshiftForm != FORM_FLIGHT_EPIC && botInShapeshiftForm == FORM_FLIGHT_EPIC && master && !master->IsMounted()))
-        botAI->RemoveShapeshift();
-
-    if (shouldDismount && bot->IsMounted())
-    {
-        Dismount();
-        return true;
-    }
-
-    bool inBattleground = bot->InBattleground();
-
-    // If there is a master and bot not in BG, follow master's mount state regardless of group leader
-    if (master && !inBattleground)
-    {
-        if (ShouldFollowMasterMountState(master, noAttackers, shouldMount))
-            return Mount();
-
-        else if (ShouldDismountForMaster(master) && bot->IsMounted())
-        {
-            Dismount();
-            return true;
-        }
-
-        return false;
-    }
-
-    // If there is no master or bot in BG
-    if ((!master || inBattleground) && !bot->IsMounted() &&
-        noAttackers && shouldMount && !bot->IsInCombat())
-        return Mount();
-
-    if (!bot->IsFlying() && shouldDismount && bot->IsMounted() &&
-        (enemy || dps || (!noAttackers && bot->IsInCombat())))
-    {
-        Dismount();
-        return true;
-    }
-
-    return false;
 }
 
 bool CheckMountStateAction::Mount()
@@ -204,7 +220,7 @@ bool CheckMountStateAction::Mount()
     // Get bot mount data
     MountData mountData = CollectMountData(bot);
     int32 masterMountType = GetMountType(master);
-    int32 masterSpeed = CalculateMasterMountSpeed(master, mountData);
+    int32 masterSpeed = CalculateMasterMountSpeed(master);
 
     // Try shapeshift
     if (TryForms(master, masterMountType, masterSpeed))
@@ -233,6 +249,42 @@ void CheckMountStateAction::Dismount()
 
     WorldPacket emptyPacket;
     bot->GetSession()->HandleCancelMountAuraOpcode(emptyPacket);
+
+    ClearStaleFlightFlags();
+}
+
+void CheckMountStateAction::ClearStaleFlightFlags()
+{
+    if (bot->HasIncreaseMountedFlightSpeedAura() || bot->HasFlyAura())
+        return;
+
+    if (bot->HasUnitMovementFlag(MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY))
+    {
+        bot->RemoveUnitMovementFlag(MOVEMENTFLAG_FLYING | MOVEMENTFLAG_DISABLE_GRAVITY | MOVEMENTFLAG_CAN_FLY);
+        if (!bot->IsRooted())
+            bot->SendMovementFlagUpdate();
+    }
+}
+
+void CheckMountStateAction::CompleteDismount(Player* bot)
+{
+    if (!bot || !bot->IsInWorld())
+        return;
+
+    float const x = bot->GetPositionX();
+    float const y = bot->GetPositionY();
+    float const startZ = bot->GetPositionZ();
+
+    float groundZ = startZ;
+    bot->UpdateAllowedPositionZ(x, y, groundZ);
+
+    bot->GetMotionMaster()->MoveFall();
+    MovementInfo fallInfo = bot->m_movementInfo;
+    // Need to set the start of the fall, otherwise the fall may start from too high of a Z and kill the bot.
+    bot->SetFallInformation(0, startZ);
+    fallInfo.pos.Relocate(x, y, groundZ);
+    bot->HandleFall(fallInfo);
+    bot->RemoveUnitMovementFlag(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR);
 }
 
 bool CheckMountStateAction::TryForms(Player* master, int32 masterMountType, int32 masterSpeed) const
@@ -439,7 +491,25 @@ bool CheckMountStateAction::ShouldDismountForMaster(Player* master) const
     return !isMasterMounted && bot->IsMounted();
 }
 
-int32 CheckMountStateAction::CalculateMasterMountSpeed(Player* master, const MountData& mountData) const
+static bool BotCanUseFlyingMount(Player const* bot)
+{
+    if (bot->GetPureSkillValue(SKILL_RIDING) < 225)
+        return false;
+
+    AreaTableEntry const* area = sAreaTableStore.LookupEntry(bot->GetAreaId());
+    if (!area || !area->IsFlyable())
+        return false;
+    if (area->flags & AREA_FLAG_NO_FLY_ZONE)
+        return false;
+
+    uint32 const vmap = GetVirtualMapForMapAndZone(bot->GetMapId(), bot->GetZoneId());
+    if (vmap == MAP_NORTHREND && !bot->HasSpell(SPELL_COLD_WEATHER_FLYING))
+        return false;
+
+    return true;
+}
+
+int32 CheckMountStateAction::CalculateMasterMountSpeed(Player* master) const
 {
     // Check riding skill and level requirements
     int32 ridingSkill = bot->GetPureSkillValue(SKILL_RIDING);
@@ -448,8 +518,10 @@ int32 CheckMountStateAction::CalculateMasterMountSpeed(Player* master, const Mou
     if (ridingSkill <= 75 && botLevel < static_cast<int32>(sPlayerbotAIConfig.useFastGroundMountAtMinLevel))
         return 59;
 
-    // If there is a master and bot not in BG, use master's aura effects.
-    if (master && !bot->InBattleground())
+    // check if bot has master and if master is self
+    bool const noRealMaster = (!master || master == bot);
+
+    if (!noRealMaster && !bot->InBattleground())
     {
         auto auraEffects = master->GetAuraEffectsByType(SPELL_AURA_MOUNTED);
         if (!auraEffects.empty())
@@ -463,27 +535,27 @@ int32 CheckMountStateAction::CalculateMasterMountSpeed(Player* master, const Mou
             return 279;
         else if (masterInShapeshiftForm == FORM_FLIGHT)
             return 149;
-    }
-    else
-    {
-        // Bots on their own.
-        int32 speed = mountData.maxSpeed;
-        if (bot->InBattleground() && speed > 99)
-            return 99;
-
-        return speed;
+        return 59;  // walk pace
     }
 
-    return 59;
+    // No real master OR battleground: pick speed by skill tier.
+    if (!bot->InBattleground() && BotCanUseFlyingMount(bot))
+        return (ridingSkill >= 300) ? 279 : 149;
+
+    int32 maxGround = (ridingSkill >= 150) ? 99 : 59;
+    if (bot->InBattleground() && maxGround > 99)
+        maxGround = 99;
+    return maxGround;
 }
 
 uint32 CheckMountStateAction::GetMountType(Player* master) const
 {
-    if (!master)
-        return 0;
+    bool const noRealMaster = (!master || master == bot);
+
+    if (noRealMaster)
+        return (!bot->InBattleground() && BotCanUseFlyingMount(bot)) ? 1 : 0;
 
     auto auraEffects = master->GetAuraEffectsByType(SPELL_AURA_MOUNTED);
-
     if (!auraEffects.empty())
     {
         SpellInfo const* masterSpell = auraEffects.front()->GetSpellInfo();

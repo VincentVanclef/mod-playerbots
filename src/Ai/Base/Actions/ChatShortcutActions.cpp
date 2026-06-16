@@ -7,6 +7,7 @@
 
 #include "Event.h"
 #include "Formations.h"
+#include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "PositionValue.h"
 
@@ -42,7 +43,7 @@ void PositionsResetAction::SetStayPosition(float x, float y, float z)
     posMap["stay"] = pos;
 }
 
-bool FollowChatShortcutAction::Execute(Event event)
+bool FollowChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -68,9 +69,7 @@ bool FollowChatShortcutAction::Execute(Event event)
         std::string const target = formation->GetTargetName();
         bool moved = false;
         if (!target.empty())
-        {
             moved = Follow(AI_VALUE(Unit*, target));
-        }
         else
         {
             WorldLocation loc = formation->GetLocation();
@@ -82,14 +81,13 @@ bool FollowChatShortcutAction::Execute(Event event)
                         true, priority);
         }
 
-        if (Pet* pet = bot->GetPet())
-        {
+        if (bot->GetPet())
             botAI->PetFollow();
-        }
 
         if (moved)
         {
-            botAI->TellMaster("Following");
+            botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+                "following", "Following", {}));
             return true;
         }
     }
@@ -112,11 +110,12 @@ bool FollowChatShortcutAction::Execute(Event event)
     }
     */
 
-    botAI->TellMaster("Following");
+    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+        "following", "Following", {}));
     return true;
 }
 
-bool StayChatShortcutAction::Execute(Event event)
+bool StayChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -129,11 +128,12 @@ bool StayChatShortcutAction::Execute(Event event)
     SetReturnPosition(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
     SetStayPosition(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
 
-    botAI->TellMaster("Staying");
+    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+        "staying", "Staying", {}));
     return true;
 }
 
-bool MoveFromGroupChatShortcutAction::Execute(Event event)
+bool MoveFromGroupChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -144,11 +144,12 @@ bool MoveFromGroupChatShortcutAction::Execute(Event event)
     botAI->ChangeStrategy("+move from group", BOT_STATE_NON_COMBAT);
     botAI->ChangeStrategy("+move from group", BOT_STATE_COMBAT);
 
-    botAI->TellMaster("Moving away from group");
+    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+        "move_from_group", "Moving away from group", {}));
     return true;
 }
 
-bool FleeChatShortcutAction::Execute(Event event)
+bool FleeChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -163,15 +164,17 @@ bool FleeChatShortcutAction::Execute(Event event)
 
     if (bot->GetMapId() != master->GetMapId() || bot->GetDistance(master) > sPlayerbotAIConfig.sightDistance)
     {
-        botAI->TellError("I will not flee with you - too far away");
+        botAI->TellError(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+            "fleeing_far", "I will not flee with you - too far away", {}));
         return true;
     }
 
-    botAI->TellMaster("Fleeing");
+    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+        "fleeing", "Fleeing", {}));
     return true;
 }
 
-bool GoawayChatShortcutAction::Execute(Event event)
+bool GoawayChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -184,11 +187,12 @@ bool GoawayChatShortcutAction::Execute(Event event)
     ResetReturnPosition();
     ResetStayPosition();
 
-    botAI->TellMaster("Running away");
+    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+        "running_away", "Running away", {}));
     return true;
 }
 
-bool GrindChatShortcutAction::Execute(Event event)
+bool GrindChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -200,11 +204,12 @@ bool GrindChatShortcutAction::Execute(Event event)
     ResetReturnPosition();
     ResetStayPosition();
 
-    botAI->TellMaster("Grinding");
+    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+        "grinding", "Grinding", {}));
     return true;
 }
 
-bool TankAttackChatShortcutAction::Execute(Event event)
+bool TankAttackChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -220,11 +225,12 @@ bool TankAttackChatShortcutAction::Execute(Event event)
     ResetReturnPosition();
     ResetStayPosition();
 
-    botAI->TellMaster("Attacking");
+    botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault(
+        "attacking", "Attacking", {}));
     return true;
 }
 
-bool MaxDpsChatShortcutAction::Execute(Event event)
+bool MaxDpsChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)
@@ -241,7 +247,21 @@ bool MaxDpsChatShortcutAction::Execute(Event event)
     return true;
 }
 
-bool BwlChatShortcutAction::Execute(Event event)
+bool NaxxChatShortcutAction::Execute(Event /*event*/)
+{
+    Player* master = GetMaster();
+    if (!master)
+        return false;
+
+    botAI->Reset();
+    botAI->ChangeStrategy("+naxx", BOT_STATE_NON_COMBAT);
+    botAI->ChangeStrategy("+naxx", BOT_STATE_COMBAT);
+    botAI->TellMasterNoFacing("Add Naxx Strategies!");
+    // bot->Say("Add Naxx Strategies!", LANG_UNIVERSAL);
+    return true;
+}
+
+bool BwlChatShortcutAction::Execute(Event /*event*/)
 {
     Player* master = GetMaster();
     if (!master)

@@ -5,8 +5,6 @@
 
 #include "NonCombatStrategy.h"
 
-#include "Playerbots.h"
-
 void NonCombatStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
 {
     triggers.push_back(new TriggerNode("random", { NextAction("clean quest log", 1.0f) }));
@@ -19,7 +17,7 @@ void CollisionStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
         new TriggerNode("collision", { NextAction("move out of collision", 2.0f) }));
 }
 
-void MountStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
+void MountStrategy::InitTriggers(std::vector<TriggerNode*>& /*triggers*/)
 {
 }
 
@@ -58,7 +56,7 @@ void MasterFishingStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
             "random",
             {
                 NextAction("end master fishing", 12.0f),
-                NextAction("equip upgrades", 6.0f)
+                NextAction("equip upgrades packet action", 6.0f)
             }
         )
     );

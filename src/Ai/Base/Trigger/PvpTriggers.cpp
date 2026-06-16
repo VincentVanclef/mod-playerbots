@@ -310,7 +310,7 @@ bool PlayerWantsInBattlegroundTrigger::IsActive()
     if (bg && bg->GetStatus() == STATUS_IN_PROGRESS)
         return false;
 
-    if (!bot->CanJoinToBattleground())
+    if (bot->IsDeserter())
         return false;
 
     return true;

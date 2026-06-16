@@ -17,6 +17,7 @@
 
 #include "Playerbots.h"
 
+#include "BattlefieldScript.h"
 #include "Channel.h"
 #include "Config.h"
 #include "DatabaseEnv.h"
@@ -71,9 +72,7 @@ public:
         }
 
         if (revision.empty())
-        {
             revision = "Unknown Playerbots Database Revision";
-        }
     }
 };
 
@@ -113,13 +112,10 @@ public:
 
             if (sPlayerbotAIConfig.enabled || sPlayerbotAIConfig.randomBotAutologin)
             {
-                std::string roundedTime =
-                    std::to_string(std::ceil((sPlayerbotAIConfig.maxRandomBots * 0.11 / 60) * 10) / 10.0);
-                roundedTime = roundedTime.substr(0, roundedTime.find('.') + 2);
+                std::string maxAllowedBotCount = std::to_string(sRandomPlayerbotMgr.GetMaxAllowedBotCount());
 
                 ChatHandler(player->GetSession()).SendSysMessage(
-                    "|cff00ff00Playerbots:|r bot initialization at server startup takes about '"
-                    + roundedTime + "' minutes.");
+                    "|cff00ff00Playerbots:|r The server is configured with " + maxAllowedBotCount + " bots.");
             }
         }
     }
@@ -217,16 +213,12 @@ public:
             Player* const member = itr->GetSource();
 
             if (member == nullptr)
-            {
                 continue;
-            }
 
             PlayerbotAI* const botAI = PlayerbotsMgr::instance().GetPlayerbotAI(member);
 
             if (botAI == nullptr)
-            {
                 continue;
-            }
 
             botAI->HandleCommand(type, msg, player);
         }
@@ -234,33 +226,25 @@ public:
         return true;
     }
 
-    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Guild* guild) override
+    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 /*lang*/, std::string& msg, Guild* /*guild*/) override
     {
         if (type != CHAT_MSG_GUILD)
-        {
             return true;
-        }
 
         PlayerbotMgr* playerbotMgr = PlayerbotsMgr::instance().GetPlayerbotMgr(player);
 
         if (playerbotMgr == nullptr)
-        {
             return true;
-        }
 
         for (PlayerBotMap::const_iterator it = playerbotMgr->GetPlayerBotsBegin(); it != playerbotMgr->GetPlayerBotsEnd(); ++it)
         {
             Player* const bot = it->second;
 
             if (bot == nullptr)
-            {
                 continue;
-            }
 
             if (bot->GetGuildId() != player->GetGuildId())
-            {
                 continue;
-            }
 
             PlayerbotsMgr::instance().GetPlayerbotAI(bot)->HandleCommand(type, msg, player);
         }
@@ -273,9 +257,7 @@ public:
         PlayerbotMgr* const playerbotMgr = PlayerbotsMgr::instance().GetPlayerbotMgr(player);
 
         if (playerbotMgr != nullptr && channel->GetFlags() & 0x18)
-        {
             playerbotMgr->HandleCommand(type, msg);
-        }
 
         sRandomPlayerbotMgr.HandleCommand(type, msg, player);
 
@@ -310,14 +292,10 @@ public:
             {
                 Player* member = gref->GetSource();
                 if (!member)
-                {
                     continue;
-                }
 
                 if (!member->GetSession()->IsBot())
-                {
                     return;
-                }
             }
         }
 
@@ -336,14 +314,10 @@ public:
         PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(player);
 
         if (botAI != nullptr)
-        {
             delete botAI;
-        }
 
         if (PlayerbotMgr* playerbotMgr = GET_PLAYERBOT_MGR(player))
-        {
             delete playerbotMgr;
-        }
     }
 };
 
@@ -441,14 +415,10 @@ public:
     void OnPlayerbotCheckPetitionAccount(Player* player, bool& found) override
     {
         if (!found)
-        {
             return;
-        }
 
         if (PlayerbotsMgr::instance().GetPlayerbotAI(player) != nullptr)
-        {
             found = false;
-        }
     }
 
     bool OnPlayerbotCheckUpdatesToSend(Player* player) override
@@ -456,9 +426,7 @@ public:
         PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(player);
 
         if (botAI == nullptr)
-        {
             return true;
-        }
 
         return botAI->IsRealPlayer();
     }
@@ -466,24 +434,18 @@ public:
     void OnPlayerbotPacketSent(Player* player, WorldPacket const* packet) override
     {
         if (player == nullptr)
-        {
             return;
-        }
 
         PlayerbotAI* botAI = PlayerbotsMgr::instance().GetPlayerbotAI(player);
 
         if (botAI != nullptr)
-        {
             botAI->HandleBotOutgoingPacket(*packet);
-        }
 
         if (PlayerbotMgr* playerbotMgr = GET_PLAYERBOT_MGR(player))
-        {
             playerbotMgr->HandleMasterOutgoingPacket(*packet);
-        }
     }
 
-    void OnPlayerbotUpdate(uint32 diff) override
+    void OnPlayerbotUpdate(uint32 /*diff*/) override
     {
         sRandomPlayerbotMgr.UpdateSessions();  // Per-bot updates only
     }
@@ -554,10 +516,22 @@ public:
     void OnBattlegroundEnd(Battleground* bg, TeamId /*winnerTeam*/) override { bgStrategies.erase(bg->GetInstanceID()); }
 };
 
+// Workaround for missing InitEnabledHooksIfNeeded for new BattlefieldScript in ScriptMgr
+class PlayerbotsBattlefieldScript : public BattlefieldScript
+{
+public:
+    PlayerbotsBattlefieldScript() : BattlefieldScript("PlayerbotsBattlefieldScript") { }
+};
+
 void AddPlayerbotsSecureLoginScripts();
+
+void AddSC_TempestKeepBotScripts();
+void AddSC_IcecrownBotScripts();
+void AddSC_HyjalSummitBotScripts();
 
 void AddPlayerbotsScripts()
 {
+    new PlayerbotsBattlefieldScript();
     new PlayerbotsDatabaseScript();
     new PlayerbotsPlayerScript();
     new PlayerbotsMiscScript();
@@ -568,4 +542,7 @@ void AddPlayerbotsScripts()
     AddPlayerbotsSecureLoginScripts();
     AddPlayerbotsCommandscripts();
     PlayerBotsGuildValidationScript();
+    AddSC_TempestKeepBotScripts();
+    AddSC_IcecrownBotScripts();
+    AddSC_HyjalSummitBotScripts();
 }

@@ -11,6 +11,14 @@
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
 
+namespace
+{
+constexpr uint32 SPELL_WARSONG_FLAG = 23333;
+constexpr uint32 SPELL_SILVERWING_FLAG = 23335;
+constexpr uint32 SPELL_NETHERSTORM_FLAG = 34976;
+constexpr uint32 SPELL_MASTER_POISONER_RANK_3 = 58410;
+}
+
 bool CastStealthAction::isUseful()
 {
     Unit* target = AI_VALUE(Unit*, "current target");
@@ -22,10 +30,11 @@ bool CastStealthAction::isUseful()
 bool CastStealthAction::isPossible()
 {
     // do not use with WSG flag or EYE flag
-    return !botAI->HasAura(23333, bot) && !botAI->HasAura(23335, bot) && !botAI->HasAura(34976, bot);
+    return !bot->HasAura(SPELL_WARSONG_FLAG) && !bot->HasAura(SPELL_SILVERWING_FLAG) &&
+           !bot->HasAura(SPELL_NETHERSTORM_FLAG);
 }
 
-bool UnstealthAction::Execute(Event event)
+bool UnstealthAction::Execute(Event /*event*/)
 {
     botAI->RemoveAura("stealth");
     // botAI->ChangeStrategy("+dps,-stealthed", BOT_STATE_COMBAT);
@@ -33,7 +42,7 @@ bool UnstealthAction::Execute(Event event)
     return true;
 }
 
-bool CheckStealthAction::Execute(Event event)
+bool CheckStealthAction::Execute(Event /*event*/)
 {
     if (botAI->HasAura("stealth", bot))
     {
@@ -50,7 +59,8 @@ bool CheckStealthAction::Execute(Event event)
 bool CastVanishAction::isUseful()
 {
     // do not use with WSG flag or EYE flag
-    return !botAI->HasAura(23333, bot) && !botAI->HasAura(23335, bot) && !botAI->HasAura(34976, bot);
+    return !bot->HasAura(SPELL_WARSONG_FLAG) && !bot->HasAura(SPELL_SILVERWING_FLAG) &&
+           !bot->HasAura(SPELL_NETHERSTORM_FLAG);
 }
 
 bool CastEnvenomAction::isUseful()
@@ -61,7 +71,7 @@ bool CastEnvenomAction::isUseful()
 bool CastEnvenomAction::isPossible()
 {
     // alternate to eviscerate if talents unlearned
-    return botAI->HasAura(58410, bot) /* Master Poisoner */;
+    return bot->HasAura(SPELL_MASTER_POISONER_RANK_3);
 }
 
 bool CastTricksOfTheTradeOnMainTankAction::isUseful()
@@ -69,7 +79,7 @@ bool CastTricksOfTheTradeOnMainTankAction::isUseful()
     return CastSpellAction::isUseful() && AI_VALUE2(float, "distance", GetTargetName()) < 20.0f;
 }
 
-bool UseDeadlyPoisonAction::Execute(Event event)
+bool UseDeadlyPoisonAction::Execute(Event /*event*/)
 {
     std::vector<std::string> poison_suffixs = {" IX", " VIII", " VII", " VI", " V", " IV", " III", " II", ""};
     std::vector<Item*> items;
@@ -109,7 +119,7 @@ bool UseDeadlyPoisonAction::isPossible()
     return !items.empty();
 }
 
-bool UseInstantPoisonAction::Execute(Event event)
+bool UseInstantPoisonAction::Execute(Event /*event*/)
 {
     std::vector<std::string> poison_suffixs = {" IX", " VIII", " VII", " VI", " V", " IV", " III", " II", ""};
     std::vector<Item*> items;
@@ -148,7 +158,7 @@ bool UseInstantPoisonAction::isPossible()
     return !items.empty();
 }
 
-bool UseInstantPoisonOffHandAction::Execute(Event event)
+bool UseInstantPoisonOffHandAction::Execute(Event /*event*/)
 {
     std::vector<std::string> poison_suffixs = {" IX", " VIII", " VII", " VI", " V", " IV", " III", " II", ""};
     std::vector<Item*> items;
