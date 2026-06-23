@@ -1002,7 +1002,6 @@ private:
     std::unordered_map<uint32, std::vector<WorldLocation>> creatureSpawnsByTemplate;
     std::map<uint32, LevelBracket> zone2LevelBracket;
 };
-#define sTravelMgr TravelMgr::instance()
 
 #define sTravelMgr TravelMgr::instance()
 

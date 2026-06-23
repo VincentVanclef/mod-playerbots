@@ -8,18 +8,14 @@
 #include "Playerbots.h"
 #include "Strategy.h"
 
-class HealPaladinStrategyActionNodeFactory : public NamedObjectFactory<ActionNode>
-{
-};
-
 HealPaladinStrategy::HealPaladinStrategy(PlayerbotAI* botAI) : GenericPaladinStrategy(botAI)
 {
-    actionNodeFactories.Add(new HealPaladinStrategyActionNodeFactory());
+    // No custom ActionNodeFactory needed
 }
 
 std::vector<NextAction> HealPaladinStrategy::getDefaultActions()
 {
-    return { NextAction("flash of light on party", ACTION_DEFAULT + 0.5f), NextAction("holy light on party", ACTION_DEFAULT) };
+    return { NextAction("judgement of light", ACTION_DEFAULT) };
 }
 
 void HealPaladinStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)

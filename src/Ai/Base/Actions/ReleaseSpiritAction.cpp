@@ -14,39 +14,7 @@
 #include "Playerbots.h"
 #include "ServerFacade.h"
 #include "Corpse.h"
-#include "Group.h"
 #include "Log.h"
-
-namespace
-{
-    // Very lightweight "can rez" detector for WotLK-era dungeons.
-    // (We intentionally avoid spell checks here; class-based is sufficient and stable across forks.)
-    bool HasAliveResurrector(Group* group)
-    {
-        if (!group)
-            return false;
-
-        for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
-        {
-            Player* member = itr->GetSource();
-            if (!member || !member->IsInWorld() || member->isDead() || member->HasPlayerFlag(PLAYER_FLAGS_GHOST))
-                continue;
-
-            switch (member->getClass())
-            {
-                case CLASS_PRIEST:
-                case CLASS_PALADIN:
-                case CLASS_SHAMAN:
-                case CLASS_DRUID:
-                    return true;
-                default:
-                    break;
-            }
-        }
-
-        return false;
-    }
-}
 
 // ReleaseSpiritAction implementation
 bool ReleaseSpiritAction::Execute(Event event)
@@ -115,9 +83,6 @@ void ReleaseSpiritAction::LogRelease(const std::string& releaseMsg) const
 // AutoReleaseSpiritAction implementation
 bool AutoReleaseSpiritAction::Execute(Event /*event*/)
 {
-    // Reset death timer; we are releasing now.
-    m_deathStartTime = 0;
-
     IncrementDeathCount();
     bot->DurabilityRepairAll(false, 1.0f, false);
     LogRelease("auto released");
@@ -140,23 +105,13 @@ bool AutoReleaseSpiritAction::Execute(Event /*event*/)
 bool AutoReleaseSpiritAction::isUseful()
 {
     if (!bot->isDead() || bot->InArena())
-    {
-        m_deathStartTime = 0;
         return false;
-    }
-
-    // Start (or keep) the "time since death" window while dead and not yet a ghost.
-    if (!m_deathStartTime)
-        m_deathStartTime = time(nullptr);
 
     if (bot->InBattleground())
         return ShouldDelayBattlegroundRelease();
 
     if (bot->HasPlayerFlag(PLAYER_FLAGS_GHOST))
-    {
-        m_deathStartTime = 0;
         return false;
-    }
 
     return ShouldAutoRelease();
 }
@@ -228,22 +183,7 @@ bool AutoReleaseSpiritAction::ShouldAutoRelease() const
         bot->GetMap() &&
         (bot->GetMap()->IsRaid() || bot->GetMap()->IsDungeon()))
     {
-        // In instanced PvE (dungeons/raids), prefer to WAIT briefly for a possible resurrection.
-        // If an alive party member can resurrect, wait up to 25s; otherwise release immediately.
-        constexpr time_t WAIT_FOR_REZ_SECONDS = 25;
-        const time_t now = time(nullptr);
-
-        if (HasAliveResurrector(bot->GetGroup()))
-        {
-            // If we somehow missed setting the timer, fail safe by starting it now.
-            if (!m_deathStartTime)
-                m_deathStartTime = now;
-
-            if (now - m_deathStartTime < WAIT_FOR_REZ_SECONDS)
-                return false; // keep waiting
-        }
-
-        return true; // timeout reached, or nobody alive can rez
+        return false;
     }
 
     return ServerFacade::instance().IsDistanceGreaterThan(

@@ -9,10 +9,7 @@ NewRpgStrategy::NewRpgStrategy(PlayerbotAI* botAI) : Strategy(botAI) {}
 
 std::vector<NextAction> NewRpgStrategy::getDefaultActions()
 {
-        if (botAI->GetState() == BOT_STATE_COMBAT)
-        return {};
-
-// the releavance should be greater than grind
+    // the releavance should be greater than grind
     return {
         NextAction("new rpg status update", 11.0f)
     };

@@ -23,8 +23,6 @@ bool PlayerHasNoFlag::IsActive()
         if (botAI->GetBot()->GetBattlegroundTypeId() == BattlegroundTypeId::BATTLEGROUND_WS)
         {
             BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
-            if (!bg)
-                return false;
             if (!(bg->GetFlagState(bg->GetOtherTeamId(bot->GetTeamId())) == BG_WS_FLAG_STATE_ON_PLAYER))
                 return true;
 
@@ -105,8 +103,6 @@ bool PlayerIsInBattlegroundWithoutFlag::IsActive()
         if (botAI->GetBot()->GetBattlegroundTypeId() == BattlegroundTypeId::BATTLEGROUND_WS)
         {
             BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
-            if (!bg)
-                return false;
             if (!(bg->GetFlagState(bg->GetOtherTeamId(bot->GetTeamId())) == BG_WS_FLAG_STATE_ON_PLAYER))
                 return true;
 
@@ -135,8 +131,6 @@ bool PlayerHasFlag::IsCapturingFlag(Player* bot)
         if (bot->GetBattlegroundTypeId() == BATTLEGROUND_WS)
         {
             BattlegroundWS* bg = (BattlegroundWS*)bot->GetBattleground();
-            if (!bg)
-                return false;
             // bot is horde and has ally flag
             if (bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_ALLIANCE))
             {
@@ -171,8 +165,6 @@ bool PlayerHasFlag::IsCapturingFlag(Player* bot)
         if (bot->GetBattlegroundTypeId() == BATTLEGROUND_EY)
         {
             BattlegroundEY* bg = (BattlegroundEY*)bot->GetBattleground();
-            if (!bg)
-                return false;
 
             // Check if bot has the flag
             if (bot->GetGUID() == bg->GetFlagPickerGUID())
@@ -209,8 +201,6 @@ bool TeamHasFlag::IsActive()
         return false;
 
     BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
-    if (!bg)
-        return false;
 
     ObjectGuid botGuid = bot->GetGUID();
     TeamId teamId = bot->GetTeamId();
@@ -234,8 +224,6 @@ bool EnemyTeamHasFlag::IsActive()
         if (botAI->GetBot()->GetBattlegroundTypeId() == BattlegroundTypeId::BATTLEGROUND_WS)
         {
             BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
-            if (!bg)
-                return false;
 
             if (bot->GetTeamId() == TEAM_HORDE)
             {
@@ -303,11 +291,10 @@ bool PlayerWantsInBattlegroundTrigger::IsActive()
     if (bot->InBattleground())
         return false;
 
-    Battleground* bg = bot->GetBattleground();
-    if (bg && bg->GetStatus() == STATUS_WAIT_JOIN)
+    if (bot->GetBattleground() && bot->GetBattleground()->GetStatus() == STATUS_WAIT_JOIN)
         return false;
 
-    if (bg && bg->GetStatus() == STATUS_IN_PROGRESS)
+    if (bot->GetBattleground() && bot->GetBattleground()->GetStatus() == STATUS_IN_PROGRESS)
         return false;
 
     if (bot->IsDeserter())

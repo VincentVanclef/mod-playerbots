@@ -5,49 +5,12 @@
 
 #include "AttackersValue.h"
 
-#include "Battleground.h"
 #include "CellImpl.h"
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Playerbots.h"
 #include "ReputationMgr.h"
 #include "ServerFacade.h"
-
-namespace
-{
-Player* RTG_GetArenaRelationPlayer(Unit* unit)
-{
-    if (!unit)
-        return nullptr;
-
-    if (Player* player = unit->ToPlayer())
-        return player;
-
-    if (Unit* owner = unit->GetOwner())
-        return owner->ToPlayer();
-
-    return nullptr;
-}
-
-bool RTG_ArenaHasExplicitTeamRelation(Player* bot, Unit* unit, bool& sameTeam)
-{
-    sameTeam = false;
-    if (!bot || !unit || !bot->InArena())
-        return false;
-
-    Player* otherPlayer = RTG_GetArenaRelationPlayer(unit);
-    if (!otherPlayer || !otherPlayer->InArena())
-        return false;
-
-    Battleground* botBg = bot->GetBattleground();
-    Battleground* otherBg = otherPlayer->GetBattleground();
-    if (!botBg || !otherBg || botBg != otherBg)
-        return false;
-
-    sameTeam = bot->GetBgTeamId() == otherPlayer->GetBgTeamId();
-    return true;
-}
-}
 
 GuidVector AttackersValue::Calculate()
 {
@@ -86,9 +49,7 @@ GuidVector AttackersValue::Calculate()
     if (bot->duel && bot->duel->Opponent)
         result.push_back(bot->duel->Opponent->GetGUID());
 
-    // In same-faction arenas, hostility must follow battleground team membership,
-    // not generic faction friendliness. Keep the arena fallback target scan, but
-    // let explicit arena-team filtering decide who is valid.
+    // workaround for bots of same faction not fighting in arena
     if (bot->InArena())
     {
         GuidVector possibleTargets = AI_VALUE(GuidVector, "possible targets");
@@ -194,14 +155,7 @@ bool AttackersValue::IsPossibleTarget(Unit* attacker, Player* bot, float /*range
         return false;
 
     // Relationship checks
-    bool arenaSameTeam = false;
-    bool hasArenaTeamRelation = RTG_ArenaHasExplicitTeamRelation(bot, attacker, arenaSameTeam);
-    if (hasArenaTeamRelation)
-    {
-        if (arenaSameTeam)
-            return false;
-    }
-    else if (attacker->IsFriendlyTo(bot))
+    if (attacker->IsFriendlyTo(bot))
         return false;
 
     // Critter exception
@@ -238,7 +192,7 @@ bool AttackersValue::IsPossibleTarget(Unit* attacker, Player* bot, float /*range
     }
 
     // Unflagged player check
-    if (attacker->IsPlayer() && !hasArenaTeamRelation && !attacker->IsPvP() && !attacker->IsFFAPvP() &&
+    if (attacker->IsPlayer() && !attacker->IsPvP() && !attacker->IsFFAPvP() &&
         (!bot->duel || bot->duel->Opponent != attacker))
         return false;
 

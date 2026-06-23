@@ -6,8 +6,9 @@
 #include "PlayerbotCommandServer.h"
 
 #include <boost/asio.hpp>
+#include <boost/bind.hpp>
 #include <boost/smart_ptr.hpp>
-#include <thread>
+#include <boost/thread/thread.hpp>
 #include <cstdlib>
 #include "RandomPlayerbotMgr.h"
 
@@ -64,8 +65,7 @@ void server(Acore::Asio::IoContext& io_service, short port)
     {
         socket_ptr sock(new tcp::socket(io_service));
         a.accept(*sock);
-        std::thread t(session, sock);
-        t.detach();
+        boost::thread t(boost::bind(session, sock));
     }
 }
 

@@ -8,7 +8,6 @@
 #include "Event.h"
 #include "ObjectAccessor.h"
 #include "PlayerbotAIConfig.h"
-#include "RandomPlayerbotMgr.h"
 #include "PlayerbotSecurity.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
@@ -27,22 +26,6 @@ bool AcceptInvitationAction::Execute(Event event)
     Player* inviter = ObjectAccessor::FindPlayer(grp->GetLeaderGUID());
     if (!inviter)
         return false;
-
-    // ------------------------------------------------------------------
-    // RTG policy: never allow grouping with bots in the open world.
-    // Bots may only be grouped via:
-    //  - Dungeon Finder (LFG groups)
-    //  - Battleground/Arena (BG groups)
-    // All other invites are declined to prevent exploitation.
-    // ------------------------------------------------------------------
-    if (!grp->isLFGGroup() && !grp->isBGGroup())
-    {
-        WorldPacket data(SMSG_GROUP_DECLINE, 10);
-        data << bot->GetName();
-        inviter->SendDirectMessage(&data);
-        bot->UninviteFromGroup();
-        return false;
-    }
 
     if (!botAI->GetSecurity()->CheckLevelFor(PLAYERBOT_SECURITY_INVITE, false, inviter))
     {
@@ -75,9 +58,7 @@ bool AcceptInvitationAction::Execute(Event event)
 
     botAI->TellMaster(PlayerbotTextMgr::instance().GetBotTextOrDefault("hello", "Hello", {}));
 
-
     if (sPlayerbotAIConfig.summonWhenGroup && bot->GetDistance(inviter) > sPlayerbotAIConfig.sightDistance)
-
     {
         Teleport(inviter, bot, true);
     }

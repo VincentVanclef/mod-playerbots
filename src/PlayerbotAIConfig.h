@@ -8,11 +8,14 @@
 
 #include <mutex>
 #include <unordered_map>
+#include <set>
+#include <vector>
+#include <map>
+#include <algorithm>
+#include <string>
 
-#include "Common.h"
 #include "DBCEnums.h"
 #include "SharedDefines.h"
-#include "Talentspec.h"
 
 enum class BotCheatMask : uint32
 {
@@ -69,12 +72,12 @@ enum NewRpgStatus : int
 class PlayerbotAIConfig
 {
 public:
-    PlayerbotAIConfig(){};
     static PlayerbotAIConfig& instance()
-{
-    static PlayerbotAIConfig instance;
-    return instance;
-}
+    {
+        static PlayerbotAIConfig instance;
+
+        return instance;
+    }
 
     bool Initialize();
     bool IsInRandomAccountList(uint32 id);
@@ -110,40 +113,6 @@ public:
 
     uint32 openGoSpell;
     bool randomBotAutologin;
-
-    // RTG: Event-driven bots (keep bots offline unless needed for BG/LFG)
-    bool rtgEventDriven = false;
-    bool rtgSmartQueue = true;
-    uint32 rtgDemandCheckSeconds = 5;
-    uint32 rtgQueueGraceSeconds = 30;
-    uint32 rtgQueueBotLevel = 19;
-    uint32 rtgEventMaxBots = 120; // overall RTG event-driven helper ceiling
-    uint32 rtgBgMaxBots = 77; // battleground helper sublimit
-    uint32 rtgLfgMaxBots = 60; // rdf/lfg helper sublimit
-    bool rtgKeepWorldBots = false; // if true, preserves normal world population target
-    bool rtgEventDebug = false; // verbose queue supervisor logging
-    uint32 rtgNoPlayersRetireDelay = 60; // fast queue-helper retirement once all real players are gone
-    uint32 rtgDungeonFinishedLogoutDelay = 90; // how long finished dungeon helpers linger before logout
-    bool rtgQueueOwnershipEnable = true;
-    bool rtgQueueOwnershipProtectInBattleground = true;
-    uint32 rtgQueueOwnershipRetireRetrySeconds = 15;
-    uint32 rtgQueueOwnershipMaxTransitionSeconds = 60;
-    bool rtgQueueOwnershipDebug = false;
-
-    // RTG: Optional low-bracket recycle caps (only used if your recycle logic is enabled elsewhere)
-    bool rtgLowBracketCapsEnable = false;
-    uint32 rtgLowBracketBotCap = 40;
-    uint32 rtgLowBotsPerNewPlayer = 20;
-    bool rtgPrefer19If19Queueing = true;
-    bool rtgPvpGearStrict = true;
-    float rtgPvpGearStaminaWeightBonus = 0.45f;
-    float rtgPvpGearCritWeightBonus = 0.35f;
-    bool rtgPvpStrategyEnable = true;
-    std::string rtgBgCombatStrategyOverrides;
-    std::string rtgArenaCombatStrategyOverrides;
-    std::string rtgBgNonCombatStrategyOverrides;
-    std::string rtgArenaNonCombatStrategyOverrides;
-
     bool botAutologin;
     std::string randomBotMapsAsString;
     float probTeleToBankers;
@@ -172,11 +141,6 @@ public:
     float randomBotMinLevelChance, randomBotMaxLevelChance;
     float randomBotRpgChance;
     uint32 minRandomBots, maxRandomBots;
-
-    bool communityLevelCapEnabled;
-    uint32 communityLevelCapTopN;
-    int32 communityLevelCapBuffer;
-    uint32 communityLevelCapCacheSeconds;
     uint32 randomBotUpdateInterval, randomBotCountChangeMinInterval, randomBotCountChangeMaxInterval;
     uint32 minRandomBotInWorldTime, maxRandomBotInWorldTime;
     uint32 minRandomBotRandomizeTime, maxRandomBotRandomizeTime;
@@ -306,10 +270,6 @@ public:
     std::vector<std::vector<uint32>> parsedHunterPetLinkOrder[3][21];
     uint32 randomClassSpecProb[MAX_CLASSES][MAX_SPECNO];
     uint32 randomClassSpecIndex[MAX_CLASSES][MAX_SPECNO];
-    uint32 rtgBgClassSpecProb[MAX_CLASSES][3];
-    uint32 rtgBgClassSpecIndex[MAX_CLASSES][3];
-    uint32 rtgArenaClassSpecProb[MAX_CLASSES][3];
-    uint32 rtgArenaClassSpecIndex[MAX_CLASSES][3];
 
     std::string commandPrefix, commandSeparator;
     std::string randomBotAccountPrefix;
@@ -360,9 +320,7 @@ public:
         uint32 specId;
         uint32 minLevel;
         uint32 maxLevel;
-        bool debugRatioScaling;
-    bool debugCommunityLevelCap;
-};
+    };
 
     std::vector<worldBuff> worldBuffs;
 
@@ -485,7 +443,7 @@ public:
     bool hasLog(std::string const fileName)
     {
         return std::find(allowedLogFiles.begin(), allowedLogFiles.end(), fileName) != allowedLogFiles.end();
-};
+    };
     bool openLog(std::string const fileName, char const* mode = "a");
     bool isLogOpen(std::string const fileName)
     {
@@ -504,20 +462,16 @@ public:
     bool IsRestrictedHealerDPSMap(uint32 mapId) const;
 
     std::vector<uint32> excludedHunterPetFamilies;
-// --- Random bot population scaling (ratio-based) ---
-	bool usePlayerCountRatio;   // config toggle
-	float botsPerPlayer;        // cached DB value (loaded by RandomPlayerbotMgr)
 
-	// Ratio tuning defaults (can be overridden live via event values)
-	uint32 ratioGrowCheckSeconds;
-	uint32 ratioShrinkCheckSeconds;
-	uint32 ratioMaxShrinkPerCheck;
-	uint32 ratioDbCacheSeconds;
+private:
+    PlayerbotAIConfig() = default;
+    ~PlayerbotAIConfig() = default;
 
-// Debug toggles
-	bool debugRatioScaling;
-	bool debugCommunityLevelCap;
+    PlayerbotAIConfig(const PlayerbotAIConfig&) = delete;
+    PlayerbotAIConfig& operator=(const PlayerbotAIConfig&) = delete;
 
+    PlayerbotAIConfig(PlayerbotAIConfig&&) = delete;
+    PlayerbotAIConfig& operator=(PlayerbotAIConfig&&) = delete;
 };
 
 #define sPlayerbotAIConfig PlayerbotAIConfig::instance()

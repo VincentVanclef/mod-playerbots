@@ -122,8 +122,4 @@ public:
     void SendPacket(Player* player, WorldPacket* packet);
 };
 
-
-// Convenience singleton accessor (AzerothCore style)
-#define sServerFacade ServerFacade::instance()
-
 #endif

@@ -11,11 +11,6 @@ RestoShamanStrategy::RestoShamanStrategy(PlayerbotAI* botAI) : GenericShamanStra
     // No custom ActionNodeFactory needed
 }
 
-std::vector<NextAction> RestoShamanStrategy::getDefaultActions()
-{
-    return { NextAction("riptide on party", ACTION_DEFAULT + 0.5f), NextAction("lesser healing wave on party", ACTION_DEFAULT) };
-}
-
 // ===== Trigger Initialization ===
 void RestoShamanStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
 {
@@ -45,7 +40,7 @@ void RestoShamanStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
     triggers.push_back(new TriggerNode("party member almost full health", { NextAction("riptide on party", 12.0f),
                                                                             NextAction("lesser healing wave on party", 11.0f) }));
 
-    triggers.push_back(new TriggerNode("earth shield on main tank", { NextAction("earth shield on main tank", ACTION_CRITICAL_HEAL + 7) }));
+    triggers.push_back(new TriggerNode("earth shield on main tank", { NextAction("earth shield on main tank", ACTION_HIGH + 7) }));
 
     // Dispel Triggers
     triggers.push_back(new TriggerNode("party member cleanse spirit poison", { NextAction("cleanse spirit poison on party", ACTION_DISPEL + 2) }));

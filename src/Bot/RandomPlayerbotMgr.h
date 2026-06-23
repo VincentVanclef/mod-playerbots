@@ -11,9 +11,6 @@
 #include "PlayerbotMgr.h"
 #include "GameTime.h"
 #include "PlayerbotCommandServer.h"
-#include "RandomPlayerbotMgr.h"
-#include <deque>
-
 
 struct BattlegroundInfo
 {
@@ -32,10 +29,6 @@ struct BattlegroundInfo
     // Bots (Arena)
     uint32 ratedArenaBotCount = 0;
     uint32 skirmishArenaBotCount = 0;
-    uint32 ratedArenaAllianceBotCount = 0;
-    uint32 ratedArenaHordeBotCount = 0;
-    uint32 skirmishArenaAllianceBotCount = 0;
-    uint32 skirmishArenaHordeBotCount = 0;
 
     // Bots (Battleground)
     uint32 bgHordeBotCount = 0;
@@ -44,26 +37,10 @@ struct BattlegroundInfo
     // Players (Arena)
     uint32 ratedArenaPlayerCount = 0;
     uint32 skirmishArenaPlayerCount = 0;
-    uint32 ratedArenaAlliancePlayerCount = 0;
-    uint32 ratedArenaHordePlayerCount = 0;
-    uint32 skirmishArenaAlliancePlayerCount = 0;
-    uint32 skirmishArenaHordePlayerCount = 0;
 
     // Players (Battleground)
     uint32 bgHordePlayerCount = 0;
     uint32 bgAlliancePlayerCount = 0;
-
-    // RTG split view: queue demand vs active battleground lifecycle
-    uint32 bgQueueHordePlayerCount = 0;
-    uint32 bgQueueAlliancePlayerCount = 0;
-    uint32 bgQueueHordeBotCount = 0;
-    uint32 bgQueueAllianceBotCount = 0;
-    uint32 bgActiveHordePlayerCount = 0;
-    uint32 bgActiveAlliancePlayerCount = 0;
-    uint32 bgActiveHordeBotCount = 0;
-    uint32 bgActiveAllianceBotCount = 0;
-    // Community level cap cache
-
 };
 
 class ChatHandler;
@@ -78,16 +55,12 @@ struct CachedEvent
     std::string data;
 
     bool IsEmpty() const { return !lastChangeTime; }
-    // Community level cap cache
-
 };
 
 struct BotEventCache
 {
     bool loaded = false;
     std::unordered_map<std::string, CachedEvent> events;
-    // Community level cap cache
-
 };
 
 // https://gist.github.com/bradley219/5373998
@@ -111,8 +84,6 @@ public:
 
 private:
     botPIDImpl* pimpl;
-    // Community level cap cache
-
 };
 
 class RandomPlayerbotMgr : public PlayerbotHolder
@@ -145,7 +116,7 @@ public:
     std::string const HandleRemoteCommand(std::string const request);
     void OnPlayerLogout(Player* player);
     void OnPlayerLogin(Player* player);
-    void OnPlayerLoginError(uint32 bot, char const* reason = nullptr);
+    void OnPlayerLoginError(uint32 bot);
     Player* GetRandomPlayer();
     std::vector<Player*> GetPlayers() { return players; };
     PlayerBotMap GetAllBots() { return playerBots; };
@@ -160,11 +131,6 @@ public:
     void RandomTeleportGrindForLevel(Player* bot);
     void RandomTeleportForRpg(Player* bot);
     uint32 GetMaxAllowedBotCount();
-    uint32 GetCommunityLevelCap();
-    uint32 GetOnlineRealPlayerCount() const;
-    float LoadSavedBotsPerPlayerFromDB() const;
-    void SaveBotsPerPlayerToDB(float ratio) const;
-    void ForceBotCountRecheck();
     bool ProcessBot(Player* player);
     void Revive(Player* player);
     void ChangeStrategy(Player* player);
@@ -206,27 +172,38 @@ public:
     void AssignAccountTypes();
     bool IsAccountType(uint32 accountId, uint8 accountType);
 
-
-    // RTG: public wrappers for global event cache (keyed at bot=0)
-    uint32 RTG_GetGlobalEvent(std::string const& key) { return GetEventValue(0, key); }
-    void RTG_SetGlobalEvent(std::string const& key, uint32 value, uint32 ttlSeconds, std::string const& data = "")
-    {
-        SetEventValue(0, key, value, ttlSeconds, data);
-    }
-    std::string RTG_GetBotEventData(uint32 bot, std::string const& key) { return GetEventData(bot, key); }
-    uint32 RTG_GetBotEventValue(uint32 bot, std::string const& key) { return GetEventValue(bot, key); }
-    void RTG_SetBotEventValue(uint32 bot, std::string const& key, uint32 value, uint32 ttlSeconds, std::string const& data = "")
-    {
-        SetEventValue(bot, key, value, ttlSeconds, data);
-    }
-    void RTG_ClearQueueHelperState(uint32 bot, bool clearLogout = false);
-    bool RTG_RequestQueueHelperLogout(ObjectGuid guid, char const* reason = nullptr, bool clearQueueState = true);
-
 protected:
     void OnBotLoginInternal(Player* const bot) override;
 
 private:
-    RandomPlayerbotMgr();
+    RandomPlayerbotMgr() : PlayerbotHolder(), processTicks(0)
+    {
+        this->playersLevel = sPlayerbotAIConfig.randombotStartingLevel;
+
+        if (sPlayerbotAIConfig.enabled || sPlayerbotAIConfig.randomBotAutologin)
+        {
+            PlayerbotCommandServer::instance().Start();
+        }
+
+        BattlegroundData.clear();  // Clear here and here only.
+
+        // Cleanup on server start: orphaned pet data that's often left behind by bot pets that no longer exist in the DB
+        CharacterDatabase.Execute("DELETE FROM pet_aura WHERE guid NOT IN (SELECT id FROM character_pet)");
+        CharacterDatabase.Execute("DELETE FROM pet_spell WHERE guid NOT IN (SELECT id FROM character_pet)");
+        CharacterDatabase.Execute("DELETE FROM pet_spell_cooldown WHERE guid NOT IN (SELECT id FROM character_pet)");
+
+        for (int bracket = BG_BRACKET_ID_FIRST; bracket < MAX_BATTLEGROUND_BRACKETS; ++bracket)
+        {
+            for (int queueType = BATTLEGROUND_QUEUE_AV; queueType < MAX_BATTLEGROUND_QUEUE_TYPES; ++queueType)
+            {
+                this->BattlegroundData[queueType][bracket] = BattlegroundInfo();
+            }
+        }
+
+        this->BgCheckTimer = 0;
+        this->LfgCheckTimer = 0;
+        this->PlayersCheckTimer = 0;
+    }
 
     ~RandomPlayerbotMgr() = default;
 
@@ -242,18 +219,13 @@ private:
     bool _isBotInitializing = true;
     bool _isBotLogging = true;
     NewRpgStatistic rpgStasticTotal;
-public:
-    std::string GetEventData(uint32 bot, std::string const& event);
-private:
     CachedEvent* FindEvent(uint32 bot, std::string const& event);
     uint32 GetEventValue(uint32 bot, std::string const& event);
+    std::string GetEventData(uint32 bot, std::string const& event);
     uint32 SetEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn,
                          std::string const& data = "");
     void GetBots();
     std::vector<uint32> GetBgBots(uint32 bracket);
-    bool RTG_RequestSafeBotLogout(ObjectGuid guid, char const* reason = nullptr, bool clearQueueState = true);
-    void RTG_RunQueueOwnershipAudit();
-    void RTG_ProcessLogoutQueue();
     time_t BgCheckTimer;
     time_t LfgCheckTimer;
     time_t PlayersCheckTimer;
@@ -269,7 +241,6 @@ private:
     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
     std::vector<Player*> players;
     uint32 processTicks;
-    std::deque<ObjectGuid> rtgLogoutQueue;
 
     // std::map<uint32, std::vector<WorldLocation>> rpgLocsCache;
     std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> rpgLocsCacheLevel;
@@ -285,19 +256,8 @@ private:
 
     //void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }
-    
-    // Ratio DB cache (bots-per-player)
-    time_t ratioCachedAt = 0;
-    float ratioCachedValue = 0.0f;
-
-    uint32 GetTuningOrDefault(std::string const& key, uint32 def) const;
-// Community level cap cache
-    time_t communityLevelCapCachedAt = 0;
-    uint32 communityLevelCapCachedValue = 0;
-
 };
 
 #define sRandomPlayerbotMgr RandomPlayerbotMgr::instance()
-
 
 #endif

@@ -15,7 +15,6 @@ class RestoShamanStrategy : public GenericShamanStrategy
 {
 public:
     RestoShamanStrategy(PlayerbotAI* botAI);
-    std::vector<NextAction> getDefaultActions() override;
 
     void InitTriggers(std::vector<TriggerNode*>& triggers) override;
     std::string const getName() override { return "resto"; }

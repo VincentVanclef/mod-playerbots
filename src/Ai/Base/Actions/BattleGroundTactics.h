@@ -124,7 +124,6 @@ private:
     bool resetObjective();
     bool wsJumpDown();
     bool eyJumpDown();
-    bool brJumpDown();
     bool atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<uint32> const& vFlagIds);
     bool flagTaken();
     bool teamFlagTaken();

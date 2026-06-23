@@ -15,8 +15,6 @@
 #include "Playerbots.h"
 #include "PositionValue.h"
 
-#include <algorithm>
-
 bool UseMeetingStoneAction::Execute(Event event)
 {
     Player* master = GetMaster();
@@ -185,14 +183,6 @@ bool SummonAction::Teleport(Player* summoner, Player* player, bool preserveAuras
             float x = summoner->GetPositionX() + cos(angle) * sPlayerbotAIConfig.followDistance;
             float y = summoner->GetPositionY() + sin(angle) * sPlayerbotAIConfig.followDistance;
             float z = summoner->GetPositionZ();
-            summoner->UpdateGroundPositionZ(x, y, z);
-            if (Map* summonMap = summoner->GetMap())
-            {
-                float mapGroundZ = summonMap->GetHeight(summoner->GetPhaseMask(), x, y, z, true, 50.0f);
-                if (mapGroundZ > INVALID_HEIGHT)
-                    z = std::max(z, mapGroundZ);
-            }
-            z += 0.5f;
 
             if (summoner->IsWithinLOS(x, y, z))
             {

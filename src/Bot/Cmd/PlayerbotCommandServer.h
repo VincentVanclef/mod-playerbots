@@ -28,7 +28,5 @@ private:
     PlayerbotCommandServer(PlayerbotCommandServer&&) = delete;
     PlayerbotCommandServer& operator=(PlayerbotCommandServer&&) = delete;
 };
-#define sPlayerbotCommandServer PlayerbotCommandServer::instance()
-
 
 #endif

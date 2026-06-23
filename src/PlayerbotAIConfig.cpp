@@ -18,73 +18,6 @@
 #include "Talentspec.h"
 #include "TravelMgr.h"
 
-
-
-namespace
-{
-    static uint32 RTG_DefaultBgSpecProb(uint8 cls, uint32 specTab)
-    {
-        switch (cls)
-        {
-            case CLASS_WARRIOR: return specTab == 0 ? 70u : (specTab == 1 ? 10u : 20u);
-            case CLASS_PALADIN: return specTab == 0 ? 25u : (specTab == 1 ? 5u : 70u);
-            case CLASS_HUNTER: return specTab == 0 ? 15u : (specTab == 1 ? 35u : 50u);
-            case CLASS_ROGUE: return specTab == 0 ? 15u : (specTab == 1 ? 10u : 75u);
-            case CLASS_PRIEST: return specTab == 0 ? 50u : (specTab == 1 ? 10u : 40u);
-            case CLASS_DEATH_KNIGHT: return specTab == 0 ? 10u : (specTab == 1 ? 35u : 55u);
-            case CLASS_SHAMAN: return specTab == 0 ? 25u : (specTab == 1 ? 35u : 40u);
-            case CLASS_MAGE: return specTab == 0 ? 10u : (specTab == 1 ? 15u : 75u);
-            case CLASS_WARLOCK: return specTab == 0 ? 45u : (specTab == 1 ? 10u : 45u);
-            case CLASS_DRUID: return specTab == 0 ? 15u : (specTab == 1 ? 55u : 30u);
-            default: return specTab == 0 ? 33u : (specTab == 1 ? 33u : 34u);
-        }
-    }
-
-    static uint32 RTG_DefaultArenaSpecProb(uint8 cls, uint32 specTab)
-    {
-        switch (cls)
-        {
-            case CLASS_WARRIOR: return specTab == 0 ? 80u : (specTab == 1 ? 5u : 15u);
-            case CLASS_PALADIN: return specTab == 0 ? 45u : (specTab == 1 ? 5u : 50u);
-            case CLASS_HUNTER: return specTab == 0 ? 15u : (specTab == 1 ? 25u : 60u);
-            case CLASS_ROGUE: return specTab == 0 ? 10u : (specTab == 1 ? 5u : 85u);
-            case CLASS_PRIEST: return specTab == 0 ? 65u : (specTab == 1 ? 5u : 30u);
-            case CLASS_DEATH_KNIGHT: return specTab == 0 ? 5u : (specTab == 1 ? 45u : 50u);
-            case CLASS_SHAMAN: return specTab == 0 ? 15u : (specTab == 1 ? 35u : 50u);
-            case CLASS_MAGE: return specTab == 0 ? 10u : (specTab == 1 ? 10u : 80u);
-            case CLASS_WARLOCK: return specTab == 0 ? 50u : (specTab == 1 ? 5u : 45u);
-            case CLASS_DRUID: return specTab == 0 ? 5u : (specTab == 1 ? 55u : 40u);
-            default: return specTab == 0 ? 33u : (specTab == 1 ? 33u : 34u);
-        }
-    }
-
-    static uint32 RTG_DefaultBgSpecIndex(uint8 cls, uint32 specTab)
-    {
-        switch (cls)
-        {
-            case CLASS_WARRIOR:
-            case CLASS_PALADIN:
-            case CLASS_HUNTER:
-            case CLASS_ROGUE:
-            case CLASS_PRIEST:
-            case CLASS_SHAMAN:
-            case CLASS_WARLOCK:
-                return specTab + 3u;
-            case CLASS_DRUID:
-            case CLASS_MAGE:
-            case CLASS_DEATH_KNIGHT:
-                return specTab == 0 ? 4u : (specTab == 1 ? 5u : 6u);
-            default:
-                return specTab;
-        }
-    }
-
-    static uint32 RTG_DefaultArenaSpecIndex(uint8 cls, uint32 specTab)
-    {
-        return RTG_DefaultBgSpecIndex(cls, specTab);
-    }
-}
-
 template <class T>
 void LoadList(std::string const value, T& list)
 {
@@ -288,75 +221,6 @@ bool PlayerbotAIConfig::Initialize()
     randomBotAutologin = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotAutologin", true);
     minRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MinRandomBots", 500);
     maxRandomBots = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBots", 500);
-
-    // RTG: queue-driven bot population
-    rtgEventDriven = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Enable", false);
-    rtgEventDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.Debug", false);
-    rtgEventMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.MaxBots", 120);
-    rtgBgMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.BattlegroundMaxBots", 77);
-    rtgLfgMaxBots = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.LfgMaxBots", 60);
-    rtgKeepWorldBots = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.EventDriven.KeepWorldBots", false);
-    rtgNoPlayersRetireDelay = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.NoPlayersRetireDelay", 60);
-    rtgDungeonFinishedLogoutDelay = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.DungeonFinishedLogoutDelay", 90);
-    rtgSmartQueue = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.SmartQueue.Enable", true);
-    rtgDemandCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.DemandCheckSeconds", 5);
-    rtgQueueGraceSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueGraceSeconds", 30);
-    rtgQueueBotLevel = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.EventDriven.QueueBotLevel", 19);
-    rtgQueueOwnershipEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Enable", true);
-    rtgQueueOwnershipProtectInBattleground = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.ProtectInBattleground", true);
-    rtgQueueOwnershipRetireRetrySeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.RetireRetrySeconds", 15);
-    rtgQueueOwnershipMaxTransitionSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.QueueOwnership.MaxTransitionSeconds", 60);
-    rtgQueueOwnershipDebug = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.QueueOwnership.Debug", false);
-
-    rtgLowBracketCapsEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.LowBracketCaps.Enable", false);
-    rtgLowBracketBotCap = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.Cap", 40);
-    rtgLowBotsPerNewPlayer = sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.LowBracketCaps.PerNewPlayer", 20);
-    rtgPrefer19If19Queueing = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.Prefer19If19Queueing", true);
-    rtgPvpGearStrict = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.PvPGear.Strict", true);
-    rtgPvpGearStaminaWeightBonus = sConfigMgr->GetOption<float>("AiPlayerbot.RTG.PvPGear.StaminaWeightBonus", 0.45f);
-    rtgPvpGearCritWeightBonus = sConfigMgr->GetOption<float>("AiPlayerbot.RTG.PvPGear.CritWeightBonus", 0.35f);
-    rtgPvpStrategyEnable = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.PvPStrategy.Enable", true);
-    rtgBgCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.BgCombatOverrides", "");
-    rtgArenaCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.ArenaCombatOverrides", "");
-    rtgBgNonCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.BgNonCombatOverrides", "");
-    rtgArenaNonCombatStrategyOverrides = sConfigMgr->GetOption<std::string>("AiPlayerbot.RTG.PvPStrategy.ArenaNonCombatOverrides", "");
-
-    // Community-level pacing cap (optional)
-    communityLevelCapEnabled = sConfigMgr->GetOption<bool>("AiPlayerbot.CommunityLevelCap.Enable", false);
-    communityLevelCapTopN = sConfigMgr->GetOption<uint32>("AiPlayerbot.CommunityLevelCap.TopN", 20);
-    communityLevelCapBuffer = sConfigMgr->GetOption<int32>("AiPlayerbot.CommunityLevelCap.Buffer", 0);
-    communityLevelCapCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.CommunityLevelCap.CacheSeconds", 60);
-    usePlayerCountRatio = sConfigMgr->GetOption<bool>("AiPlayerbot.UsePlayerCountRatio", false);
-    botsPerPlayer = 0.0f;
-
-ratioGrowCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.GrowCheckSeconds", 5);
-ratioShrinkCheckSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.ShrinkCheckSeconds", 30);
-ratioMaxShrinkPerCheck = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.MaxShrinkPerCheck", 5);
-ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSeconds", 10);
-
-    debugRatioScaling = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.RatioScaling", false);
-    debugCommunityLevelCap = sConfigMgr->GetOption<bool>("AiPlayerbot.Debug.CommunityLevelCap", false);
-
-    LOG_INFO("server.loading",
-        "RTG CFG loaded: Enable={} Debug={} SmartQueue={} MaxBots={} BgMax={} LfgMax={} DemandCheck={} Grace={} NoPlayersRetire={} DungeonFinishedLogout={} QueueOwnership={} RetireRetry={} TransitionMax={} OwnershipDebug={} LowBracketCaps={} Prefer19={} Ratio={} CommunityCap={}",
-        rtgEventDriven ? 1 : 0,
-        rtgEventDebug ? 1 : 0,
-        rtgSmartQueue ? 1 : 0,
-        rtgEventMaxBots,
-        rtgBgMaxBots,
-        rtgLfgMaxBots,
-        rtgDemandCheckSeconds,
-        rtgQueueGraceSeconds,
-        rtgNoPlayersRetireDelay,
-        rtgDungeonFinishedLogoutDelay,
-        rtgQueueOwnershipEnable ? 1 : 0,
-        rtgQueueOwnershipRetireRetrySeconds,
-        rtgQueueOwnershipMaxTransitionSeconds,
-        rtgQueueOwnershipDebug ? 1 : 0,
-        rtgLowBracketCapsEnable ? 1 : 0,
-        rtgPrefer19If19Queueing ? 1 : 0,
-        usePlayerCountRatio ? 1 : 0,
-        communityLevelCapEnabled ? 1 : 0);
     randomBotUpdateInterval = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotUpdateInterval", 20);
     randomBotCountChangeMinInterval =
         sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotCountChangeMinInterval", 30 * MINUTE);
@@ -648,24 +512,6 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
             os << "AiPlayerbot.RandomClassSpecIndex." << cls << "." << spec;
             randomClassSpecIndex[cls][spec] = sConfigMgr->GetOption<uint32>(os.str().c_str(), spec, false);
         }
-        for (uint32 specTab = 0; specTab < 3; ++specTab)
-        {
-            std::ostringstream os;
-            os << "AiPlayerbot.RTG.BgClassSpecProb." << cls << "." << specTab;
-            rtgBgClassSpecProb[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultBgSpecProb(cls, specTab), false);
-            os.str("");
-            os.clear();
-            os << "AiPlayerbot.RTG.BgClassSpecIndex." << cls << "." << specTab;
-            rtgBgClassSpecIndex[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultBgSpecIndex(cls, specTab), false);
-            os.str("");
-            os.clear();
-            os << "AiPlayerbot.RTG.ArenaClassSpecProb." << cls << "." << specTab;
-            rtgArenaClassSpecProb[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultArenaSpecProb(cls, specTab), false);
-            os.str("");
-            os.clear();
-            os << "AiPlayerbot.RTG.ArenaClassSpecIndex." << cls << "." << specTab;
-            rtgArenaClassSpecIndex[cls][specTab] = sConfigMgr->GetOption<uint32>(os.str().c_str(), RTG_DefaultArenaSpecIndex(cls, specTab), false);
-        }
     }
 
     botCheats.clear();
@@ -859,7 +705,6 @@ ratioDbCacheSeconds = sConfigMgr->GetOption<uint32>("AiPlayerbot.Ratio.DbCacheSe
 
     // Assign account types after accounts are created
     sRandomPlayerbotMgr.AssignAccountTypes();
-
 
     if (sPlayerbotAIConfig.enabled)
     {
