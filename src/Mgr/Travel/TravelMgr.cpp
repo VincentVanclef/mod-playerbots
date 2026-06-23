@@ -8,18 +8,82 @@
 #include <iomanip>
 #include <numeric>
 
+#include "AreaDefines.h"
+#include "Creature.h"
+#include "Log.h"
+#include "ObjectAccessor.h"
+#include "TravelNode.h"
 #include "Talentspec.h"
 #include "ChatHelper.h"
-#include "MMapFactory.h"
+#include "MapCollisionData.h"
 #include "MapMgr.h"
 #include "PathGenerator.h"
 #include "Playerbots.h"
+#include "RaceMgr.h"
 #include "TransportMgr.h"
 #include "VMapFactory.h"
 #include "VMapMgr2.h"
 #include "Map.h"
 #include "Corpse.h"
 #include "CellImpl.h"
+
+// Navigation data
+
+struct Capital
+{
+    uint32              zoneId;
+    TeamId              team;
+    char const*         name;
+    std::vector<uint16> bankers;
+};
+
+static const std::vector<Capital> capitals = {
+    { AREA_STORMWIND_CITY,  TEAM_ALLIANCE, "Stormwind",     {2455, 2456, 2457} },
+    { AREA_IRONFORGE,       TEAM_ALLIANCE, "Ironforge",     {2460, 2461, 5099} },
+    { AREA_DARNASSUS,       TEAM_ALLIANCE, "Darnassus",     {4155, 4208, 4209} },
+    { AREA_THE_EXODAR,      TEAM_ALLIANCE, "Exodar",        {17773, 18350, 16710} },
+    { AREA_ORGRIMMAR,       TEAM_HORDE,    "Orgrimmar",     {3320, 3309, 3318} },
+    { AREA_UNDERCITY,       TEAM_HORDE,    "Undercity",     {4549, 2459, 2458, 4550} },
+    { AREA_THUNDER_BLUFF,   TEAM_HORDE,    "Thunder Bluff", {2996, 8356, 8357} },
+    { AREA_SILVERMOON_CITY, TEAM_HORDE,    "Silvermoon",    {17631, 17632, 17633, 16615, 16616, 16617} },
+    { AREA_SHATTRATH_CITY,  TEAM_NEUTRAL,  "Shattrath",     {19246, 19338, 19034, 19318} },
+    { AREA_DALARAN,         TEAM_NEUTRAL,  "Dalaran",       {30604, 30605, 30607, 28675, 28676, 28677, 29530} }
+};
+
+static Capital const* FindCapitalByZone(uint32 zoneId)
+{
+    for (Capital const& capital : capitals)
+        if (capital.zoneId == zoneId)
+            return &capital;
+    return nullptr;
+}
+
+static Capital const* FindCapitalByBanker(uint16 bankerEntry)
+{
+    for (Capital const& capital : capitals)
+        for (uint16 bankerId : capital.bankers)
+            if (bankerId == bankerEntry)
+                return &capital;
+    return nullptr;
+}
+
+static int GetCityWeight(uint32 zoneId)
+{
+    switch (zoneId)
+    {
+        case AREA_STORMWIND_CITY:  return sPlayerbotAIConfig.weightTeleToStormwind;
+        case AREA_IRONFORGE:       return sPlayerbotAIConfig.weightTeleToIronforge;
+        case AREA_DARNASSUS:       return sPlayerbotAIConfig.weightTeleToDarnassus;
+        case AREA_THE_EXODAR:      return sPlayerbotAIConfig.weightTeleToExodar;
+        case AREA_ORGRIMMAR:       return sPlayerbotAIConfig.weightTeleToOrgrimmar;
+        case AREA_UNDERCITY:       return sPlayerbotAIConfig.weightTeleToUndercity;
+        case AREA_THUNDER_BLUFF:   return sPlayerbotAIConfig.weightTeleToThunderBluff;
+        case AREA_SILVERMOON_CITY: return sPlayerbotAIConfig.weightTeleToSilvermoonCity;
+        case AREA_SHATTRATH_CITY:  return sPlayerbotAIConfig.weightTeleToShattrathCity;
+        case AREA_DALARAN:         return sPlayerbotAIConfig.weightTeleToDalaran;
+    }
+    return 0;
+}
 
 WorldPosition::WorldPosition(std::string const str)
 {
@@ -71,13 +135,13 @@ WorldPosition::WorldPosition(std::vector<WorldPosition*> list, WorldPositionCons
         set(*list[urand(0, size - 1)]);
     else if (conType == WP_CENTROID)
     {
-        set(std::accumulate(list.begin(), list.end(), WorldLocation(list[0]->getMapId(), 0, 0, 0, 0),
+        set(std::accumulate(list.begin(), list.end(), WorldLocation(list[0]->GetMapId(), 0, 0, 0, 0),
                             [size](WorldLocation i, WorldPosition* j)
                             {
-                                i.m_positionX += j->getX() / size;
-                                i.m_positionY += j->getY() / size;
-                                i.m_positionZ += j->getZ() / size;
-                                i.NormalizeOrientation(i.m_orientation += j->getO() / size);
+                                i.m_positionX += j->GetPositionX() / size;
+                                i.m_positionY += j->GetPositionY() / size;
+                                i.m_positionZ += j->GetPositionZ() / size;
+                                i.NormalizeOrientation(i.m_orientation += j->GetOrientation() / size);
                                 return i;
                             }));
     }
@@ -100,13 +164,13 @@ WorldPosition::WorldPosition(std::vector<WorldPosition> list, WorldPositionConst
         set(list[urand(0, size - 1)]);
     else if (conType == WP_CENTROID)
     {
-        set(std::accumulate(list.begin(), list.end(), WorldLocation(list[0].getMapId(), 0, 0, 0, 0),
+        set(std::accumulate(list.begin(), list.end(), WorldLocation(list[0].GetMapId(), 0, 0, 0, 0),
                             [size](WorldLocation i, WorldPosition& j)
                             {
-                                i.m_positionX += j.getX() / size;
-                                i.m_positionY += j.getY() / size;
-                                i.m_positionZ += j.getZ() / size;
-                                i.NormalizeOrientation(i.m_orientation += j.getO() / size);
+                                i.m_positionX += j.GetPositionX() / size;
+                                i.m_positionY += j.GetPositionY() / size;
+                                i.m_positionZ += j.GetPositionZ() / size;
+                                i.NormalizeOrientation(i.m_orientation += j.GetOrientation() / size);
                                 return i;
                             }));
     }
@@ -190,16 +254,6 @@ WorldPosition& WorldPosition::operator-=(WorldPosition const& p1)
     return *this;
 }
 
-uint32 WorldPosition::getMapId() { return GetMapId(); }
-
-float WorldPosition::getX() { return GetPositionX(); }
-
-float WorldPosition::getY() { return GetPositionY(); }
-
-float WorldPosition::getZ() { return GetPositionZ(); }
-
-float WorldPosition::getO() { return GetOrientation(); }
-
 bool WorldPosition::isOverworld()
 {
     return GetMapId() == 0 || GetMapId() == 1 || GetMapId() == 530 || GetMapId() == 571;
@@ -238,13 +292,13 @@ WorldPosition WorldPosition::offset(WorldPosition* center)
 
 float WorldPosition::size()
 {
-    return sqrt(pow(GetPositionX(), 2.0) + pow(GetPositionY(), 2.0) + pow(GetPositionZ(), 2.0));
+    return GetExactDist(0.0f, 0.0f, 0.0f);
 }
 
 float WorldPosition::distance(WorldPosition* center)
 {
-    if (GetMapId() == center->getMapId())
-        return relPoint(center).size();
+    if (GetMapId() == center->GetMapId())
+        return GetExactDist(center->GetPositionX(), center->GetPositionY(), center->GetPositionZ());
 
     // this -> mapTransfer | mapTransfer -> center
     return TravelMgr::instance().mapTransDistance(*this, *center);
@@ -252,8 +306,8 @@ float WorldPosition::distance(WorldPosition* center)
 
 float WorldPosition::fDist(WorldPosition* center)
 {
-    if (GetMapId() == center->getMapId())
-        return sqrt(sqDistance2d(center));
+    if (GetMapId() == center->GetMapId())
+        return GetExactDist2d(center->GetPositionX(), center->GetPositionY());
 
     // this -> mapTransfer | mapTransfer -> center
     return TravelMgr::instance().fastMapTransDistance(*this, *center);
@@ -328,7 +382,7 @@ WorldPosition WorldPosition::firstOutRange(std::vector<WorldPosition> list, floa
 // Returns true if (on the x-y plane) the position is inside the three points.
 bool WorldPosition::isInside(WorldPosition* p1, WorldPosition* p2, WorldPosition* p3)
 {
-    if (getMapId() != p1->getMapId() != p2->getMapId() != p3->getMapId())
+    if (GetMapId() != p1->GetMapId() != p2->GetMapId() != p3->GetMapId())
         return false;
 
     float d1, d2, d3;
@@ -348,7 +402,7 @@ MapEntry const* WorldPosition::getMapEntry() { return sMapStore.LookupEntry(GetM
 
 uint32 WorldPosition::getInstanceId()
 {
-    if (Map* map = sMapMgr->FindBaseMap(getMapId()))
+    if (Map* map = sMapMgr->FindBaseMap(GetMapId()))
         return map->GetInstanceId();
 
     return 0;
@@ -361,7 +415,7 @@ Map* WorldPosition::getMap()
 
 float WorldPosition::getHeight()  // remove const - whipowill
 {
-    return getMap()->GetHeight(getX(), getY(), getZ());
+    return getMap()->GetHeight(GetPositionX(), GetPositionY(), GetPositionZ());
 }
 
 G3D::Vector3 WorldPosition::getVector3() { return G3D::Vector3(GetPositionX(), GetPositionY(), GetPositionZ()); }
@@ -381,11 +435,11 @@ std::string const WorldPosition::print()
 std::string const WorldPosition::to_string()
 {
     std::stringstream out;
-    out << m_mapId << '|';
-    out << m_positionX << '|';
-    out << m_positionY << '|';
-    out << m_positionZ << '|';
-    out << m_orientation;
+    out << GetMapId() << '|';
+    out << GetPositionX() << '|';
+    out << GetPositionY() << '|';
+    out << GetPositionZ() << '|';
+    out << GetOrientation();
     return out.str();
 }
 
@@ -429,11 +483,14 @@ void WorldPosition::printWKT(std::vector<WorldPosition> points, std::ostringstre
 
 WorldPosition WorldPosition::getDisplayLocation()
 {
-    WorldPosition pos = TravelNodeMap::instance().getMapOffset(getMapId());
+    WorldPosition pos = TravelNodeMap::instance().getMapOffset(GetMapId());
     return offset(const_cast<WorldPosition*>(&pos));
 }
 
-uint16 WorldPosition::getAreaId() { return sMapMgr->GetAreaId(PHASEMASK_NORMAL, getMapId(), getX(), getY(), getZ()); }
+uint16 WorldPosition::getAreaId()
+{
+    return sMapMgr->GetAreaId(PHASEMASK_NORMAL, GetMapId(), GetPositionX(), GetPositionY(), GetPositionZ());
+}
 
 AreaTableEntry const* WorldPosition::getArea()
 {
@@ -448,7 +505,7 @@ std::string const WorldPosition::getAreaName(bool fullName, bool zoneName)
 {
     if (!isOverworld())
     {
-        MapEntry const* map = sMapStore.LookupEntry(getMapId());
+        MapEntry const* map = sMapStore.LookupEntry(GetMapId());
         if (map)
             return map->name[0];
     }
@@ -480,7 +537,7 @@ std::string const WorldPosition::getAreaName(bool fullName, bool zoneName)
         }
     }
 
-    return std::move(areaName);
+    return areaName;
 }
 
 std::set<Transport*> WorldPosition::getTransports(uint32 entry)
@@ -545,7 +602,7 @@ std::vector<WorldPosition> WorldPosition::fromGridCoord(GridCoord gridCoord)
         if (d == 2 || d == 3)
             g.inc_y(1);
 
-        retVec.push_back(WorldPosition(getMapId(), g));
+        retVec.push_back(WorldPosition(GetMapId(), g));
     }
 
     return retVec;
@@ -566,7 +623,7 @@ std::vector<WorldPosition> WorldPosition::fromCellCoord(CellCoord cellcoord)
         if (d == 2 || d == 3)
             p.inc_y(1);
 
-        retVec.push_back(WorldPosition(getMapId(), p));
+        retVec.push_back(WorldPosition(GetMapId(), p));
     }
     return retVec;
 }
@@ -618,16 +675,17 @@ std::vector<WorldPosition> WorldPosition::frommGridCoord(mGridCoord GridCoord)
         if (d == 2 || d == 3)
             g.first++;
 
-        retVec.push_back(WorldPosition(getMapId(), g));
+        retVec.push_back(WorldPosition(GetMapId(), g));
     }
 
     return retVec;
 }
 
+// TODO: Cleanup — make this actually work.
 void WorldPosition::loadMapAndVMap(uint32 mapId, uint8 x, uint8 y)
 {
     std::string const fileName = "load_map_grid.csv";
-
+/*
     if (isOverworld() && false || false)
     {
         if (!MMAP::MMapFactory::createOrGetMMapMgr()->loadMap(mapId, x, y))
@@ -682,22 +740,22 @@ void WorldPosition::loadMapAndVMap(uint32 mapId, uint8 x, uint8 y)
                     sPlayerbotAIConfig.log(fileName, out.str().c_str());
                 }
             }
+*/
+    if (!TravelMgr::instance().isBadMmap(mapId, x, y))
+    {
+        // load navmesh
+        Map* map = getMap();
+        if (map && map->GetMapCollisionData().LoadMMapTile(x, y) == MMAP::MMAP_LOAD_RESULT_ERROR)
+            TravelMgr::instance().addBadMmap(mapId, x, y);
 
-        if (!TravelMgr::instance().isBadMmap(mapId, x, y))
+        if (sPlayerbotAIConfig.hasLog(fileName))
         {
-            // load navmesh
-            if (!MMAP::MMapFactory::createOrGetMMapMgr()->loadMap(mapId, x, y))
-                TravelMgr::instance().addBadMmap(mapId, x, y);
-
-            if (sPlayerbotAIConfig.hasLog(fileName))
-            {
-                std::ostringstream out;
-                out << sPlayerbotAIConfig.GetTimestampStr();
-                out << "+00,\"mmap\", " << x << "," << y << "," << (TravelMgr::instance().isBadMmap(mapId, x, y) ? "0" : "1")
-                    << ",";
-                printWKT(fromGridCoord(GridCoord(x, y)), out, 1, true);
-                sPlayerbotAIConfig.log(fileName, out.str().c_str());
-            }
+            std::ostringstream out;
+            out << sPlayerbotAIConfig.GetTimestampStr();
+            out << "+00,\"mmap\", " << x << "," << y << "," << (TravelMgr::instance().isBadMmap(mapId, x, y) ? "0" : "1")
+                << ",";
+            printWKT(fromGridCoord(GridCoord(x, y)), out, 1, true);
+            sPlayerbotAIConfig.log(fileName, out.str().c_str());
         }
     }
 }
@@ -706,7 +764,7 @@ void WorldPosition::loadMapAndVMaps(WorldPosition secondPos)
 {
     for (auto& grid : getmGridCoords(secondPos))
     {
-        loadMapAndVMap(getMapId(), grid.first, grid.second);
+        loadMapAndVMap(GetMapId(), grid.first, grid.second);
     }
 }
 
@@ -714,7 +772,7 @@ std::vector<WorldPosition> WorldPosition::fromPointsArray(std::vector<G3D::Vecto
 {
     std::vector<WorldPosition> retVec;
     for (auto p : path)
-        retVec.push_back(WorldPosition(getMapId(), p.x, p.y, p.z, getO()));
+        retVec.push_back(WorldPosition(GetMapId(), p.x, p.y, p.z, GetOrientation()));
 
     return retVec;
 }
@@ -729,7 +787,7 @@ std::vector<WorldPosition> WorldPosition::getPathStepFrom(WorldPosition startPos
     loadMapAndVMaps(startPos);
 
     PathGenerator path(bot);
-    path.CalculatePath(startPos.getX(), startPos.getY(), startPos.getZ());
+    path.CalculatePath(startPos.GetPositionX(), startPos.GetPositionY(), startPos.GetPositionZ());
 
     Movement::PointsArray points = path.GetPath();
     PathType type = path.GetPathType();
@@ -785,7 +843,7 @@ std::vector<WorldPosition> WorldPosition::getPathFromPath(std::vector<WorldPosit
     WorldPosition currentPos = startPath.back();
 
     // No pathfinding across maps.
-    if (getMapId() != currentPos.getMapId())
+    if (GetMapId() != currentPos.GetMapId())
         return {};
 
     std::vector<WorldPosition> subPath, fullPath = startPath;
@@ -818,10 +876,18 @@ bool WorldPosition::GetReachableRandomPointOnGround(Player* bot, float radius, b
 {
     radius *= randomRange ? rand_norm() : 1.f;
     float angle = rand_norm() * static_cast<float>(2 * M_PI);
-    m_positionX += radius * cosf(angle);
-    m_positionY += radius * sinf(angle);
+    setX(GetPositionX() + radius * cosf(angle));
+    setY(GetPositionY() + radius * sinf(angle));
 
-    return getMap()->CanReachPositionAndGetValidCoords(bot, m_positionX, m_positionY, m_positionZ);
+    float x = GetPositionX();
+    float y = GetPositionY();
+    float z = GetPositionZ();
+    bool canReach = getMap()->CanReachPositionAndGetValidCoords(bot, x, y, z);
+    setX(x);
+    setY(y);
+    setZ(z);
+
+    return canReach;
 }
 
 uint32 WorldPosition::getUnitsAggro(GuidVector& units, Player* bot)
@@ -844,7 +910,7 @@ uint32 WorldPosition::getUnitsAggro(GuidVector& units, Player* bot)
 void FindPointCreatureData::operator()(CreatureData const& creatureData)
 {
     if (!entry || creatureData.id1 == entry)
-        if ((!point || creatureData.mapid == point.getMapId()) &&
+        if ((!point || creatureData.mapid == point.GetMapId()) &&
             (!radius || point.sqDistance(WorldPosition(creatureData.mapid, creatureData.posX, creatureData.posY,
                                                        creatureData.posZ)) < radius * radius))
         {
@@ -855,7 +921,7 @@ void FindPointCreatureData::operator()(CreatureData const& creatureData)
 void FindPointGameObjectData::operator()(GameObjectData const& gameobjectData)
 {
     if (!entry || gameobjectData.id == entry)
-        if ((!point || gameobjectData.mapid == point.getMapId()) &&
+        if ((!point || gameobjectData.mapid == point.GetMapId()) &&
             (!radius || point.sqDistance(WorldPosition(gameobjectData.mapid, gameobjectData.posX, gameobjectData.posY,
                                                        gameobjectData.posZ)) < radius * radius))
         {
@@ -1245,9 +1311,8 @@ bool RpgTravelDestination::isActive(Player* bot)
     for (ObjectGuid const guid : ignoreList)
     {
         if (guid.GetEntry() == getEntry())
-        {
             return false;
-        }
+
     }
 
     FactionTemplateEntry const* factionEntry = sFactionTemplateStore.LookupEntry(cInfo->faction);
@@ -3223,7 +3288,8 @@ void TravelMgr::LoadQuestTravelTable()
             if (loc.second.empty())
                 continue;
 
-            if (!TravelNodeMap::instance().getMapOffset(loc.second.front().getMapId()) && loc.second.front().getMapId() != 0)
+            if (!TravelNodeMap::instance().getMapOffset(loc.second.front().GetMapId()) &&
+                loc.second.front().GetMapId() != 0)
                 continue;
 
             std::vector<WorldPosition> points = loc.second;
@@ -3235,7 +3301,7 @@ void TravelMgr::LoadQuestTravelTable()
 
             out << "\"center\""
                 << ",";
-            out << points.begin()->getMapId() << ",";
+            out << points.begin()->GetMapId() << ",";
             out << points.begin()->getAreaName() << ",";
             out << points.begin()->getAreaName(true, true) << ",";
 
@@ -3245,7 +3311,7 @@ void TravelMgr::LoadQuestTravelTable()
 
             out << "\"area\""
                 << ",";
-            out << points.begin()->getMapId() << ",";
+            out << points.begin()->GetMapId() << ",";
             out << points.begin()->getAreaName() << ",";
             out << points.begin()->getAreaName(true, true) << ",";
 
@@ -3334,7 +3400,7 @@ void TravelMgr::LoadQuestTravelTable()
 
             std::ostringstream out;
 
-            for (uint8 race = RACE_HUMAN; race < MAX_RACES; race++)
+            for (uint8 race = RACE_HUMAN; race < sRaceMgr->GetMaxRaces(); race++)
             {
                 for (uint8 cls = CLASS_WARRIOR; cls < MAX_CLASSES; ++cls)
                 {
@@ -3613,17 +3679,18 @@ void TravelMgr::LoadQuestTravelTable()
                 if (!pos->getMap())
                     continue;
 
-                float nx = pos->getX() + (x*5)-5000.0f;
-                float ny = pos->getY() + (y*5)-5000.0f;
-                float nz = pos->getZ() + 100.0f;
+                float nx = pos->GetPositionX() + (x * 5) - 5000.0f;
+                float ny = pos->GetPositionY() + (y * 5) - 5000.0f;
+                float nz = pos->GetPositionZ() + 100.0f;
 
                 //pos->getMap()->GetHitPosition(nx, ny, nz + 200.0f, nx, ny, nz, -0.5f);
 
                 if (!pos->getMap()->GetHeightInRange(nx, ny, nz, 5000.0f)) // GetHeight can fail
                     continue;
 
-                WorldPosition  npos = WorldPosition(pos->getMapId(), nx, ny, nz, 0.0);
-                uint32 area = path.getArea(npos.getMapId(), npos.getX(), npos.getY(), npos.getZ());
+                WorldPosition npos = WorldPosition(pos->GetMapId(), nx, ny, nz, 0.0);
+                uint32 area = path.getArea(npos.GetMapId(), npos.GetPositionX(), npos.GetPositionY(),
+                                           npos.GetPositionZ());
 
                 std::ostringstream out;
                 out << std::fixed << area << "," << npos.getDisplayX() << "," << npos.getDisplayY();
@@ -3647,7 +3714,8 @@ void TravelMgr::LoadQuestTravelTable()
             std::string const name = i.second->getTitle();
             name.erase(remove(name.begin(), name.end(), '\"'), name.end());
             out << std::fixed << std::setprecision(2) << name.c_str() << "," << i.first << "," << j->getDisplayX() <<
-    "," << j->getDisplayY() << "," << j->getX() << "," << j->getY() << "," << j->getZ(); sPlayerbotAIConfig.log(5,
+    "," << j->getDisplayY() << "," << j->GetPositionX() << "," << j->GetPositionY() << "," << j->GetPositionZ();
+    sPlayerbotAIConfig.log(5,
     out.str().c_str());
         }
     }
@@ -4022,7 +4090,7 @@ std::vector<TravelDestination*> TravelMgr::getRpgTravelDestinations(Player* bot,
         retTravelLocations.push_back(dest);
     }
 
-    return std::move(retTravelLocations);
+    return retTravelLocations;
 }
 
 std::vector<TravelDestination*> TravelMgr::getExploreTravelDestinations(Player* bot, bool ignoreFull,
@@ -4087,8 +4155,8 @@ void TravelMgr::setNullTravelTarget(Player* player)
 
 void TravelMgr::addMapTransfer(WorldPosition start, WorldPosition end, float portalDistance, bool makeShortcuts)
 {
-    uint32 sMap = start.getMapId();
-    uint32 eMap = end.getMapId();
+    uint32 sMap = start.GetMapId();
+    uint32 eMap = end.GetMapId();
 
     if (sMap == eMap)
         return;
@@ -4121,7 +4189,7 @@ void TravelMgr::addMapTransfer(WorldPosition start, WorldPosition end, float por
     }
 
     // Add actual transfer.
-    auto mapTransfers = mapTransfersMap.find(std::make_pair(start.getMapId(), end.getMapId()));
+    auto mapTransfers = mapTransfersMap.find(std::make_pair(start.GetMapId(), end.GetMapId()));
 
     if (mapTransfers == mapTransfersMap.end())
         mapTransfersMap.insert({{sMap, eMap}, {mapTransfer(start, end, portalDistance)}});
@@ -4142,8 +4210,8 @@ void TravelMgr::loadMapTransfers()
 
 float TravelMgr::mapTransDistance(WorldPosition start, WorldPosition end)
 {
-    uint32 sMap = start.getMapId();
-    uint32 eMap = end.getMapId();
+    uint32 sMap = start.GetMapId();
+    uint32 eMap = end.GetMapId();
 
     if (sMap == eMap)
         return start.distance(end);
@@ -4167,8 +4235,8 @@ float TravelMgr::mapTransDistance(WorldPosition start, WorldPosition end)
 
 float TravelMgr::fastMapTransDistance(WorldPosition start, WorldPosition end)
 {
-    uint32 sMap = start.getMapId();
-    uint32 eMap = end.getMapId();
+    uint32 sMap = start.GetMapId();
+    uint32 eMap = end.GetMapId();
 
     if (sMap == eMap)
         return start.fDist(end);
@@ -4282,4 +4350,525 @@ void TravelMgr::printObj(WorldObject* obj, std::string const type)
             sPlayerbotAIConfig.log(fileName, out.str().c_str());
         }
     }
+}
+
+void TravelMgr::Init()
+{
+    if (sPlayerbotAIConfig.enabled)
+    {
+        PrepareZone2LevelBracket();
+        PrepareDestinationCache();
+    }
+    sTravelNodeMap.InitTaxiGraph();
+    LOG_INFO("playerbots", "Playerbots Taxi graph and destination cache built.");
+}
+
+TravelMgr::FlightMasterInfo const* TravelMgr::GetNearestFlightMasterInfo(Player* bot) const
+{
+    auto const& flightMasterCache =
+        (bot->GetTeamId() == TEAM_ALLIANCE) ? allianceFlightMasterCache : hordeFlightMasterCache;
+
+    FlightMasterInfo const* nearest = nullptr;
+    float nearestDistance = std::numeric_limits<float>::max();
+
+    for (auto const& [dbGuid, info] : flightMasterCache)
+    {
+        if (info.pos.GetMapId() != bot->GetMapId())
+            continue;
+
+        float distance = bot->GetExactDist2dSq(info.pos);
+        if (distance < nearestDistance)
+        {
+            nearestDistance = distance;
+            nearest = &info;
+        }
+    }
+
+    return nearest;
+}
+
+std::vector<uint32> TravelMgr::GetFlightNodesInZone(uint32 zoneId, TeamId team, uint32 excludeNode) const
+{
+    auto const& cache = (team == TEAM_ALLIANCE) ? allianceFlightMasterCache : hordeFlightMasterCache;
+    std::unordered_set<uint32> seen;
+    std::vector<uint32> result;
+    for (auto const& [entry, info] : cache)
+    {
+        if (info.zoneId != zoneId || info.taxiNodeId == 0 || info.taxiNodeId == excludeNode)
+            continue;
+        if (seen.insert(info.taxiNodeId).second)
+            result.push_back(info.taxiNodeId);
+    }
+    return result;
+}
+
+std::vector<std::vector<uint32>> TravelMgr::GetOptimalFlightDestinations(Player* bot)
+{
+    std::vector<std::vector<uint32>> validDestinations;
+
+    FlightMasterInfo const* nearestFlightMaster = GetNearestFlightMasterInfo(bot);
+    if (!nearestFlightMaster || bot->GetDistance(nearestFlightMaster->pos) > 500.0f)
+        return validDestinations;
+
+    uint32 fromNode = nearestFlightMaster->taxiNodeId;
+    if (!fromNode)
+        return validDestinations;
+
+    TaxiNodesEntry const* startNode = sTaxiNodesStore.LookupEntry(fromNode);
+    if (!startNode)
+        return validDestinations;
+
+    uint32 botLevel = bot->GetLevel();
+
+    // Bots already in a capital shouldn't have another capital picked as a
+    // flight destination — that just shuffles them between cities.
+    bool botInCapital = false;
+    if (AreaTableEntry const* area = sAreaTableStore.LookupEntry(bot->GetZoneId()))
+        botInCapital = (area->flags & AREA_FLAG_CAPITAL) != 0;
+
+    //Simplify destination delection. Its either target cities (Based on config value) or target world.
+    std::vector<uint32> candidateZones;
+    if (botLevel >= 10 && !botInCapital && urand(0, 100) < sPlayerbotAIConfig.probTeleToBankers * 100)
+    {
+        TeamId botTeam = bot->GetTeamId();
+        for (Capital const& capital : capitals)
+        {
+            if (capital.team != TEAM_NEUTRAL && capital.team != botTeam)
+                continue;
+            candidateZones.push_back(capital.zoneId);
+        }
+    }
+    if (candidateZones.empty())
+    {
+        for (auto const& [zoneId, bracket] : zone2LevelBracket)
+        {
+            if (botLevel < bracket.low || botLevel > bracket.high)
+                continue;
+            if (GetFlightNodesInZone(zoneId, bot->GetTeamId(), fromNode).empty())
+                continue;
+            candidateZones.push_back(zoneId);
+        }
+    }
+
+    if (candidateZones.empty())
+        return validDestinations;
+
+    while (!candidateZones.empty())
+    {
+        uint32 zoneIndex = urand(0, candidateZones.size() - 1);
+        uint32 pickedZone = candidateZones[zoneIndex];
+
+        std::vector<uint32> usableNodes = GetFlightNodesInZone(pickedZone, bot->GetTeamId(), fromNode);
+
+        if (!usableNodes.empty())
+        {
+            uint32 pickedNode = usableNodes[urand(0, usableNodes.size() - 1)];
+            std::vector<uint32> path = sTravelNodeMap.FindTaxiPath(fromNode, pickedNode);
+            if (!path.empty())
+            {
+                validDestinations.push_back(std::move(path));
+                return validDestinations;
+            }
+        }
+
+        candidateZones.erase(candidateZones.begin() + zoneIndex);
+    }
+
+    return validDestinations;
+}
+
+const std::vector<WorldLocation> TravelMgr::GetTeleportLocations(Player* bot)
+{
+    uint32 level = bot->GetLevel();
+    uint8 isAlliance = bot->GetTeamId() == TEAM_ALLIANCE;
+    if (sPlayerbotAIConfig.enableNewRpgStrategy)
+        return isAlliance ? allianceHubsPerLevelCache[level] : hordeHubsPerLevelCache[level];
+
+    return locsPerLevelCache[level];
+}
+
+const std::vector<WorldLocation> TravelMgr::GetTravelHubs(Player* bot)
+{
+    std::vector<WorldLocation> locs = bot->GetTeamId() == TEAM_ALLIANCE
+                                                 ? allianceHubsPerLevelCache[bot->GetLevel()]
+                                                 : hordeHubsPerLevelCache[bot->GetLevel()];
+    return locs;
+}
+
+std::vector<WorldLocation> TravelMgr::GetCityLocations(Player* bot)
+{
+    uint32 level = bot->GetLevel();
+
+    std::vector<WorldLocation> fallbackLocations;
+    for (auto& bLoc : bankerLocsPerLevelCache[level])
+        fallbackLocations.push_back(bLoc.loc);
+
+    if (!sPlayerbotAIConfig.enableWeightTeleToCityBankers)
+        return fallbackLocations;
+
+    TeamId botTeamId = bot->GetTeamId();
+    std::unordered_set<uint32> validBankerCities;
+    for (auto& loc : bankerLocsPerLevelCache[level])
+    {
+        Capital const* capital = FindCapitalByBanker(loc.entry);
+        if (!capital)
+            continue;
+
+        TeamId cityTeamId = capital->team;
+
+        if (cityTeamId == botTeamId ||
+            (cityTeamId == TEAM_NEUTRAL)
+           )
+            validBankerCities.insert(capital->zoneId);
+    }
+    // Fallback if no valid cities
+    if (validBankerCities.empty())
+        return fallbackLocations;
+
+    // Apply weights to valid cities
+    std::vector<uint32> weightedCities;
+    for (uint32 zoneId : validBankerCities)
+    {
+        int weight = GetCityWeight(zoneId);
+        if (weight <= 0)
+            continue;
+
+        for (int i = 0; i < weight; ++i)
+            weightedCities.push_back(zoneId);
+    }
+
+    // Fallback if no valid cities
+    if (weightedCities.empty())
+        return fallbackLocations;
+
+    // Pick a weighted city randomly, then a random banker in that city
+    uint32 selectedCity = weightedCities[urand(0, weightedCities.size() - 1)];
+    Capital const* selectedCapital = FindCapitalByZone(selectedCity);
+    if (!selectedCapital)
+        return fallbackLocations;
+    auto const& bankers = selectedCapital->bankers;
+    uint32 selectedBankerEntry = bankers[urand(0, bankers.size() - 1)];
+    auto locIt = bankerEntryToLocation.find(selectedBankerEntry);
+    if (locIt != bankerEntryToLocation.end())
+        return { locIt->second };
+    // Fallback if something went wrong
+    return fallbackLocations;
+}
+
+void TravelMgr::PrepareZone2LevelBracket()
+{
+    // Classic WoW - starter zones
+    zone2LevelBracket[AREA_DUN_MOROGH]        = {5, 12};
+    zone2LevelBracket[AREA_ELWYNN_FOREST]     = {5, 12};
+    zone2LevelBracket[AREA_DUROTAR]           = {5, 12};
+    zone2LevelBracket[AREA_TIRISFAL_GLADES]   = {5, 12};
+    zone2LevelBracket[AREA_TELDRASSIL]        = {5, 12};
+    zone2LevelBracket[AREA_MULGORE]           = {5, 12};
+    zone2LevelBracket[AREA_EVERSONG_WOODS]    = {5, 12};
+    zone2LevelBracket[AREA_AZUREMYST_ISLE]    = {5, 12};
+
+    // Classic WoW - low level zones
+    zone2LevelBracket[AREA_THE_BARRENS]       = {10, 25};
+    zone2LevelBracket[AREA_LOCH_MODAN]        = {10, 20};
+    zone2LevelBracket[AREA_WESTFALL]          = {10, 21};
+    zone2LevelBracket[AREA_SILVERPINE_FOREST] = {10, 23};
+    zone2LevelBracket[AREA_DARKSHORE]         = {10, 21};
+    zone2LevelBracket[AREA_GHOSTLANDS]        = {10, 22};
+    zone2LevelBracket[AREA_BLOODMYST_ISLE]    = {10, 21};
+
+    // Classic WoW - mid-level zones
+    zone2LevelBracket[AREA_DUSKWOOD]             = {19, 33};
+    zone2LevelBracket[AREA_WETLANDS]             = {21, 30};
+    zone2LevelBracket[AREA_REDRIDGE_MOUNTAINS]   = {16, 28};
+    zone2LevelBracket[AREA_HILLSBRAD_FOOTHILLS]  = {20, 34};
+    zone2LevelBracket[AREA_ASHENVALE]            = {18, 33};
+    zone2LevelBracket[AREA_THOUSAND_NEEDLES]     = {24, 36};
+    zone2LevelBracket[AREA_STONETALON_MOUNTAINS] = {16, 29};
+
+    // Classic WoW - 30-52 zones
+    zone2LevelBracket[AREA_BADLANDS]            = {36, 46};
+    zone2LevelBracket[AREA_SWAMP_OF_SORROWS]    = {36, 46};
+    zone2LevelBracket[AREA_DUSTWALLOW_MARSH]    = {35, 46};
+    zone2LevelBracket[AREA_AZSHARA]             = {45, 52};
+    zone2LevelBracket[AREA_STRANGLETHORN_VALE]  = {32, 47};
+    zone2LevelBracket[AREA_ARATHI_HIGHLANDS]    = {30, 42};
+    zone2LevelBracket[AREA_THE_HINTERLANDS]     = {42, 51};
+    zone2LevelBracket[AREA_SEARING_GORGE]       = {45, 51};
+    zone2LevelBracket[AREA_FERALAS]             = {40, 52};
+    zone2LevelBracket[AREA_DESOLACE]            = {30, 41};
+    zone2LevelBracket[AREA_TANARIS]             = {41, 52};
+
+    // Classic WoW - top level zones
+    zone2LevelBracket[AREA_BLASTED_LANDS]        = {52, 57};
+    zone2LevelBracket[AREA_WESTERN_PLAGUELANDS]  = {50, 60};
+    zone2LevelBracket[AREA_BURNING_STEPPES]      = {51, 60};
+    zone2LevelBracket[AREA_EASTERN_PLAGUELANDS]  = {54, 62};
+    zone2LevelBracket[361]                       = {47, 57}; // Felwood (no AREA_ define)
+    zone2LevelBracket[490]                       = {49, 56}; // Un'Goro Crater (no AREA_ define)
+    zone2LevelBracket[AREA_WINTERSPRING]         = {54, 61};
+    zone2LevelBracket[AREA_SILITHUS]             = {54, 63};
+
+    // The Burning Crusade zones
+    zone2LevelBracket[AREA_HELLFIRE_PENINSULA]    = {58, 66};
+    zone2LevelBracket[AREA_NAGRAND]               = {64, 70};
+    zone2LevelBracket[AREA_TEROKKAR_FOREST]       = {62, 73};
+    zone2LevelBracket[AREA_SHADOWMOON_VALLEY]     = {66, 73};
+    zone2LevelBracket[AREA_ZANGARMARSH]           = {60, 67};
+    zone2LevelBracket[AREA_BLADES_EDGE_MOUNTAINS] = {64, 73};
+    zone2LevelBracket[AREA_NETHERSTORM]           = {67, 73};
+    zone2LevelBracket[AREA_ISLE_OF_QUEL_DANAS]    = {68, 73};
+
+    // Wrath of the Lich King zones
+    zone2LevelBracket[AREA_DRAGONBLIGHT]        = {71, 77};
+    zone2LevelBracket[AREA_ZUL_DRAK]            = {74, 80};
+    zone2LevelBracket[AREA_THE_STORM_PEAKS]     = {77, 80};
+    zone2LevelBracket[210]                      = {77, 80}; // Icecrown Glacier (no AREA_ define)
+    zone2LevelBracket[AREA_GRIZZLY_HILLS]       = {72, 78};
+    zone2LevelBracket[AREA_HOWLING_FJORD]       = {68, 74};
+    zone2LevelBracket[AREA_CRYSTALSONG_FOREST]  = {77, 80};
+    zone2LevelBracket[AREA_BOREAN_TUNDRA]       = {68, 75};
+    zone2LevelBracket[AREA_SHOLAZAR_BASIN]      = {75, 80};
+    zone2LevelBracket[AREA_WINTERGRASP]         = {79, 80};
+
+    // Override with values from config
+    for (auto const& [zoneId, bracketPair] : sPlayerbotAIConfig.zoneBrackets)
+        zone2LevelBracket[zoneId] = {bracketPair.first, bracketPair.second};
+}
+
+void TravelMgr::PrepareDestinationCache()
+{
+    uint32 maxLevel = sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL);
+    uint32 flightMastersCount = 0;
+    uint32 innkeepersCount = 0;
+    uint32 bankerCount = 0;
+
+    LOG_INFO("playerbots", "Preparing destination caches for {} levels...", maxLevel);
+    // Temporary map to group creatures by entry and area
+    std::map<std::tuple<uint16, int32, int32, int32>, std::vector<CreatureData>> tempLocsCache;
+    std::map<uint32, std::map<uint32, std::vector<WorldLocation>>> tempCreatureCache;
+    for (auto const& [guid, creatureData] : sObjectMgr->GetAllCreatureData())
+    {
+        CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(creatureData.id1);
+        if (!creatureTemplate)
+            continue;
+
+        uint16 mapId = creatureData.mapid;
+        if (std::find(sPlayerbotAIConfig.randomBotMaps.begin(), sPlayerbotAIConfig.randomBotMaps.end(), mapId)
+                      == sPlayerbotAIConfig.randomBotMaps.end())
+            continue;
+
+        float x = creatureData.posX;
+        float y = creatureData.posY;
+        float z = creatureData.posZ;
+        float orient = creatureData.orientation;
+        uint32 templateEntry = creatureData.id1;
+
+        Map* map = sMapMgr->FindMap(mapId, 0);
+        if (!map)
+            continue;
+
+        AreaTableEntry const* area = sAreaTableStore.LookupEntry(map->GetAreaId(PHASEMASK_NORMAL, x, y, z));
+        if (!area)
+            continue;
+
+        uint32 areaId = area->zone ? area->zone : area->ID;
+
+        // CREATURES
+        if (creatureTemplate->npcflag == 0 &&
+            creatureTemplate->lootid != 0 &&
+            creatureTemplate->maxlevel - creatureTemplate->minlevel < 3 &&
+            creatureTemplate->Entry != 32820 && creatureTemplate->Entry != 24196 &&
+            creatureTemplate->Entry != 30627 && creatureTemplate->Entry != 30617 &&
+            creatureData.spawntimesecs < 1000 &&
+            creatureTemplate->faction != 11 && creatureTemplate->faction != 71 &&
+            creatureTemplate->faction != 79 && creatureTemplate->faction != 85 &&
+            creatureTemplate->faction != 188 && creatureTemplate->faction != 1575 &&
+            (creatureTemplate->unit_flags & 256) == 0 &&
+            (creatureTemplate->unit_flags & 4096) == 0 &&
+            creatureTemplate->rank == 0)
+        {
+            int32 roundX = static_cast<int32>(std::lround(x / 50.0f));
+            int32 roundY = static_cast<int32>(std::lround(y / 50.0f));
+            int32 roundZ = static_cast<int32>(std::lround(z / 50.0f));
+            tempLocsCache[std::make_tuple(mapId, roundX, roundY, roundZ)].push_back(creatureData);
+            tempCreatureCache[templateEntry][areaId].push_back(WorldLocation(mapId, x, y, z));
+        }
+        // FLIGHT MASTERS
+        // Entry 29480 is Grimwing (Storm Peaks)
+        // Entry 3838 is Vesprystus in Rut'Theran. Need Travel Node system to resolve this one.
+        else if ((creatureTemplate->npcflag & UNIT_NPC_FLAG_FLIGHTMASTER ||
+                  creatureTemplate->npcflag & UNIT_NPC_FLAG_INNKEEPER) &&
+                creatureTemplate->Entry != 3838 && creatureTemplate->Entry != 29480)
+        {
+            FactionTemplateEntry const* factionEntry = sFactionTemplateStore.LookupEntry(creatureTemplate->faction);
+            bool forHorde = !(factionEntry->hostileMask & 4);
+            bool forAlliance = !(factionEntry->hostileMask & 2);
+
+            if (creatureTemplate->npcflag & UNIT_NPC_FLAG_FLIGHTMASTER)
+            {
+                WorldPosition pos(mapId, x, y, z, orient);
+                if (forHorde)
+                {
+                    FlightMasterInfo info;
+                    info.pos = pos;
+                    info.zoneId = areaId;
+                    info.taxiNodeId = sObjectMgr->GetNearestTaxiNode(x, y, z, mapId, TEAM_HORDE);
+                    info.templateEntry = templateEntry;
+                    info.dbGuid = guid;
+                    hordeFlightMasterCache[guid] = info;
+                }
+
+                if (forAlliance)
+                {
+                    FlightMasterInfo info;
+                    info.pos = pos;
+                    info.zoneId = areaId;
+                    info.taxiNodeId = sObjectMgr->GetNearestTaxiNode(x, y, z, mapId, TEAM_ALLIANCE);
+                    info.templateEntry = templateEntry;
+                    info.dbGuid = guid;
+                    allianceFlightMasterCache[guid] = info;
+                }
+                flightMastersCount++;
+
+                // Zones that have flight masters but no innkeepers — use flight master as hub
+                static const std::set<uint32> zonesWithoutInnkeeper = {
+                    AREA_BLASTED_LANDS,
+                    AREA_AZSHARA,
+                    AREA_WESTERN_PLAGUELANDS,
+                    AREA_BURNING_STEPPES,
+                    AREA_SEARING_GORGE,
+                    361,  // Felwood (47-57)
+                    490,  // Un'Goro Crater (49-56)
+                    AREA_CRYSTALSONG_FOREST,
+                    AREA_WINTERGRASP
+                };
+                if (zonesWithoutInnkeeper.count(areaId))
+                {
+                    LevelBracket bracket = zone2LevelBracket[areaId];
+                    WorldPosition loc(mapId, x + cos(orient) * 5.0f, y + sin(orient) * 5.0f, z + 0.5f, orient + M_PI);
+                    for (int i = bracket.low; i <= bracket.high; i++)
+                    {
+                        if (forHorde)
+                            hordeHubsPerLevelCache[i].push_back(loc);
+                        if (forAlliance)
+                            allianceHubsPerLevelCache[i].push_back(loc);
+                    }
+                }
+            }
+            else if (creatureTemplate->npcflag & UNIT_NPC_FLAG_INNKEEPER)
+            {
+                if (zone2LevelBracket.find(areaId) == zone2LevelBracket.end())
+                    continue;
+
+                LevelBracket bracket = zone2LevelBracket[areaId];
+                WorldPosition loc(mapId, x + cos(orient) * 5.0f, y + sin(orient) * 5.0f, z + 0.5f, orient + M_PI);
+                for (int i = bracket.low; i <= bracket.high; i++)
+                {
+                    if (forHorde)
+                        hordeHubsPerLevelCache[i].push_back(loc);
+
+                    if (forAlliance)
+                        allianceHubsPerLevelCache[i].push_back(loc);
+                    innkeepersCount++;
+                }
+            }
+        }
+        // === BANKERS ===
+        else if (creatureTemplate->npcflag & UNIT_NPC_FLAG_BANKER &&
+                 creatureTemplate->npcflag != 135298 &&
+                 creatureTemplate->minlevel != 55 &&
+                 creatureTemplate->minlevel != 65 &&
+                 creatureTemplate->faction != 35 && creatureTemplate->faction != 474 &&
+                 creatureTemplate->faction != 69 && creatureTemplate->faction != 57 &&
+                 creatureTemplate->Entry != 30606 && creatureTemplate->Entry != 30608 &&
+                 creatureTemplate->Entry != 29282)
+        {
+            BankerLocation bLoc;
+            bLoc.loc = WorldLocation(mapId, x + cos(orient) * 6.0f, y + sin(orient) * 6.0f, z + 2.0f, orient + M_PI);
+            bLoc.entry = templateEntry;
+            uint32 level = (creatureTemplate->minlevel + creatureTemplate->maxlevel + 1) / 2;
+            for (int32 l = 1; l <= maxLevel; l++)
+            {
+                // Bots 1-60 go to base game bankers (all have minlevel 30 or 45)
+                if (l <=60 && level > 45)
+                    continue;
+
+                // Bots 61-70 go to Shattrath bankers (all have minlevel 60 or 70)
+                if ((l >=61 && l <=70) && (level < 60 || level > 70))
+                    continue;
+
+                // Bots 71+ go to Dalaran bankers (all have minlevel 75)
+                if ((l >=71) && level != 75)
+                    continue;
+
+                bankerLocsPerLevelCache[(uint8)l].push_back(bLoc);
+                bankerEntryToLocation[bLoc.entry] = bLoc.loc;
+            }
+            bankerCount++;
+        }
+    }
+
+    // Process temporary caches
+    for (auto const& [gridTuple, creatureDataList] : tempLocsCache)
+    {
+        if (creatureDataList.size() >= 2)
+        {
+            CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(creatureDataList[0].id1);
+            uint32 level = (creatureTemplate->minlevel + creatureTemplate->maxlevel + 1) / 2;
+            for (int32 l = (int32)level - (int32)sPlayerbotAIConfig.randomBotTeleLowerLevel;
+                 l <= (int32)level + (int32)sPlayerbotAIConfig.randomBotTeleHigherLevel; l++)
+            {
+                if (l < 1 || l > maxLevel)
+                    continue;
+
+                    locsPerLevelCache[(uint8)l].push_back(WorldLocation(std::get<0>(gridTuple),
+                        static_cast<float>(std::get<1>(gridTuple)) * 50.0f,
+                        static_cast<float>(std::get<2>(gridTuple)) * 50.0f,
+                        static_cast<float>(std::get<3>(gridTuple)) * 50.0f));
+            }
+        }
+    }
+    for (auto const& [entry, areaMap] : tempCreatureCache)
+    {
+        for (auto const& [area, locList] : areaMap)
+        {
+            if (locList.size() > 3)
+                continue;
+
+            float totalX = 0, totalY = 0, totalZ = 0;
+            for (auto const& loc : locList)
+            {
+                totalX += loc.GetPositionX();
+                totalY += loc.GetPositionY();
+                totalZ += loc.GetPositionZ();
+            }
+            float avgX = totalX / locList.size();
+            float avgY = totalY / locList.size();
+            float avgZ = totalZ / locList.size();
+            creatureSpawnsByTemplate[entry].push_back(WorldLocation(locList[0].GetMapId(), avgX, avgY, avgZ, 0));
+        }
+    }
+    // Add travel hubs based on player start locations
+    for (uint32 i = 1; i < sRaceMgr->GetMaxRaces(); i++)
+    {
+        for (uint32 j = 1; j < MAX_CLASSES; j++)
+        {
+            PlayerInfo const* info = sObjectMgr->GetPlayerInfo(i, j);
+
+            if (!info)
+                continue;
+
+            WorldPosition pos(info->mapId, info->positionX, info->positionY, info->positionZ, info->orientation);
+
+            for (int32 l = 1; l <= 5; l++)
+            {
+                if ((1 << (i - 1)) & sRaceMgr->GetAllianceRaceMask())
+                    allianceHubsPerLevelCache[(uint8)l].push_back(pos);
+                else
+                    hordeHubsPerLevelCache[(uint8)l].push_back(pos);
+            }
+            break;
+        }
+    }
+    LOG_INFO("playerbots", ">> {} flight masters and {} innkeepers and {} banker locations for level collected.", flightMastersCount, innkeepersCount, bankerCount);
 }

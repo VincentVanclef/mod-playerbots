@@ -12,351 +12,11 @@
 #include "GroupMgr.h"
 #include "PlayerbotAI.h"
 #include "Playerbots.h"
-#include "ScriptMgr.h"
-
-#include <ctime>
-#include <unordered_map>
-
-namespace
-{
-    static bool RTG_ParseBgBotAssignment(std::string const& data, uint32& team, uint32& level, uint32& queueType)
-    {
-        bool isBg = data.rfind("rtg_bg:", 0) == 0;
-        bool isArena = data.rfind("rtg_arena:", 0) == 0;
-        if (!isBg && !isArena)
-            return false;
-
-        std::string payload = data.substr(isArena ? 10 : 7);
-        size_t sep1 = payload.find(':');
-        size_t sep2 = payload.find(':', sep1 == std::string::npos ? sep1 : sep1 + 1);
-        if (sep1 == std::string::npos || sep2 == std::string::npos)
-            return false;
-
-        try
-        {
-            team = static_cast<uint32>(std::stoul(payload.substr(0, sep1)));
-            level = static_cast<uint32>(std::stoul(payload.substr(sep1 + 1, sep2 - sep1 - 1)));
-            queueType = static_cast<uint32>(std::stoul(payload.substr(sep2 + 1)));
-            return true;
-        }
-        catch (...)
-        {
-            return false;
-        }
-    }
-
-    static bool RTG_GetAssignedBgQueue(Player* bot, uint32& queueType)
-    {
-        queueType = 0;
-        if (!bot)
-            return false;
-
-        uint32 team = 0, level = 0;
-        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
-        if (!RTG_ParseBgBotAssignment(addData, team, level, queueType))
-            return false;
-
-        return true;
-    }
-
-    static uint32 RTG_NormalizeArenaSizeForJoin(BattlegroundQueueTypeId queueTypeId, ArenaType arenaType)
-    {
-        uint32 raw = uint32(arenaType);
-        if (raw == 4u)
-            return 3u;
-        if (raw == 1u)
-            return 1u;
-        if (queueTypeId == BATTLEGROUND_QUEUE_2v2)
-            return 2u;
-        if (queueTypeId == BATTLEGROUND_QUEUE_3v3)
-            return 3u;
-        if (queueTypeId == BATTLEGROUND_QUEUE_5v5)
-            return 5u;
-        return raw;
-    }
-
-    static std::string RTG_MakeBgDemandKey(uint32 queueType, uint32 bracketId)
-    {
-        return std::string("rtg_bg_real_demand:") + std::to_string(queueType) + ":" + std::to_string(bracketId);
-    }
-
-    static std::string RTG_MakeBgTeamNeedKey(uint32 queueType, uint32 bracketId, uint32 teamId)
-    {
-        return std::string("rtg_bg_team_need:") + std::to_string(queueType) + ":" + std::to_string(bracketId) + ":" + std::to_string(teamId);
-    }
-
-    static bool RTG_AssignedBgHelperHasDemand(Player* bot, uint32 queueType)
-    {
-        if (!bot || !sPlayerbotAIConfig.rtgEventDriven || !queueType)
-            return false;
-
-        uint32 team = 0, level = 0, parsedQueueType = 0;
-        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
-        if (!RTG_ParseBgBotAssignment(addData, team, level, parsedQueueType) || parsedQueueType != queueType)
-            return false;
-
-        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(BattlegroundQueueTypeId(queueType));
-        if (bgTypeId == BATTLEGROUND_TYPE_NONE)
-            return false;
-
-        Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-        if (!bg)
-            return false;
-
-        PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bg->GetMapId(), level ? level : bot->GetLevel());
-        if (!pvpDiff)
-            return false;
-
-        uint32 bracketId = uint32(pvpDiff->GetBracketId());
-        if (sRandomPlayerbotMgr.RTG_GetGlobalEvent(RTG_MakeBgTeamNeedKey(queueType, bracketId, team)) != 0)
-            return true;
-        if (sRandomPlayerbotMgr.RTG_GetGlobalEvent(RTG_MakeBgDemandKey(queueType, bracketId)) != 0)
-            return true;
-
-        return false;
-    }
-
-    static BattlegroundQueueTypeId RTG_FindBotQueueTypeForLeave(Player* bot)
-    {
-        if (!bot)
-            return BATTLEGROUND_QUEUE_NONE;
-
-        for (uint8 queueSlot = 0; queueSlot < PLAYER_MAX_BATTLEGROUND_QUEUES; ++queueSlot)
-        {
-            BattlegroundQueueTypeId queueTypeId = bot->GetBattlegroundQueueTypeId(queueSlot);
-            if (queueTypeId > BATTLEGROUND_QUEUE_NONE && queueTypeId < MAX_BATTLEGROUND_QUEUE_TYPES)
-                return queueTypeId;
-        }
-
-        uint32 team = 0;
-        uint32 level = 0;
-        uint32 queueType = 0;
-        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
-        if (RTG_ParseBgBotAssignment(addData, team, level, queueType) &&
-            queueType > BATTLEGROUND_QUEUE_NONE && queueType < MAX_BATTLEGROUND_QUEUE_TYPES)
-            return BattlegroundQueueTypeId(queueType);
-
-        return BATTLEGROUND_QUEUE_NONE;
-    }
-
-    static bool RTG_IsProtectedBgHelper(Player* bot)
-    {
-        if (!bot || !sPlayerbotAIConfig.rtgEventDriven || !sRandomPlayerbotMgr.IsRandomBot(bot))
-            return false;
-
-        uint32 botId = bot->GetGUID().GetCounter();
-        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_pending") != 0)
-            return true;
-        if (sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_retire_when_safe") != 0)
-            return true;
-
-        uint32 queueType = 0;
-        return RTG_GetAssignedBgQueue(bot, queueType) && queueType != 0;
-    }
-
-    static bool RTG_BattlegroundHasRealPlayers(Battleground* bg)
-    {
-        if (!bg || !bg->GetBgMap())
-            return false;
-
-        for (auto const& ref : bg->GetBgMap()->GetPlayers())
-        {
-            Player* player = ref.GetSource();
-            if (!player)
-                continue;
-            if (!sRandomPlayerbotMgr.IsRandomBot(player))
-                return true;
-        }
-
-        return false;
-    }
-
-    static bool RTG_ProtectedPvpHelperIsDraining(Player* bot)
-    {
-        if (!bot)
-            return false;
-
-        uint32 botId = bot->GetGUID().GetCounter();
-        return sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_retire_when_safe") != 0 ||
-               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_world_return_since") != 0 ||
-               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_bg_leave_requested") != 0 ||
-               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_retire_when_safe") != 0 ||
-               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_world_return_since") != 0 ||
-               sRandomPlayerbotMgr.RTG_GetBotEventValue(botId, "rtg_arena_leave_requested") != 0;
-    }
-
-    static bool RTG_ProtectedBgHelperMayLeave(Player* bot, Battleground* bg)
-    {
-        if (!bot || !bg)
-            return true;
-
-        if (bg->GetStatus() == STATUS_WAIT_LEAVE)
-            return true;
-
-        if (!RTG_IsProtectedBgHelper(bot))
-            return true;
-
-        static std::unordered_map<uint32, uint32> sNoRealPlayerSince;
-        uint32 instanceId = bg->GetInstanceID();
-        uint32 nowSecs = static_cast<uint32>(time(nullptr));
-
-        if (RTG_BattlegroundHasRealPlayers(bg))
-        {
-            sNoRealPlayerSince.erase(instanceId);
-            return false;
-        }
-
-        if (!bg->isArena())
-        {
-            uint32 assignedQueueType = 0;
-            if (RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != 0 &&
-                !RTG_AssignedBgHelperHasDemand(bot, assignedQueueType))
-            {
-                sNoRealPlayerSince.erase(instanceId);
-                return true;
-            }
-        }
-
-        if (RTG_ProtectedPvpHelperIsDraining(bot))
-        {
-            sNoRealPlayerSince.erase(instanceId);
-            return true;
-        }
-
-        auto itr = sNoRealPlayerSince.find(instanceId);
-        if (itr == sNoRealPlayerSince.end())
-            itr = sNoRealPlayerSince.emplace(instanceId, nowSecs).first;
-
-        return nowSecs >= itr->second && (nowSecs - itr->second) >= 5u;
-    }
-
-    static void RTG_LogBgLeaveBlocked(Player* bot, Battleground* bg)
-    {
-        if (!bot || !bg)
-            return;
-
-        static std::unordered_map<uint32, uint32> sNextBlockedLogAt;
-        uint32 botId = bot->GetGUID().GetCounter();
-        uint32 nowSecs = static_cast<uint32>(time(nullptr));
-        uint32& nextLogAt = sNextBlockedLogAt[botId];
-        if (nextLogAt && nowSecs < nextLogAt)
-            return;
-
-        nextLogAt = nowSecs + 10u;
-        char const* laneTag = bg->isArena() ? "ARENA" : "BG";
-        LOG_INFO("playerbots", "[RTG][{}][TEARDOWN_BLOCK] helper={} stage=leave_protected status={} map={} instance={}",
-            laneTag, botId, uint32(bg->GetStatus()), bg->GetMapId(), bg->GetInstanceID());
-        LOG_INFO("server.loading", "[RTG][{}][LEAVE][BLOCK] helper={} status={} map={} instance={}",
-            laneTag, botId, uint32(bg->GetStatus()), bg->GetMapId(), bg->GetInstanceID());
-    }
-
-    static bool RTG_DirectJoinArenaQueue(Player* bot, BattlegroundQueueTypeId queueTypeId, ArenaType arenaType, bool isRated)
-    {
-        if (!bot || queueTypeId == BATTLEGROUND_QUEUE_NONE || arenaType == ARENA_TYPE_NONE)
-            return false;
-
-        if (bot->InBattleground() || bot->InArena())
-            return false;
-
-        if (bot->GetBattlegroundQueueIndex(queueTypeId) < PLAYER_MAX_BATTLEGROUND_QUEUES)
-            return false;
-
-        if (!bot->HasFreeBattlegroundQueueId())
-            return false;
-
-        Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(BATTLEGROUND_AA);
-        if (!bg)
-            return false;
-
-        PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketByLevel(bg->GetMapId(), bot->GetLevel());
-        if (!bracketEntry)
-            return false;
-
-        uint32 arenaRating = 0;
-        uint32 matchmakerRating = 0;
-        uint32 arenaTeamId = 0;
-
-        if (isRated)
-        {
-            uint8 arenaSlot = 0;
-            switch (arenaType)
-            {
-                case ARENA_TYPE_2v2: arenaSlot = 0; break;
-                case ARENA_TYPE_3v3: arenaSlot = 1; break;
-                case ARENA_TYPE_5v5: arenaSlot = 2; break;
-                default: arenaSlot = ArenaTeam::GetSlotByType(arenaType); break;
-            }
-
-            arenaTeamId = bot->GetArenaTeamId(arenaSlot);
-            if (arenaTeamId)
-            {
-                if (ArenaTeam* at = sArenaTeamMgr->GetArenaTeamById(arenaTeamId))
-                {
-                    arenaRating = std::max(0u, at->GetRating());
-                    matchmakerRating = arenaRating;
-                }
-                else
-                    arenaTeamId = 0;
-            }
-        }
-
-        BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(queueTypeId);
-        bg->SetRated(isRated);
-        uint32 normalizedArenaSize = RTG_NormalizeArenaSizeForJoin(queueTypeId, arenaType);
-        bg->SetMinPlayersPerTeam(normalizedArenaSize);
-
-        GroupQueueInfo* ginfo = bgQueue.AddGroup(bot, nullptr, BATTLEGROUND_AA, bracketEntry, uint8(arenaType), isRated, false,
-            arenaRating, matchmakerRating, arenaTeamId, 0);
-        if (!ginfo)
-            return false;
-
-        uint32 avgTime = bgQueue.GetAverageQueueWaitTime(ginfo);
-        uint32 queueSlot = bot->AddBattlegroundQueueId(queueTypeId);
-
-        WorldPacket data;
-        sBattlegroundMgr->BuildBattlegroundStatusPacket(&data, bg, queueSlot, STATUS_WAIT_QUEUE, avgTime, 0, uint8(normalizedArenaSize), bot->GetTeamId(), isRated);
-        bot->GetSession()->SendPacket(&data);
-
-        if (isRated && matchmakerRating == 0)
-            matchmakerRating = 1;
-
-        sBattlegroundMgr->ScheduleQueueUpdate(matchmakerRating, uint8(normalizedArenaSize), queueTypeId, BATTLEGROUND_AA, bracketEntry->GetBracketId());
-        sScriptMgr->OnPlayerJoinArena(bot);
-        return true;
-    }
-
-    static void RTG_ClearQueuePenalties(Player* bot)
-    {
-        if (!bot)
-            return;
-
-        bot->RemoveAura(26013); // Deserter
-        bot->RemoveAura(71041); // Dungeon Deserter
-        bot->RemoveAura(71328); // LFG cooldown / penalty-style aura on this branch
-    }
-}
-
 #include "PositionValue.h"
-#include "UpdateTime.h"
 
-bool BGJoinAction::Execute(Event event)
+bool BGJoinAction::Execute(Event /*event*/)
 {
-    if (sPlayerbotAIConfig.rtgEventDriven && sRandomPlayerbotMgr.IsRandomBot(bot))
-    {
-        std::string addData = sRandomPlayerbotMgr.RTG_GetBotEventData(bot->GetGUID().GetCounter(), "add");
-        if (addData.rfind("rtg_lfg:", 0) == 0)
-            return false;
-    }
-
     uint32 queueType = AI_VALUE(uint32, "bg type");
-
-    uint32 assignedQueueType = 0;
-    if (!queueType && sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType))
-    {
-        queueType = assignedQueueType;
-        botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(queueType);
-    }
-
     if (!queueType)  // force join to fill bg
     {
         if (bgList.empty())
@@ -364,8 +24,6 @@ bool BGJoinAction::Execute(Event event)
 
         BattlegroundQueueTypeId queueTypeId = (BattlegroundQueueTypeId)bgList[urand(0, bgList.size() - 1)];
         BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
-        BattlegroundBracketId bracketId;
-        bool isArena = false;
         bool isRated = false;
 
         Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
@@ -377,12 +35,8 @@ bool BGJoinAction::Execute(Event event)
         if (!pvpDiff)
             return false;
 
-        bracketId = pvpDiff->GetBracketId();
-
         if (ArenaType type = ArenaType(BattlegroundMgr::BGArenaType(queueTypeId)))
         {
-            isArena = true;
-
             std::vector<uint32>::iterator i = find(ratedList.begin(), ratedList.end(), queueTypeId);
             if (i != ratedList.end())
                 isRated = true;
@@ -553,8 +207,6 @@ bool BGJoinAction::canJoinBg(BattlegroundQueueTypeId queueTypeId, BattlegroundBr
 
     // check if the bracket exists for the bot's level for the specific Battleground/Arena type
     Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
-    if (!bg)
-        return false;
     uint32 mapId = bg->GetMapId();
     PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(mapId, bot->GetLevel());
     if (!pvpDiff)
@@ -574,31 +226,6 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bg)
         return false;
-
-
-    // ------------------------------------------------------------------
-    // RTG: Event-driven queueing
-    // Keep bots from queueing unless real players have initiated queues,
-    // and respect the grace window so real players get first shot.
-    // ------------------------------------------------------------------
-    uint32 assignedQueueType = 0;
-    bool assignedHelper = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType);
-
-    if (sPlayerbotAIConfig.rtgEventDriven)
-    {
-        if (!assignedHelper)
-        {
-            uint32 start = sRandomPlayerbotMgr.RTG_GetGlobalEvent("rtg_bg_start");
-            if (!start)
-                return false;
-
-            time_t now = time(nullptr);
-            if (now < (time_t)(start + sPlayerbotAIConfig.rtgQueueGraceSeconds))
-                return false;
-        }
-        else if (assignedQueueType != uint32(queueTypeId))
-            return false;
-    }
 
     TeamId teamId = bot->GetTeamId();
     uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
@@ -660,19 +287,12 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     }
 
     // Check if bots should join Battleground
-    assignedHelper = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType);
-
     uint32 bgAllianceBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAllianceBotCount;
     uint32 bgAlliancePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAlliancePlayerCount;
     uint32 bgHordeBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordeBotCount;
     uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
     uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
     uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
-
-    // RTG: explicitly assigned battleground helpers should only queue when the
-    // planner still says this exact queue/team/bracket needs more helpers.
-    if (assignedHelper)
-        return RTG_AssignedBgHelperHasDemand(bot, uint32(queueTypeId));
 
     if (teamId == TEAM_ALLIANCE)
     {
@@ -702,16 +322,13 @@ bool BGJoinAction::isUseful()
     if (bot->InBattlegroundQueue())
         return false;
 
-    uint32 assignedQueueType = 0;
-    bool isRtgBgBot = sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType);
-
-    // do not try right after login unless this bot was explicitly brought online for BG assistance
-    if (!isRtgBgBot && (time(nullptr) - bot->GetInGameTime()) < 120)
+    // do not try right after login (currently not working)
+    if ((time(nullptr) - bot->GetInGameTime()) < 120)
         return false;
 
     // check level
-    //if (bot->GetLevel() < 10)
-    //    return false;
+    if (bot->GetLevel() < 10)
+        return false;
 
     // do not try if with player master
     if (GET_PLAYERBOT_AI(bot)->HasActivePlayerMaster())
@@ -726,7 +343,7 @@ bool BGJoinAction::isUseful()
         return false;
 
     // check Deserter debuff
-    if (!bot->CanJoinToBattleground())
+    if (bot->IsDeserter())
         return false;
 
     // check if has free queue slots (pointless as already making sure not in queue)
@@ -785,12 +402,6 @@ bool BGJoinAction::JoinQueue(uint32 type)
 
     bracketId = pvpDiff->GetBracketId();
 
-    uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
-    uint32 TeamSize = bg->GetMaxPlayersPerTeam();
-    uint32 assignedQueueType = 0;
-    if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != uint32(queueTypeId))
-        return false;
-
     TeamId teamId = bot->GetTeamId();
 
     // check if already in queue
@@ -823,7 +434,9 @@ bool BGJoinAction::JoinQueue(uint32 type)
     Unit* unit = botAI->GetUnit(sRandomPlayerbotMgr.GetBattleMasterGUID(bot, bgTypeId));
     if (!unit && isArena)
     {
-        LOG_DEBUG("playerbots", "Bot {} could not find Arena Battlemaster; using direct queue path", bot->GetGUID().ToString().c_str());
+        botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(0);
+        LOG_DEBUG("playerbots", "Bot {} could not find Battlemaster to join", bot->GetGUID().ToString().c_str());
+        return false;
     }
 
     // This breaks groups as refresh includes a remove from group function call.
@@ -865,29 +478,22 @@ bool BGJoinAction::JoinQueue(uint32 type)
     if (isArena)
     {
         isArena = true;
-        uint32 normalizedArenaSize = RTG_NormalizeArenaSizeForJoin(queueTypeId, arenaType);
-        BracketSize = normalizedArenaSize * 2;
-        TeamSize = normalizedArenaSize;
         isRated = botAI->GetAiObjectContext()->GetValue<uint32>("arena type")->Get();
 
         if (joinAsGroup)
             asGroup = true;
 
-        switch (TeamSize)
+        switch (arenaType)
         {
-            case 1:
-                arenaslot = 0;
-                _bgType = "1v1";
-                break;
-            case 2:
+            case ARENA_TYPE_2v2:
                 arenaslot = 0;
                 _bgType = "2v2";
                 break;
-            case 3:
+            case ARENA_TYPE_3v3:
                 arenaslot = 1;
                 _bgType = "3v3";
                 break;
-            case 5:
+            case ARENA_TYPE_5v5:
                 arenaslot = 2;
                 _bgType = "5v5";
                 break;
@@ -928,34 +534,18 @@ bool BGJoinAction::JoinQueue(uint32 type)
 
     botAI->GetAiObjectContext()->GetValue<uint32>("bg type")->Set(0);
 
+    WorldPacket* packet = nullptr;
     if (!isArena)
     {
-        WorldPacket* packet = new WorldPacket(CMSG_BATTLEMASTER_JOIN, 20);
+        packet = new WorldPacket(CMSG_BATTLEMASTER_JOIN, 20);
         *packet << bot->GetGUID() << bgTypeId_ << instanceId << joinAsGroup;
-        /// FIX race condition
-        // bot->GetSession()->HandleBattlemasterJoinOpcode(packet);
-        bot->GetSession()->QueuePacket(packet);
     }
     else
     {
-        if (RTG_DirectJoinArenaQueue(bot, queueTypeId, arenaType, isRated))
-        {
-            LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} teamSize={} rated={} result=1", bot->GetGUID().GetCounter(), uint32(queueTypeId), TeamSize, isRated ? 1u : 0u);
-            return true;
-        }
-
-        if (!unit)
-        {
-            LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} teamSize={} rated={} result=0 reason=no_battlemaster", bot->GetGUID().GetCounter(), uint32(queueTypeId), TeamSize, isRated ? 1u : 0u);
-            return false;
-        }
-
-        WorldPacket arena_packet(CMSG_BATTLEMASTER_JOIN_ARENA, 20);
-        arena_packet << unit->GetGUID() << arenaslot << asGroup << uint8(isRated);
-        bot->GetSession()->HandleBattlemasterJoinArena(arena_packet);
-        LOG_INFO("playerbots", "[RTG][ARENA][POP] helper={} queue={} teamSize={} rated={} result=1", bot->GetGUID().GetCounter(), uint32(queueTypeId), TeamSize, isRated ? 1u : 0u);
+        packet = new WorldPacket(CMSG_BATTLEMASTER_JOIN_ARENA, 20);
+        *packet << unit->GetGUID() << arenaslot << asGroup << uint8(isRated);
     }
-
+    bot->GetSession()->QueuePacket(packet);
     return true;
 }
 
@@ -965,10 +555,6 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
     BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
     Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
     if (!bg)
-        return false;
-
-    uint32 assignedQueueType = 0;
-    if (sPlayerbotAIConfig.rtgEventDriven && RTG_GetAssignedBgQueue(bot, assignedQueueType) && assignedQueueType != uint32(queueTypeId))
         return false;
 
     TeamId teamId = bot->GetTeamId();
@@ -1053,17 +639,10 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
     return false;
 }
 
-bool BGLeaveAction::Execute(Event event)
+bool BGLeaveAction::Execute(Event /*event*/)
 {
     if (!(bot->InBattlegroundQueue() || bot->InBattleground()))
         return false;
-
-    Battleground* currentBg = bot->GetBattleground();
-    if (currentBg && !RTG_ProtectedBgHelperMayLeave(bot, currentBg))
-    {
-        RTG_LogBgLeaveBlocked(bot, currentBg);
-        return false;
-    }
 
     // botAI->ChangeStrategy("-bg", BOT_STATE_NON_COMBAT);
 
@@ -1071,10 +650,7 @@ bool BGLeaveAction::Execute(Event event)
         return true;
 
     // leave queue if not in BG
-    BattlegroundQueueTypeId queueTypeId = RTG_FindBotQueueTypeForLeave(bot);
-    if (queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
-        return false;
-
+    BattlegroundQueueTypeId queueTypeId = bot->GetBattlegroundQueueTypeId(0);
     BattlegroundTypeId _bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
     uint8 type = false;
     uint16 unk = 0x1F90;
@@ -1118,12 +694,6 @@ bool BGStatusAction::LeaveBG(PlayerbotAI* botAI)
     Battleground* bg = bot->GetBattleground();
     if (!bg)
         return false;
-
-    if (!RTG_ProtectedBgHelperMayLeave(bot, bg))
-    {
-        RTG_LogBgLeaveBlocked(bot, bg);
-        return false;
-    }
     bool isArena = bg->isArena();
     bool isRandomBot = sRandomPlayerbotMgr.IsRandomBot(bot);
 
@@ -1480,7 +1050,7 @@ bool BGStatusAction::Execute(Event event)
     return true;
 }
 
-bool BGStatusCheckAction::Execute(Event event)
+bool BGStatusCheckAction::Execute(Event /*event*/)
 {
     if (bot->IsBeingTeleported())
         return false;
@@ -1496,7 +1066,7 @@ bool BGStatusCheckAction::Execute(Event event)
 
 bool BGStatusCheckAction::isUseful() { return bot->InBattlegroundQueue(); }
 
-bool BGStrategyCheckAction::Execute(Event event)
+bool BGStrategyCheckAction::Execute(Event /*event*/)
 {
     bool inside_bg = bot->InBattleground() && bot->GetBattleground();
     ;

@@ -138,7 +138,7 @@ void Engine::Init()
     }
 }
 
-bool Engine::DoNextAction(Unit* unit, uint32 depth, bool minimal)
+bool Engine::DoNextAction(Unit* /*unit*/, uint32 /*depth*/, bool minimal)
 {
     LogAction("--- AI Tick ---");
 
@@ -323,16 +323,16 @@ ActionResult Engine::ExecuteAction(std::string const name, Event event, std::str
             q->Qualify(qualifier);
     }
 
-    if (!action->isPossible())
-    {
-        delete actionNode;
-        return ACTION_RESULT_IMPOSSIBLE;
-    }
-
     if (!action->isUseful())
     {
         delete actionNode;
         return ACTION_RESULT_USELESS;
+    }
+
+    if (!action->isPossible())
+    {
+        delete actionNode;
+        return ACTION_RESULT_IMPOSSIBLE;
     }
 
     action->MakeVerbose();
@@ -427,6 +427,12 @@ void Engine::toggleStrategy(std::string const name)
 }
 
 bool Engine::HasStrategy(std::string const name) { return strategies.find(name) != strategies.end(); }
+
+Strategy* Engine::GetStrategy(std::string const name)
+{
+    std::map<std::string, Strategy*>::iterator i = strategies.find(name);
+    return i != strategies.end() ? i->second : nullptr;
+}
 
 void Engine::ProcessTriggers(bool minimal)
 {

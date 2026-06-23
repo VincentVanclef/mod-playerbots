@@ -143,14 +143,17 @@ bool CastCustomSpellAction::Execute(Event event)
     std::ostringstream spellName;
     spellName << ChatHelper::FormatSpell(spellInfo) << " on ";
 
+    bool const hasItemTarget = itemTarget &&
+        (spellInfo->Targets & TARGET_FLAG_ITEM || spellInfo->Targets & TARGET_FLAG_GAMEOBJECT_ITEM);
+
     if (bot->GetTrader())
         spellName << "trade item";
-    else if (itemTarget)
+    else if (hasItemTarget)
         spellName << chat->FormatItem(itemTarget->GetTemplate());
-    else if (target == bot)
-        spellName << "self";
-    else
+    else if (target != bot)
         spellName << target->GetName();
+    else
+        spellName << "self";
 
     if (!bot->GetTrader() && !botAI->CanCastSpell(spell, target, true, itemTarget))
     {
@@ -334,7 +337,7 @@ bool CastRandomSpellAction::castSpell(uint32 spellId, WorldObject* wo)
         return botAI->CastSpell(spellId, wo->GetPositionX(), wo->GetPositionY(), wo->GetPositionZ());
 }
 
-bool DisEnchantRandomItemAction::Execute(Event event)
+bool DisEnchantRandomItemAction::Execute(Event /*event*/)
 {
     std::vector<Item*> items =
         AI_VALUE2(std::vector<Item*>, "inventory items", "usage " + std::to_string(ITEM_USAGE_DISENCHANT));

@@ -5,8 +5,6 @@
 
 #include "NewRpgStrategy.h"
 
-#include "Playerbots.h"
-
 NewRpgStrategy::NewRpgStrategy(PlayerbotAI* botAI) : Strategy(botAI) {}
 
 std::vector<NextAction> NewRpgStrategy::getDefaultActions()
@@ -70,9 +68,16 @@ void NewRpgStrategy::InitTriggers(std::vector<TriggerNode*>& triggers)
             }
         )
     );
+    triggers.push_back(
+        new TriggerNode(
+            "outdoor pvp status",
+            {
+                NextAction("new rpg outdoor pvp", 3.0f)
+            }
+        )
+    );
 }
 
-void NewRpgStrategy::InitMultipliers(std::vector<Multiplier*>& multipliers)
+void NewRpgStrategy::InitMultipliers(std::vector<Multiplier*>&)
 {
-
 }

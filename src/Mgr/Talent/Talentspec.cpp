@@ -6,7 +6,9 @@
 #include "Talentspec.h"
 
 #include "Event.h"
-#include "Playerbots.h"
+#include "Player.h"
+#include "SpellMgr.h"
+#include "World.h"
 
 uint32 TalentSpec::TalentListEntry::tabPage() const
 {
@@ -140,7 +142,7 @@ bool TalentSpec::CheckTalents(uint32 level, std::ostringstream* out)
 }
 
 // Set the talents for the bots to the current spec.
-void TalentSpec::ApplyTalents(Player* bot, std::ostringstream* out)
+void TalentSpec::ApplyTalents(Player* bot, std::ostringstream* /*out*/)
 {
     for (auto& entry : talents)
     {
@@ -317,7 +319,7 @@ std::vector<TalentSpec::TalentListEntry> TalentSpec::GetTalentTree(uint32 tabpag
         if (entry.tabPage() == tabpage)
             retList.push_back(entry);
 
-    return std::move(retList);
+    return retList;
 }
 
 uint32 TalentSpec::GetTalentPoints(int32 tabpage) { return GetTalentPoints(talents, tabpage); };
@@ -368,7 +370,7 @@ std::string const TalentSpec::GetTalentLink()
     if (treeLink[2] != "0")
         link = link + "-" + treeLink[2];
 
-    return std::move(link);
+    return link;
 }
 
 uint32 TalentSpec::highestTree()
@@ -395,7 +397,7 @@ uint32 TalentSpec::highestTree()
     return 0;
 }
 
-std::string const TalentSpec::FormatSpec(Player* bot)
+std::string const TalentSpec::FormatSpec(Player* /*bot*/)
 {
     // uint8 cls = bot->getClass(); //not used, (used in lined 403), line marked for removal.
 

@@ -160,6 +160,7 @@ void RandomItemMgr::Init()
     BuildPotionCache();
     BuildFoodCache();
     BuildTradeCache();
+    LoadEnchantmentPool();
 }
 
 void RandomItemMgr::InitAfterAhBot()
@@ -176,7 +177,7 @@ RandomItemMgr::~RandomItemMgr()
     predicates.clear();
 }
 
-bool RandomItemMgr::HandleConsoleCommand(ChatHandler* handler, char const* args)
+bool RandomItemMgr::HandleConsoleCommand(ChatHandler* /*handler*/, char const* args)
 {
     if (!args || !*args)
     {
@@ -450,6 +451,39 @@ bool RandomItemMgr::CheckItemStats(uint8 clazz, uint8 sp, uint8 ap, uint8 tank)
 std::vector<uint32> RandomItemMgr::GetCachedEquipments(uint32 requiredLevel, uint32 inventoryType)
 {
     return equipCacheNew[requiredLevel][inventoryType];
+}
+
+void RandomItemMgr::LoadEnchantmentPool()
+{
+    enchPoolCache.clear();
+
+    QueryResult result = WorldDatabase.Query("SELECT entry, ench FROM item_enchantment_template");
+    if (!result)
+    {
+        LOG_WARN("playerbots", "item_enchantment_template empty; bot autogear cannot evaluate random suffixes");
+        return;
+    }
+
+    uint32 count = 0;
+    do
+    {
+        Field* fields = result->Fetch();
+        uint32 entry = fields[0].Get<uint32>();
+        uint32 ench = fields[1].Get<uint32>();
+        enchPoolCache[entry].push_back(ench);
+        ++count;
+    } while (result->NextRow());
+
+    LOG_INFO("playerbots", "Loaded {} item enchantment pool rows for bot autogear", count);
+}
+
+std::vector<uint32> const& RandomItemMgr::GetEnchantmentPool(uint32 entry) const
+{
+    static std::vector<uint32> const empty;
+    auto it = enchPoolCache.find(entry);
+    if (it == enchPoolCache.end())
+        return empty;
+    return it->second;
 }
 
 bool RandomItemMgr::ShouldEquipArmorForSpec(uint8 playerclass, uint8 spec, ItemTemplate const* proto)
@@ -1700,7 +1734,7 @@ std::vector<uint32> RandomItemMgr::GetQuestIdsForItem(uint32 itemId)
         }
     }
 
-    return std::move(questIds);
+    return questIds;
 }
 
 uint32 RandomItemMgr::GetUpgrade(Player* player, std::string spec, uint8 slot, uint32 quality, uint32 itemId)
@@ -1823,16 +1857,15 @@ uint32 RandomItemMgr::GetUpgrade(Player* player, std::string spec, uint8 slot, u
 }
 
 std::vector<uint32> RandomItemMgr::GetUpgradeList(Player* player, std::string spec, uint8 slot, uint32 quality,
-                                                  uint32 itemId, uint32 amount)
+                                                  uint32 itemId, uint32 /*amount*/)
 {
     std::vector<uint32> listItems;
     if (!player)
-        return std::move(listItems);
+        return listItems;
 
     // get old item statWeight
     uint32 oldStatWeight = 0;
     uint32 specId = 0;
-    uint32 closestUpgrade = 0;
     uint32 closestUpgradeWeight = 0;
     std::vector<uint32> classspecs;
 
@@ -1848,7 +1881,7 @@ std::vector<uint32> RandomItemMgr::GetUpgradeList(Player* player, std::string sp
     }
 
     if (!specId)
-        return std::move(listItems);
+        return listItems;
 
     if (itemId && itemInfoCache.find(itemId) != itemInfoCache.end())
     {
@@ -1933,7 +1966,6 @@ std::vector<uint32> RandomItemMgr::GetUpgradeList(Player* player, std::string sp
         // pick closest upgrade
         if (info.weights[specId] > closestUpgradeWeight)
         {
-            closestUpgrade = info.itemId;
             closestUpgradeWeight = info.weights[specId];
         }
     }
@@ -1942,7 +1974,7 @@ std::vector<uint32> RandomItemMgr::GetUpgradeList(Player* player, std::string sp
         LOG_INFO("playerbots", "New Items: {}, Old item:%d, New items max: {}", listItems.size(), oldStatWeight,
                  closestUpgradeWeight);
 
-    return std::move(listItems);
+    return listItems;
 }
 
 bool RandomItemMgr::HasStatWeight(uint32 itemId)
@@ -2257,10 +2289,7 @@ void RandomItemMgr::BuildEquipCacheNew()
             continue;
         }
 
-        // Unobtainable or unusable items
-        if (itemId == 12468 || // Chilton Wand
-            itemId == 22784 || // Sunwell Orb
-            itemId == 46978) // Totem of the Earthen Ring
+        if (sPlayerbotAIConfig.unobtainableItems.find(itemId) != sPlayerbotAIConfig.unobtainableItems.end())
             continue;
 
         equipCacheNew[proto->RequiredLevel][proto->InventoryType].push_back(itemId);
@@ -2771,9 +2800,8 @@ inline bool IsCraftedBySpellInfo(ItemTemplate const* proto, SpellInfo const* spe
         }
 
         if (proto->ItemId == spellInfo->Reagent[x])
-        {
             return true;
-        }
+
     }
 
     for (uint8 i = 0; i < 3; ++i)
@@ -2781,9 +2809,7 @@ inline bool IsCraftedBySpellInfo(ItemTemplate const* proto, SpellInfo const* spe
         if (spellInfo->Effects[i].Effect == SPELL_EFFECT_CREATE_ITEM)
         {
             if (spellInfo->Effects[i].ItemType == proto->ItemId)
-            {
                 return true;
-            }
         }
     }
 
