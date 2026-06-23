@@ -1299,7 +1299,7 @@ std::string const BGTactics::HandleConsoleCommandPrivate(WorldSession* session, 
     Player* player = session->GetPlayer();
     if (!player)
         return "Error - session player not found";
-    if (!player->CanBeGameMaster())
+    if (!player->IsGameMaster())
         return "Command can only be used by a GM";
     Battleground* bg = player->GetBattleground();
     if (!bg)
