@@ -8,6 +8,7 @@
 #include "Event.h"
 #include "PlayerbotRepository.h"
 #include "Playerbots.h"
+#include "Player.h"
 
 // Helper function for prefixes used by combat and non-combat strategy commands.
 static void HandleStrategyCommon(PlayerbotAI* botAI, std::string const& text, BotState state)
@@ -49,7 +50,7 @@ bool ChangeNonCombatStrategyAction::Execute(Event event)
 
     uint32 account = bot->GetSession()->GetAccountId();
     if (sPlayerbotAIConfig.IsInRandomAccountList(account) && botAI->GetMaster() &&
-        !botAI->GetMaster()->IsGameMaster())
+        !botAI->GetMaster()->CanBeGameMaster())
     {
         if (text.find("loot") != std::string::npos || text.find("gather") != std::string::npos)
         {

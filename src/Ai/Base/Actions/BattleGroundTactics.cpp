@@ -32,6 +32,7 @@
 #include "PvpTriggers.h"
 #include "ServerFacade.h"
 #include "Vehicle.h"
+#include "Player.h"
 
 // common bg positions
 Position const WS_WAITING_POS_HORDE_1 = {944.981f, 1423.478f, 345.434f, 6.18f};
@@ -1299,7 +1300,7 @@ std::string const BGTactics::HandleConsoleCommandPrivate(WorldSession* session, 
     Player* player = session->GetPlayer();
     if (!player)
         return "Error - session player not found";
-    if (!player->IsGameMaster())
+    if (!player->CanBeGameMaster())
         return "Command can only be used by a GM";
     Battleground* bg = player->GetBattleground();
     if (!bg)

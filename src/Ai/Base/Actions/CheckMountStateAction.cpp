@@ -15,6 +15,7 @@
 #include "Playerbots.h"
 #include "ServerFacade.h"
 #include "SpellAuraEffects.h"
+#include "IVMapMgr.h"
 
 static constexpr uint32 SPELL_COLD_WEATHER_FLYING = 54197;
 static constexpr float PARACHUTE_LAND_THRESHOLD = 15.0f;
