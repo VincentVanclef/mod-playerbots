@@ -769,6 +769,27 @@ namespace
         return ownerPlayer->IsInvitedForBattlegroundInstance() && RTG_HasQueueSlotForType(ownerPlayer, queueTypeId);
     }
 
+    static bool RTG_ArenaOwnerHasLiveLifecycle(uint32 owner, BattlegroundQueueTypeId queueTypeId)
+    {
+        if (!owner || queueTypeId <= BATTLEGROUND_QUEUE_NONE || queueTypeId >= MAX_BATTLEGROUND_QUEUE_TYPES)
+            return false;
+
+        Player* ownerPlayer = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(owner));
+        if (!ownerPlayer || !ownerPlayer->IsInWorld())
+            return false;
+
+        if (ownerPlayer->InBattlegroundQueueForBattlegroundQueueType(queueTypeId))
+            return true;
+
+        if (ownerPlayer->IsInvitedForBattlegroundInstance() && RTG_HasQueueSlotForType(ownerPlayer, queueTypeId))
+            return true;
+
+        BattlegroundTypeId desiredBgType = BattlegroundMgr::BGTemplateId(queueTypeId);
+        return desiredBgType != BATTLEGROUND_TYPE_NONE &&
+               (ownerPlayer->InArena() || ownerPlayer->InBattleground()) &&
+               ownerPlayer->GetBattlegroundTypeId() == desiredBgType;
+    }
+
     static void RTG_RecordArenaJoinAttemptResult(Player* bot, uint32 desiredQueueType, bool queued, char const* reason)
     {
         if (!bot || !RTG_IsArenaQueueType(BattlegroundQueueTypeId(desiredQueueType)))
@@ -2354,10 +2375,10 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
                      GetEventValue(botId, "rtg_arena_terminal_force_logout") ||
                      arenaClosurePending ||
                      arenaQuarantine);
-                bool arenaOwnerQueueDemand = arenaManaged &&
-                    RTG_ArenaOwnerHasLiveQueueDemand(desiredOwner, BattlegroundQueueTypeId(desiredQueueType));
+                bool arenaOwnerLiveLifecycle = arenaManaged &&
+                    RTG_ArenaOwnerHasLiveLifecycle(desiredOwner, BattlegroundQueueTypeId(desiredQueueType));
                 bool arenaQueueDemandActive = false;
-                if (arenaManaged && arenaOwnerQueueDemand)
+                if (arenaManaged && arenaOwnerLiveLifecycle)
                 {
                     BattlegroundBracketId bracketId = BG_BRACKET_ID_FIRST;
                     uint32 minLevel = desiredLevel;
@@ -2365,14 +2386,19 @@ bool RandomPlayerbotMgr::RTG_RequestSafeBotLogout(ObjectGuid guid, char const* r
                     if (RTG_GetBgQueueContext(BattlegroundQueueTypeId(desiredQueueType),
                         desiredLevel ? desiredLevel : bot->GetLevel(), bracketId, minLevel, maxLevel))
                     {
+                        BattlegroundInfo const& arenaInfo = BattlegroundData[desiredQueueType][bracketId];
+                        bool arenaHasLiveInstance =
+                            (arenaInfo.skirmishArenaPlayerCount + arenaInfo.ratedArenaPlayerCount +
+                             arenaInfo.skirmishArenaInstanceCount + arenaInfo.ratedArenaInstanceCount) != 0;
                         arenaQueueDemandActive =
                             GetEventValue(0, RTG_MakePvpDemandKey(desiredQueueType, uint32(bracketId))) != 0 ||
                             GetEventValue(0, RTG_MakePvpPhaseKey(desiredQueueType, uint32(bracketId))) != 0 ||
-                            GetEventValue(0, RTG_MakePvpTeamNeedKey(desiredQueueType, uint32(bracketId), desiredTeam)) != 0;
+                            GetEventValue(0, RTG_MakePvpTeamNeedKey(desiredQueueType, uint32(bracketId), desiredTeam)) != 0 ||
+                            arenaHasLiveInstance;
                     }
                 }
                 bool arenaQueuedForOwnerDemand = arenaDraining &&
-                    arenaOwnerQueueDemand &&
+                    arenaOwnerLiveLifecycle &&
                     arenaQueueDemandActive &&
                     bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
                     !bot->IsInvitedForBattlegroundInstance() &&
@@ -3966,12 +3992,22 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
             Map* currentMap = bot->GetMap();
             bool arenaOwnerQueueDemand = isArenaManaged &&
                 RTG_ArenaOwnerHasLiveQueueDemand(desiredOwner, BattlegroundQueueTypeId(desiredQueueType));
+            bool arenaOwnerLiveLifecycle = isArenaManaged &&
+                RTG_ArenaOwnerHasLiveLifecycle(desiredOwner, BattlegroundQueueTypeId(desiredQueueType));
+            bool arenaHasLiveInstance = false;
+            if (isArenaManaged && hasQueueContext)
+            {
+                BattlegroundInfo const& arenaInfo = BattlegroundData[desiredQueueType][desiredBracketId];
+                arenaHasLiveInstance =
+                    (arenaInfo.skirmishArenaPlayerCount + arenaInfo.ratedArenaPlayerCount +
+                     arenaInfo.skirmishArenaInstanceCount + arenaInfo.ratedArenaInstanceCount) != 0;
+            }
             bool arenaQueuedForOwnerDemand =
                 isArenaManaged &&
                 drainingLifecycle &&
-                arenaOwnerQueueDemand &&
+                arenaOwnerLiveLifecycle &&
                 (bgHasRealDemand || plannerPhase != 0 || plannerTeamNeed != 0 ||
-                 GetEventValue(botId, pendingKey) != 0 || queueGrace) &&
+                 GetEventValue(botId, pendingKey) != 0 || queueGrace || arenaHasLiveInstance) &&
                 bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
                 !bot->IsInvitedForBattlegroundInstance() &&
                 !bot->InArena() &&
@@ -4009,6 +4045,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 isArenaManaged &&
                 drainingLifecycle &&
                 !arenaQueuedForOwnerDemand &&
+                !arenaOwnerLiveLifecycle &&
                 bot->InBattlegroundQueueForBattlegroundQueueType(BattlegroundQueueTypeId(desiredQueueType)) &&
                 !bot->IsInvitedForBattlegroundInstance() &&
                 !bot->InArena() &&
@@ -4035,8 +4072,9 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 elapsed, bool /*minimal*/)
                 }
 
                 RTG_RuntimeBreadcrumb(fmt::format(
-                    "[RTG][ARENA][STALE_QUEUE_CANCEL] helper={} owner={} queue={} reason=draining_queue_after_return leaveIssued={} ownerQueueDemand={} realDemand={} phase={} teamNeed={} worldReturn={} retireWhenSafe={} add='{}'",
+                    "[RTG][ARENA][STALE_QUEUE_CANCEL] helper={} owner={} queue={} reason=draining_queue_after_return leaveIssued={} ownerQueueDemand={} ownerLive={} realDemand={} phase={} teamNeed={} worldReturn={} retireWhenSafe={} add='{}'",
                     botId, desiredOwner, desiredQueueType, leaveIssued ? 1u : 0u, arenaOwnerQueueDemand ? 1u : 0u,
+                    arenaOwnerLiveLifecycle ? 1u : 0u,
                     bgHasRealDemand ? 1u : 0u, plannerPhase, plannerTeamNeed, worldReturnPending ? 1u : 0u,
                     retireWhenSafe ? 1u : 0u, addData));
 
@@ -6277,11 +6315,27 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                     if (RTG_IsArenaQueueType(BattlegroundQueueTypeId(queueTypeId)))
                     {
                         std::vector<std::tuple<uint32, RtgArenaOwnerSeed>> ownerOrder;
+                        bool hasOwnerSeedOnTeam = false;
                         for (auto const& ownerPair : arenaSeedsForBracket)
                         {
                             RtgArenaOwnerSeed const& seed = ownerPair.second;
                             auto assignedTeamIt = arenaAssignedOwnerTeams.find(seed.owner);
                             if (assignedTeamIt == arenaAssignedOwnerTeams.end())
+                                continue;
+                            if (assignedTeamIt->second == teamId)
+                            {
+                                hasOwnerSeedOnTeam = true;
+                                break;
+                            }
+                        }
+
+                        for (auto const& ownerPair : arenaSeedsForBracket)
+                        {
+                            RtgArenaOwnerSeed const& seed = ownerPair.second;
+                            auto assignedTeamIt = arenaAssignedOwnerTeams.find(seed.owner);
+                            if (assignedTeamIt == arenaAssignedOwnerTeams.end())
+                                continue;
+                            if (hasOwnerSeedOnTeam && assignedTeamIt->second != teamId)
                                 continue;
 
                             ownerOrder.push_back(std::make_tuple(seed.owner, seed));
@@ -6419,6 +6473,56 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
                         it->second.realQueued = kv.second.realQueued;
                     if (!it->second.phase)
                         it->second.phase = kv.second.phase;
+                }
+            }
+
+            std::map<std::tuple<uint32, uint32, uint32>, std::vector<std::tuple<uint32, uint32, uint32, uint32>>> arenaBucketKeysByTeam;
+            for (auto const& bgEntry : bgBuckets)
+            {
+                RtgBgBucket const& bucket = bgEntry.second;
+                if (!bucket.isArena)
+                    continue;
+
+                arenaBucketKeysByTeam[std::make_tuple(bucket.queueTypeId, bucket.bracketId, bucket.team)].push_back(bgEntry.first);
+            }
+
+            for (auto& teamEntry : arenaBucketKeysByTeam)
+            {
+                uint32 queueTypeId = std::get<0>(teamEntry.first);
+                uint32 bracketId = std::get<1>(teamEntry.first);
+                uint32 teamId = std::get<2>(teamEntry.first);
+                uint32 teamBudget = GetEventValue(0, RTG_MakePvpTeamNeedKey(queueTypeId, bracketId, teamId));
+
+                std::sort(teamEntry.second.begin(), teamEntry.second.end(),
+                    [&](std::tuple<uint32, uint32, uint32, uint32> const& lhs,
+                        std::tuple<uint32, uint32, uint32, uint32> const& rhs)
+                    {
+                        RtgBgBucket const& a = bgBuckets[lhs];
+                        RtgBgBucket const& b = bgBuckets[rhs];
+                        if ((a.realQueued != 0u) != (b.realQueued != 0u))
+                            return a.realQueued != 0u;
+                        uint32 aExisting = a.currentOwnerCount + a.queuedFresh + a.assignedExtra;
+                        uint32 bExisting = b.currentOwnerCount + b.queuedFresh + b.assignedExtra;
+                        if (aExisting != bExisting)
+                            return aExisting > bExisting;
+                        if (a.need != b.need)
+                            return a.need > b.need;
+                        return a.owner < b.owner;
+                    });
+
+                uint32 planned = 0u;
+                for (auto const& key : teamEntry.second)
+                {
+                    RtgBgBucket& bucket = bgBuckets[key];
+                    uint32 allowed = teamBudget > planned ? (teamBudget - planned) : 0u;
+                    if (bucket.need > allowed)
+                    {
+                        LOG_INFO("playerbots",
+                            "[RTG][ARENA][NEED_CLAMP] queue={} bracket={} team={} owner={} need={} allowed={} budget={} planned={}",
+                            queueTypeId, bracketId, teamId, bucket.owner, bucket.need, allowed, teamBudget, planned);
+                        bucket.need = allowed;
+                    }
+                    planned += bucket.need;
                 }
             }
 

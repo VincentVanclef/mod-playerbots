@@ -370,7 +370,6 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                 bool isRated = bgInfo.ratedArenaPlayerCount || bgInfo.ratedArenaBotCount ||
                                bgInfo.activeRatedArenaQueue || bgInfo.ratedArenaInstanceCount;
                 uint32 realQueued = 0;
-                uint32 botQueued = isRated ? bgInfo.ratedArenaBotCount : bgInfo.skirmishArenaBotCount;
                 uint32 realQueuedAlliance = 0;
                 uint32 realQueuedHorde = 0;
                 auto liveItr = liveArenaRealDemand.find(std::make_pair(uint32(queueTypeId), uint32(bracketId)));
@@ -380,13 +379,16 @@ void RtgBgQueuePlanner::ApplyDemandEvents(RandomPlayerbotMgr& mgr) const
                     realQueuedHorde = liveItr->second.queueHorde;
                     realQueued = realQueuedAlliance + realQueuedHorde;
                 }
-                uint32 botQueuedAlliance = isRated ? bgInfo.ratedArenaAllianceBotCount : bgInfo.skirmishArenaAllianceBotCount;
-                uint32 botQueuedHorde = isRated ? bgInfo.ratedArenaHordeBotCount : bgInfo.skirmishArenaHordeBotCount;
+                uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
+                bool activeMatch = activeInstances > 0;
+                bool ignoreActiveMatchBotsForFreshDemand = activeMatch && realQueued > 0u;
+                uint32 botQueuedAlliance = ignoreActiveMatchBotsForFreshDemand ? 0u :
+                    (isRated ? bgInfo.ratedArenaAllianceBotCount : bgInfo.skirmishArenaAllianceBotCount);
+                uint32 botQueuedHorde = ignoreActiveMatchBotsForFreshDemand ? 0u :
+                    (isRated ? bgInfo.ratedArenaHordeBotCount : bgInfo.skirmishArenaHordeBotCount);
                 uint32 currentQueuedAlliance = realQueuedAlliance + botQueuedAlliance;
                 uint32 currentQueuedHorde = realQueuedHorde + botQueuedHorde;
                 uint32 currentQueued = currentQueuedAlliance + currentQueuedHorde;
-                uint32 activeInstances = isRated ? bgInfo.ratedArenaInstanceCount : bgInfo.skirmishArenaInstanceCount;
-                bool activeMatch = activeInstances > 0;
                 uint32 targetConcurrentMatches = std::min<uint32>(RTG_GetArenaConcurrentMatchCap(), activeInstances + realQueued);
                 if (realQueued > 0)
                     targetConcurrentMatches = std::max<uint32>(1u, targetConcurrentMatches);
