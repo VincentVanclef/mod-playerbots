@@ -3053,7 +3053,7 @@ CreatureData const* RandomPlayerbotMgr::GetCreatureDataByEntry(uint32 entry)
     if (entry != 0)
     {
         for (auto const& itr : sObjectMgr->GetAllCreatureData())
-            if (itr.second.id == entry)
+            if (itr.second.id1 == entry)
                 return &itr.second;
     }
 

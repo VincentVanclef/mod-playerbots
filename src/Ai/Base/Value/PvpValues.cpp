@@ -136,7 +136,7 @@ CreatureData const* BgMasterValue::NearestBm(bool allowDead)
         if (rbmPair && rDist <= dist)
             continue;
 
-        CreatureTemplate const* bmTemplate = sObjectMgr->GetCreatureTemplate(bmPair->id);
+        CreatureTemplate const* bmTemplate = sObjectMgr->GetCreatureTemplate(bmPair->id1);
         if (!bmTemplate)
             continue;
 
