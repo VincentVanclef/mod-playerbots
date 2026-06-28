@@ -1885,14 +1885,14 @@ void TravelMgr::LoadQuestTravelTable()
     for (auto& creatureData : WorldPosition().getCreaturesNear())
     {
         t_unit.type = 0;
-        t_unit.entry = creatureData->id;
+        t_unit.entry = creatureData->id1;
         t_unit.map = creatureData->mapid;
         t_unit.x = creatureData->posX;
         t_unit.y = creatureData->posY;
         t_unit.z = creatureData->posZ;
         t_unit.o = creatureData->orientation;
 
-        entryCount[creatureData->id]++;
+        entryCount[creatureData->id1]++;
 
         units.push_back(t_unit);
     }
@@ -2918,7 +2918,7 @@ void TravelMgr::LoadQuestTravelTable()
     {
         for (CreatureData const* cData : WorldPosition().getCreaturesNear())
         {
-            CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(cData->id);
+            CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(cData->id1);
             if (!cInfo)
                 continue;
 

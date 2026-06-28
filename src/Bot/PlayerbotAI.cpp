@@ -2610,7 +2610,7 @@ Unit* PlayerbotAI::GetUnit(CreatureData const* creatureData)
     uint32 spawnId = creatureData->spawnId;
     if (!spawnId)  // workaround for CreatureData with missing spawnId (this just uses first matching creatureId in DB,
                    // but thats ok this method is only used for battlemasters and theres only 1 of each type)
-        spawnId = GetCreatureIdForCreatureTemplateId(creatureData->id);
+        spawnId = GetCreatureIdForCreatureTemplateId(creatureData->id1);
     auto creatureBounds = map->GetCreatureBySpawnIdStore().equal_range(spawnId);
     if (creatureBounds.first == creatureBounds.second)
         return nullptr;

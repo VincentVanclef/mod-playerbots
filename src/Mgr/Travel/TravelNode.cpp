@@ -56,7 +56,7 @@ void TravelNodePath::calculateCost(bool distanceOnly)
         {
             for (CreatureData const* cData : point.getCreaturesNear(50))  // Agro radius + 5
             {
-                CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(cData->id);
+                CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(cData->id1);
                 if (cInfo)
                 {
                     FactionTemplateEntry const* factionEntry = sFactionTemplateStore.LookupEntry(cInfo->faction);
@@ -1597,7 +1597,7 @@ void TravelNodeMap::generateNpcNodes()
         WorldPosition guidP(creatureData->mapid, creatureData->posX, creatureData->posY, creatureData->posZ,
                             creatureData->orientation);
 
-        CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(creatureData->id);
+        CreatureTemplate const* cInfo = sObjectMgr->GetCreatureTemplate(creatureData->id1);
         if (!cInfo)
             continue;
 
