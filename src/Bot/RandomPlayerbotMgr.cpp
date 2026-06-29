@@ -92,9 +92,9 @@ char const* RTGQueueDemandModeName(uint32 mode)
 
 char const* RTGQueueDemandRoleName(uint32 roleMask)
 {
-    if (roleMask & PLAYER_ROLE_TANK)
+    if (roleMask & lfg::PLAYER_ROLE_TANK)
         return "tank";
-    if (roleMask & PLAYER_ROLE_HEALER)
+    if (roleMask & lfg::PLAYER_ROLE_HEALER)
         return "healer";
     return "dps";
 }
@@ -1317,13 +1317,13 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 
     auto addRoleCount = [](LfgDemandInfo& info, uint32 roleMask, bool bot)
     {
-        if (roleMask & PLAYER_ROLE_TANK)
+        if (roleMask & lfg::PLAYER_ROLE_TANK)
         {
             bot ? ++info.tankBotCount : ++info.tankPlayerCount;
             return;
         }
 
-        if (roleMask & PLAYER_ROLE_HEALER)
+        if (roleMask & lfg::PLAYER_ROLE_HEALER)
         {
             bot ? ++info.healBotCount : ++info.healPlayerCount;
             return;
@@ -1412,10 +1412,10 @@ uint32 RandomPlayerbotMgr::FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, boo
 
     auto matchesRole = [roleMask](std::string const& name)
     {
-        if (roleMask & PLAYER_ROLE_TANK)
+        if (roleMask & lfg::PLAYER_ROLE_TANK)
             return RTGIsTankSpecName(name);
 
-        if (roleMask & PLAYER_ROLE_HEALER)
+        if (roleMask & lfg::PLAYER_ROLE_HEALER)
             return RTGIsHealSpecName(name);
 
         return !RTGIsTankSpecName(name) && !RTGIsHealSpecName(name);
@@ -1454,12 +1454,12 @@ bool RandomPlayerbotMgr::IsClassAllowedForQueueDemand(uint8 cls, uint32 roleMask
     if (sPlayerbotAIConfig.disableDeathKnightLogin && cls == CLASS_DEATH_KNIGHT)
         return false;
 
-    if (roleMask & PLAYER_ROLE_TANK)
+    if (roleMask & lfg::PLAYER_ROLE_TANK)
     {
         if (cls != CLASS_WARRIOR && cls != CLASS_PALADIN && cls != CLASS_DRUID && cls != CLASS_DEATH_KNIGHT)
             return false;
     }
-    else if (roleMask & PLAYER_ROLE_HEALER)
+    else if (roleMask & lfg::PLAYER_ROLE_HEALER)
     {
         if (cls != CLASS_PRIEST && cls != CLASS_PALADIN && cls != CLASS_DRUID && cls != CLASS_SHAMAN)
             return false;
@@ -1763,13 +1763,13 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
         uint32 dpsTotal = demand.dpsPlayerCount + demand.dpsBotCount;
 
         if (tankTotal < 1)
-            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, PLAYER_ROLE_TANK, 1 - tankTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
+            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, lfg::PLAYER_ROLE_TANK, 1 - tankTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
 
         if (healTotal < 1)
-            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, PLAYER_ROLE_HEALER, 1 - healTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
+            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, lfg::PLAYER_ROLE_HEALER, 1 - healTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
 
         if (dpsTotal < 3)
-            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, PLAYER_ROLE_DAMAGE, 3 - dpsTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
+            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, lfg::PLAYER_ROLE_DAMAGE, 3 - dpsTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
     }
 
     // PvP demand: fill BG and arena queues at the exact player level when possible, not just the bracket cap.
@@ -1796,7 +1796,7 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
                 uint32 skirmishCurrent = info.skirmishArenaPlayerCount + info.skirmishArenaBotCount;
                 if (skirmishTarget > skirmishCurrent)
                 {
-                    requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_NEUTRAL, PLAYER_ROLE_DAMAGE, skirmishTarget - skirmishCurrent,
+                    requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_NEUTRAL, lfg::PLAYER_ROLE_DAMAGE, skirmishTarget - skirmishCurrent,
                                 info.skirmishArenaDemandLevels, info.minLevel, info.maxLevel);
                 }
 
@@ -1804,7 +1804,7 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
                 uint32 ratedCurrent = info.ratedArenaPlayerCount + info.ratedArenaBotCount;
                 if (ratedTarget > ratedCurrent)
                 {
-                    requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_NEUTRAL, PLAYER_ROLE_DAMAGE, ratedTarget - ratedCurrent,
+                    requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_NEUTRAL, lfg::PLAYER_ROLE_DAMAGE, ratedTarget - ratedCurrent,
                                 info.ratedArenaDemandLevels, info.minLevel, info.maxLevel);
                 }
 
@@ -1817,14 +1817,14 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             uint32 allianceCurrent = info.bgAlliancePlayerCount + info.bgAllianceBotCount;
             if (targetPerTeam > allianceCurrent)
             {
-                requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_ALLIANCE, PLAYER_ROLE_DAMAGE, targetPerTeam - allianceCurrent,
+                requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_ALLIANCE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - allianceCurrent,
                             info.bgAllianceDemandLevels, info.minLevel, info.maxLevel);
             }
 
             uint32 hordeCurrent = info.bgHordePlayerCount + info.bgHordeBotCount;
             if (targetPerTeam > hordeCurrent)
             {
-                requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_HORDE, PLAYER_ROLE_DAMAGE, targetPerTeam - hordeCurrent,
+                requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_HORDE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - hordeCurrent,
                             info.bgHordeDemandLevels, info.minLevel, info.maxLevel);
             }
         }
