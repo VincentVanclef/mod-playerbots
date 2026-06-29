@@ -1468,8 +1468,11 @@ bool RandomPlayerbotMgr::IsClassAllowedForQueueDemand(uint8 cls, uint32 roleMask
     return FindQueueDemandSpecNo(cls, roleMask, pvp) != 0;
 }
 
-bool RandomPlayerbotMgr::IsIdleQueueDemandCandidate(Player* bot)
+bool RandomPlayerbotMgr::IsWorldIdleQueueDemandCandidate(Player* bot)
 {
+    // RTG queue-demand swaps must only touch disposable world bots.
+    // Never retire or retarget bots that are already committed to BGs, arenas, RDF/LFG,
+    // instances, groups, active player masters, combat, flight, teleport, or death states.
     if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
         return false;
 
@@ -1500,7 +1503,7 @@ bool RandomPlayerbotMgr::IsIdleQueueDemandCandidate(Player* bot)
 
 bool RandomPlayerbotMgr::ConfigureBotForQueueDemand(Player* bot, uint32 mode, uint32 roleMask, uint8 targetLevel)
 {
-    if (!bot || !IsIdleQueueDemandCandidate(bot))
+    if (!bot || !IsWorldIdleQueueDemandCandidate(bot))
         return false;
 
     bool pvp = mode == RTG_QUEUE_DEMAND_PVP;
@@ -1633,7 +1636,7 @@ bool RandomPlayerbotMgr::RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, ui
 
     for (auto const& [guid, bot] : playerBots)
     {
-        if (!IsIdleQueueDemandCandidate(bot))
+        if (!IsWorldIdleQueueDemandCandidate(bot))
             continue;
 
         if (teamId != TEAM_NEUTRAL && bot->GetTeamId() == teamId &&
@@ -1662,7 +1665,7 @@ bool RandomPlayerbotMgr::EnsureQueueDemandBot(uint32 mode, TeamId teamId, uint32
     // First, reuse an idle online bot if possible. This is faster than forcing a logout/login round-trip.
     for (auto const& [guid, bot] : playerBots)
     {
-        if (!IsIdleQueueDemandCandidate(bot))
+        if (!IsWorldIdleQueueDemandCandidate(bot))
             continue;
 
         if (teamId != TEAM_NEUTRAL && bot->GetTeamId() != teamId)
@@ -1696,7 +1699,7 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
         uint32 prepared = 0;
         for (auto const& [guid, bot] : playerBots)
         {
-            if (!IsIdleQueueDemandCandidate(bot))
+            if (!IsWorldIdleQueueDemandCandidate(bot))
                 continue;
 
             if (teamId != TEAM_NEUTRAL && bot->GetTeamId() != teamId)

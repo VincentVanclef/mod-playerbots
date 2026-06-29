@@ -265,7 +265,7 @@ private:
     void EnsureQueueDemandBots();
     bool EnsureQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
     bool ConfigureBotForQueueDemand(Player* bot, uint32 mode, uint32 roleMask, uint8 targetLevel);
-    bool IsIdleQueueDemandCandidate(Player* bot);
+    bool IsWorldIdleQueueDemandCandidate(Player* bot);
     bool IsClassAllowedForQueueDemand(uint8 cls, uint32 roleMask, bool pvp);
     uint32 FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp);
     bool TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
