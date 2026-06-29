@@ -41,6 +41,29 @@ struct BattlegroundInfo
     // Players (Battleground)
     uint32 bgHordePlayerCount = 0;
     uint32 bgAlliancePlayerCount = 0;
+
+    // Exact queued player levels.  The bracket min/max is not precise enough for RTG low-level queues.
+    std::vector<uint8> bgAllianceDemandLevels;
+    std::vector<uint8> bgHordeDemandLevels;
+    std::vector<uint8> skirmishArenaDemandLevels;
+    std::vector<uint8> ratedArenaDemandLevels;
+};
+
+struct LfgDemandInfo
+{
+    bool activeQueue = false;
+    uint8 minLevel = 0;
+    uint8 maxLevel = 0;
+    std::vector<uint32> dungeons;
+    std::vector<uint8> playerLevels;
+
+    uint32 tankPlayerCount = 0;
+    uint32 healPlayerCount = 0;
+    uint32 dpsPlayerCount = 0;
+
+    uint32 tankBotCount = 0;
+    uint32 healBotCount = 0;
+    uint32 dpsBotCount = 0;
 };
 
 class ChatHandler;
@@ -149,6 +172,7 @@ public:
     std::map<uint32, std::map<uint32, std::map<TeamId, uint32>>> VisualBots;
     std::map<uint32, std::map<uint32, std::map<uint32, uint32>>> Supporters;
     std::map<TeamId, std::vector<uint32>> LfgDungeons;
+    std::map<TeamId, LfgDemandInfo> LfgDemand;
     void CheckBgQueue();
     void CheckLfgQueue();
     void CheckPlayers();
@@ -238,6 +262,15 @@ private:
     void RandomTeleport(Player* bot);
     void RandomTeleport(Player* bot, std::vector<WorldLocation>& locs, bool hearth = false);
     uint32 GetZoneLevel(uint16 mapId, float teleX, float teleY, float teleZ);
+    void EnsureQueueDemandBots();
+    bool EnsureQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
+    bool ConfigureBotForQueueDemand(Player* bot, uint32 mode, uint32 roleMask, uint8 targetLevel);
+    bool IsIdleQueueDemandCandidate(Player* bot);
+    bool IsClassAllowedForQueueDemand(uint8 cls, uint32 roleMask, bool pvp);
+    uint32 FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp);
+    bool TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
+    bool RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
+    uint8 GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax);
     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
     std::vector<Player*> players;
     uint32 processTicks;

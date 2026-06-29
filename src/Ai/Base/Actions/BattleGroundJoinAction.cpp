@@ -326,9 +326,8 @@ bool BGJoinAction::isUseful()
     if ((time(nullptr) - bot->GetInGameTime()) < 120)
         return false;
 
-    // check level
-    if (bot->GetLevel() < 10)
-        return false;
+    // Do not hard-block level 1-9 RTG battleground queues here. canJoinBg() already checks
+    // GetBGAccessByLevel() and bracket access against the server's current BG template rules.
 
     // do not try if with player master
     if (GET_PLAYERBOT_AI(bot)->HasActivePlayerMaster())

@@ -1569,27 +1569,38 @@ uint32 PlayerbotFactory::InitTalentsTree(bool increment /*false*/, bool use_temp
     }
     else
     {
-        uint32 pointSum = 0;
-        for (int i = 0; i < MAX_SPECNO; i++)
+        uint32 demandSpecNo = sRandomPlayerbotMgr.GetValue(bot->GetGUID().GetCounter(), "rtg_demand_spec");
+        if (demandSpecNo && demandSpecNo <= MAX_SPECNO &&
+            !sPlayerbotAIConfig.premadeSpecName[cls][demandSpecNo - 1].empty())
         {
-            pointSum += sPlayerbotAIConfig.randomClassSpecProb[cls][i];
+            specTab = demandSpecNo - 1;
+            LOG_INFO("playerbots", "RTG demand: forcing {} to spec#{} ({})", bot->GetName().c_str(), specTab,
+                     sPlayerbotAIConfig.premadeSpecName[cls][specTab].c_str());
         }
-        uint32 point = urand(1, pointSum);
-        uint32 currentP = 0;
-        int i;
-        for (i = 0; i < MAX_SPECNO; i++)
+        else
         {
-            currentP += sPlayerbotAIConfig.randomClassSpecProb[cls][i];
-            if (point <= currentP)
+            uint32 pointSum = 0;
+            for (int i = 0; i < MAX_SPECNO; i++)
             {
-                specTab = i;
-                break;
+                pointSum += sPlayerbotAIConfig.randomClassSpecProb[cls][i];
             }
-        }
-        if (i == MAX_SPECNO)
-        {
-            specTab = 0;
-            LOG_ERROR("playerbots", "Fail to select spec num for bot {}! Set to 0.", bot->GetName());
+            uint32 point = urand(1, pointSum);
+            uint32 currentP = 0;
+            int i;
+            for (i = 0; i < MAX_SPECNO; i++)
+            {
+                currentP += sPlayerbotAIConfig.randomClassSpecProb[cls][i];
+                if (point <= currentP)
+                {
+                    specTab = i;
+                    break;
+                }
+            }
+            if (i == MAX_SPECNO)
+            {
+                specTab = 0;
+                LOG_ERROR("playerbots", "Fail to select spec num for bot {}! Set to 0.", bot->GetName());
+            }
         }
     }
     if (reset)

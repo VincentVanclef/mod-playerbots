@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <boost/thread/thread.hpp>
+#include <cctype>
 #include <cstdlib>
 #include <ctime>
 #include <iomanip>
@@ -56,6 +57,48 @@ struct GuidClassRaceInfo
     uint32 rClass;
     uint32 rRace;
 };
+
+
+namespace
+{
+constexpr uint32 RTG_QUEUE_DEMAND_PVP = 1;
+constexpr uint32 RTG_QUEUE_DEMAND_PVE = 2;
+
+std::string RTGToLower(std::string value)
+{
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
+    return value;
+}
+
+bool RTGNameHas(std::string const& name, std::string const& needle)
+{
+    return RTGToLower(name).find(needle) != std::string::npos;
+}
+
+bool RTGIsTankSpecName(std::string const& name)
+{
+    return RTGNameHas(name, "prot") || RTGNameHas(name, "bear") || RTGNameHas(name, "blood");
+}
+
+bool RTGIsHealSpecName(std::string const& name)
+{
+    return RTGNameHas(name, "holy") || RTGNameHas(name, "disc") || RTGNameHas(name, "resto");
+}
+
+char const* RTGQueueDemandModeName(uint32 mode)
+{
+    return mode == RTG_QUEUE_DEMAND_PVE ? "PvE/LFG" : "PvP/BG-Arena";
+}
+
+char const* RTGQueueDemandRoleName(uint32 roleMask)
+{
+    if (roleMask & PLAYER_ROLE_TANK)
+        return "tank";
+    if (roleMask & PLAYER_ROLE_HEALER)
+        return "healer";
+    return "dps";
+}
+}
 
 void PrintStatsThread() { sRandomPlayerbotMgr.PrintStats(); }
 
@@ -998,13 +1041,23 @@ void RandomPlayerbotMgr::CheckBgQueue()
                 if (BattlegroundMgr::BGArenaType(queueTypeId))
                 {
                     if (isRated)
+                    {
                         BattlegroundData[queueTypeId][bracketId].activeRatedArenaQueue = 1;
+                        BattlegroundData[queueTypeId][bracketId].ratedArenaDemandLevels.push_back(player->GetLevel());
+                    }
                     else
+                    {
                         BattlegroundData[queueTypeId][bracketId].activeSkirmishArenaQueue = 1;
+                        BattlegroundData[queueTypeId][bracketId].skirmishArenaDemandLevels.push_back(player->GetLevel());
+                    }
                 }
                 else
                 {
                     BattlegroundData[queueTypeId][bracketId].activeBgQueue = 1;
+                    if (teamId == TEAM_ALLIANCE)
+                        BattlegroundData[queueTypeId][bracketId].bgAllianceDemandLevels.push_back(player->GetLevel());
+                    else
+                        BattlegroundData[queueTypeId][bracketId].bgHordeDemandLevels.push_back(player->GetLevel());
                 }
             }
         }
@@ -1169,6 +1222,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
     }
 
     LogBattlegroundInfo();
+    EnsureQueueDemandBots();
 }
 
 void RandomPlayerbotMgr::LogBattlegroundInfo()
@@ -1255,9 +1309,28 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 
     LOG_DEBUG("playerbots", "Checking LFG Queue...");
 
-    // Clear LFG list
+    // Clear LFG list/demand snapshots
     LfgDungeons[TEAM_ALLIANCE].clear();
     LfgDungeons[TEAM_HORDE].clear();
+    LfgDemand[TEAM_ALLIANCE] = LfgDemandInfo();
+    LfgDemand[TEAM_HORDE] = LfgDemandInfo();
+
+    auto addRoleCount = [](LfgDemandInfo& info, uint32 roleMask, bool bot)
+    {
+        if (roleMask & PLAYER_ROLE_TANK)
+        {
+            bot ? ++info.tankBotCount : ++info.tankPlayerCount;
+            return;
+        }
+
+        if (roleMask & PLAYER_ROLE_HEALER)
+        {
+            bot ? ++info.healBotCount : ++info.healPlayerCount;
+            return;
+        }
+
+        bot ? ++info.dpsBotCount : ++info.dpsPlayerCount;
+    };
 
     for (std::vector<Player*>::iterator i = players.begin(); i != players.end(); ++i)
     {
@@ -1271,6 +1344,16 @@ void RandomPlayerbotMgr::CheckLfgQueue()
         lfg::LfgState gState = sLFGMgr->GetState(guid);
         if (gState != lfg::LFG_STATE_NONE && gState < lfg::LFG_STATE_DUNGEON)
         {
+            TeamId teamId = player->GetTeamId();
+            LfgDemandInfo& demand = LfgDemand[teamId];
+            demand.activeQueue = true;
+            demand.playerLevels.push_back(player->GetLevel());
+            if (!demand.minLevel || player->GetLevel() < demand.minLevel)
+                demand.minLevel = player->GetLevel();
+            if (player->GetLevel() > demand.maxLevel)
+                demand.maxLevel = player->GetLevel();
+            addRoleCount(demand, sLFGMgr->GetRoles(player->GetGUID()), false);
+
             lfg::LfgDungeonSet const& dList = sLFGMgr->GetSelectedDungeons(player->GetGUID());
             for (lfg::LfgDungeonSet::const_iterator itr = dList.begin(); itr != dList.end(); ++itr)
             {
@@ -1278,12 +1361,471 @@ void RandomPlayerbotMgr::CheckLfgQueue()
                 if (!dungeon)
                     continue;
 
-                LfgDungeons[player->GetTeamId()].push_back(dungeon->id);
+                LfgDungeons[teamId].push_back(dungeon->id);
+                demand.dungeons.push_back(dungeon->id);
+
             }
         }
     }
 
+    // Count random bots already queued for LFG so demand swapping does not over-fill roles.
+    for (auto const& [guid, bot] : playerBots)
+    {
+        if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+            continue;
+
+        lfg::LfgState gState = sLFGMgr->GetState(bot->GetGUID());
+        if (gState == lfg::LFG_STATE_NONE || gState >= lfg::LFG_STATE_DUNGEON)
+            continue;
+
+        TeamId teamId = bot->GetTeamId();
+        LfgDemandInfo& demand = LfgDemand[teamId];
+        addRoleCount(demand, sLFGMgr->GetRoles(bot->GetGUID()), true);
+    }
+
+    EnsureQueueDemandBots();
     LOG_DEBUG("playerbots", "LFG Queue check finished");
+}
+
+uint8 RandomPlayerbotMgr::GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax)
+{
+    if (!levels.empty())
+        return levels.front();
+
+    if (fallbackMin)
+        return fallbackMin;
+
+    if (fallbackMax)
+        return fallbackMax;
+
+    return static_cast<uint8>(std::max<uint32>(1, sPlayerbotAIConfig.randomBotMinLevel));
+}
+
+uint32 RandomPlayerbotMgr::FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp)
+{
+    auto matchesMode = [pvp](std::string const& name)
+    {
+        if (pvp)
+            return RTGNameHas(name, "pvp");
+        return RTGNameHas(name, "pve");
+    };
+
+    auto matchesRole = [roleMask](std::string const& name)
+    {
+        if (roleMask & PLAYER_ROLE_TANK)
+            return RTGIsTankSpecName(name);
+
+        if (roleMask & PLAYER_ROLE_HEALER)
+            return RTGIsHealSpecName(name);
+
+        return !RTGIsTankSpecName(name) && !RTGIsHealSpecName(name);
+    };
+
+    uint32 fallbackRole = 0;
+    uint32 fallbackMode = 0;
+
+    for (uint32 spec = 0; spec < MAX_SPECNO; ++spec)
+    {
+        std::string const& name = sPlayerbotAIConfig.premadeSpecName[cls][spec];
+        if (name.empty())
+            continue;
+
+        bool modeOk = matchesMode(name);
+        bool roleOk = matchesRole(name);
+
+        if (modeOk && roleOk)
+            return spec + 1;
+
+        if (!fallbackRole && roleOk)
+            fallbackRole = spec + 1;
+
+        if (!fallbackMode && modeOk)
+            fallbackMode = spec + 1;
+    }
+
+    if (fallbackRole)
+        return fallbackRole;
+
+    return fallbackMode;
+}
+
+bool RandomPlayerbotMgr::IsClassAllowedForQueueDemand(uint8 cls, uint32 roleMask, bool pvp)
+{
+    if (sPlayerbotAIConfig.disableDeathKnightLogin && cls == CLASS_DEATH_KNIGHT)
+        return false;
+
+    if (roleMask & PLAYER_ROLE_TANK)
+    {
+        if (cls != CLASS_WARRIOR && cls != CLASS_PALADIN && cls != CLASS_DRUID && cls != CLASS_DEATH_KNIGHT)
+            return false;
+    }
+    else if (roleMask & PLAYER_ROLE_HEALER)
+    {
+        if (cls != CLASS_PRIEST && cls != CLASS_PALADIN && cls != CLASS_DRUID && cls != CLASS_SHAMAN)
+            return false;
+    }
+
+    return FindQueueDemandSpecNo(cls, roleMask, pvp) != 0;
+}
+
+bool RandomPlayerbotMgr::IsIdleQueueDemandCandidate(Player* bot)
+{
+    if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+        return false;
+
+    if (bot->IsBeingTeleported() || bot->HasUnitState(UNIT_STATE_IN_FLIGHT) || bot->IsInCombat() || bot->isDead())
+        return false;
+
+    if (bot->InBattleground() || bot->InArena() || bot->InBattlegroundQueue())
+        return false;
+
+    if (bot->GetGroup())
+        return false;
+
+    if (sLFGMgr->GetState(bot->GetGUID()) != lfg::LFG_STATE_NONE)
+        return false;
+
+    if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+    {
+        if (botAI->HasActivePlayerMaster())
+            return false;
+    }
+
+    Map* map = bot->GetMap();
+    if (map && map->Instanceable())
+        return false;
+
+    return true;
+}
+
+bool RandomPlayerbotMgr::ConfigureBotForQueueDemand(Player* bot, uint32 mode, uint32 roleMask, uint8 targetLevel)
+{
+    if (!bot || !IsIdleQueueDemandCandidate(bot))
+        return false;
+
+    bool pvp = mode == RTG_QUEUE_DEMAND_PVP;
+    uint8 cls = bot->getClass();
+    if (!IsClassAllowedForQueueDemand(cls, roleMask, pvp))
+        return false;
+
+    if (cls == CLASS_DEATH_KNIGHT && targetLevel < sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
+        return false;
+
+    uint32 botId = bot->GetGUID().GetCounter();
+    if (GetValue(botId, "rtg_demand_mode") == mode && GetValue(botId, "rtg_demand_role") == roleMask &&
+        GetValue(botId, "rtg_demand_level") == targetLevel)
+        return false;
+
+    uint32 specNo = FindQueueDemandSpecNo(cls, roleMask, pvp);
+    if (!specNo)
+        return false;
+
+    SetValue(botId, "rtg_demand_mode", mode);
+    SetValue(botId, "rtg_demand_role", roleMask);
+    SetValue(botId, "rtg_demand_level", targetLevel);
+    SetValue(botId, "rtg_demand_spec", specNo);
+    SetValue(botId, "level", targetLevel);
+
+    SetEventValue(botId, "randomize", 0, 0);
+    SetEventValue(botId, "teleport", 0, 0);
+    SetEventValue(botId, "update", 0, 0);
+
+    PlayerbotFactory factory(bot, targetLevel);
+    factory.Randomize(false);
+
+    if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+        botAI->Reset(true);
+
+    LOG_INFO("playerbots", "RTG demand: prepared {} {}:{} <{}> for {} as {} spec#{}",
+             bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->getClass(), bot->GetName().c_str(),
+             RTGQueueDemandModeName(mode), RTGQueueDemandRoleName(roleMask), specNo - 1);
+
+    return true;
+}
+
+bool RandomPlayerbotMgr::TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel)
+{
+    bool pvp = mode == RTG_QUEUE_DEMAND_PVP;
+
+    std::vector<uint32> accountsToUse = rndBotTypeAccounts;
+    std::shuffle(accountsToUse.begin(), accountsToUse.end(), RandomEngine::Instance());
+
+    struct DemandCharacterInfo
+    {
+        uint32 guid;
+        uint8 cls;
+        uint8 race;
+    };
+
+    std::vector<DemandCharacterInfo> candidates;
+    for (uint32 accountId : accountsToUse)
+    {
+        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
+        stmt->SetData(0, accountId);
+        PreparedQueryResult result = CharacterDatabase.Query(stmt);
+        if (!result)
+            continue;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            DemandCharacterInfo info;
+            info.guid = fields[0].Get<uint32>();
+            info.cls = fields[1].Get<uint8>();
+            info.race = fields[2].Get<uint8>();
+
+            if (GetEventValue(info.guid, "add") || GetEventValue(info.guid, "logout") ||
+                std::find(currentBots.begin(), currentBots.end(), info.guid) != currentBots.end() ||
+                GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(info.guid)))
+                continue;
+
+            if (teamId != TEAM_NEUTRAL)
+            {
+                bool isAlliance = IsAlliance(info.race);
+                if ((teamId == TEAM_ALLIANCE && !isAlliance) || (teamId == TEAM_HORDE && isAlliance))
+                    continue;
+            }
+
+            if (!IsClassAllowedForQueueDemand(info.cls, roleMask, pvp))
+                continue;
+
+            if (info.cls == CLASS_DEATH_KNIGHT && targetLevel < sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
+                continue;
+
+            candidates.push_back(info);
+        } while (result->NextRow());
+    }
+
+    if (candidates.empty())
+        return false;
+
+    std::shuffle(candidates.begin(), candidates.end(), RandomEngine::Instance());
+    DemandCharacterInfo const& candidate = candidates.front();
+    uint32 specNo = FindQueueDemandSpecNo(candidate.cls, roleMask, pvp);
+    if (!specNo)
+        return false;
+
+    uint32 addTime = sPlayerbotAIConfig.enablePeriodicOnlineOffline
+                         ? urand(sPlayerbotAIConfig.minRandomBotInWorldTime, sPlayerbotAIConfig.maxRandomBotInWorldTime)
+                         : sPlayerbotAIConfig.permanentlyInWorldTime;
+
+    SetValue(candidate.guid, "rtg_demand_mode", mode);
+    SetValue(candidate.guid, "rtg_demand_role", roleMask);
+    SetValue(candidate.guid, "rtg_demand_level", targetLevel);
+    SetValue(candidate.guid, "rtg_demand_spec", specNo);
+    SetValue(candidate.guid, "level", targetLevel);
+    SetEventValue(candidate.guid, "add", 1, addTime);
+    SetEventValue(candidate.guid, "logout", 0, 0);
+    SetEventValue(candidate.guid, "randomize", 0, 0);
+    SetEventValue(candidate.guid, "teleport", 0, 0);
+    SetEventValue(candidate.guid, "update", 0, 0);
+    currentBots.push_back(candidate.guid);
+
+    LOG_INFO("playerbots", "RTG demand: queued offline bot #{} class {} level {} for {} as {} spec#{}",
+             candidate.guid, candidate.cls, targetLevel, RTGQueueDemandModeName(mode), RTGQueueDemandRoleName(roleMask),
+             specNo - 1);
+    return true;
+}
+
+bool RandomPlayerbotMgr::RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel)
+{
+    bool pvp = mode == RTG_QUEUE_DEMAND_PVP;
+
+    for (auto const& [guid, bot] : playerBots)
+    {
+        if (!IsIdleQueueDemandCandidate(bot))
+            continue;
+
+        if (teamId != TEAM_NEUTRAL && bot->GetTeamId() == teamId &&
+            IsClassAllowedForQueueDemand(bot->getClass(), roleMask, pvp) && bot->GetLevel() == targetLevel)
+            continue;
+
+        uint32 botId = bot->GetGUID().GetCounter();
+        LOG_INFO("playerbots", "RTG demand: retiring idle bot {}:{} <{}> to free a {} level {} {} slot",
+                 bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(),
+                 RTGQueueDemandModeName(mode), targetLevel, RTGQueueDemandRoleName(roleMask));
+
+        SetEventValue(botId, "add", 0, 0);
+        SetEventValue(botId, "logout", 1, std::max<uint32>(30, sPlayerbotAIConfig.randomBotQueueDemandRetireCooldown));
+        currentBots.remove(botId);
+        LogoutPlayerBot(bot->GetGUID());
+        return true;
+    }
+
+    return false;
+}
+
+bool RandomPlayerbotMgr::EnsureQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel)
+{
+    bool pvp = mode == RTG_QUEUE_DEMAND_PVP;
+
+    // First, reuse an idle online bot if possible. This is faster than forcing a logout/login round-trip.
+    for (auto const& [guid, bot] : playerBots)
+    {
+        if (!IsIdleQueueDemandCandidate(bot))
+            continue;
+
+        if (teamId != TEAM_NEUTRAL && bot->GetTeamId() != teamId)
+            continue;
+
+        if (!IsClassAllowedForQueueDemand(bot->getClass(), roleMask, pvp))
+            continue;
+
+        if (ConfigureBotForQueueDemand(bot, mode, roleMask, targetLevel))
+            return true;
+    }
+
+    uint32 maxAllowedBotCount = GetMaxAllowedBotCount();
+    if (maxAllowedBotCount && currentBots.size() >= maxAllowedBotCount)
+        RetireIdleQueueDemandBot(mode, teamId, roleMask, targetLevel);
+
+    return TryLoginQueueDemandBot(mode, teamId, roleMask, targetLevel);
+}
+
+void RandomPlayerbotMgr::EnsureQueueDemandBots()
+{
+    if (!sPlayerbotAIConfig.randomBotQueueDemandSwap || !sPlayerbotAIConfig.randomBotAutologin || !sPlayerbotAIConfig.enabled)
+        return;
+
+    uint32 actions = 0;
+    uint32 maxActions = std::max<uint32>(1, sPlayerbotAIConfig.randomBotQueueDemandMaxPerCheck);
+
+    auto countPrepared = [&](uint32 mode, TeamId teamId, uint32 roleMask, std::vector<uint8> const& levels,
+                             uint8 fallbackMin, uint8 fallbackMax) -> uint32
+    {
+        uint32 prepared = 0;
+        for (auto const& [guid, bot] : playerBots)
+        {
+            if (!IsIdleQueueDemandCandidate(bot))
+                continue;
+
+            if (teamId != TEAM_NEUTRAL && bot->GetTeamId() != teamId)
+                continue;
+
+            uint32 botId = bot->GetGUID().GetCounter();
+            if (GetValue(botId, "rtg_demand_mode") != mode || !(GetValue(botId, "rtg_demand_role") & roleMask))
+                continue;
+
+            uint8 botLevel = static_cast<uint8>(GetValue(botId, "rtg_demand_level"));
+            if (levels.empty())
+            {
+                if (botLevel != GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax))
+                    continue;
+            }
+            else if (std::find(levels.begin(), levels.end(), botLevel) == levels.end())
+                continue;
+
+            ++prepared;
+        }
+
+        return prepared;
+    };
+
+    auto requestOne = [&](uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel) -> void
+    {
+        if (actions >= maxActions)
+            return;
+
+        if (targetLevel < 1)
+            targetLevel = 1;
+
+        if (EnsureQueueDemandBot(mode, teamId, roleMask, targetLevel))
+            ++actions;
+    };
+
+    auto requestMany = [&](uint32 mode, TeamId teamId, uint32 roleMask, uint32 count, std::vector<uint8> const& levels,
+                           uint8 fallbackMin, uint8 fallbackMax) -> void
+    {
+        uint32 prepared = countPrepared(mode, teamId, roleMask, levels, fallbackMin, fallbackMax);
+        if (prepared >= count)
+            return;
+
+        count -= prepared;
+        for (uint32 i = 0; i < count && actions < maxActions; ++i)
+        {
+            uint8 targetLevel = !levels.empty() ? levels[i % levels.size()] : GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
+            requestOne(mode, teamId, roleMask, targetLevel);
+        }
+    };
+
+    // PvE/LFG demand: complete the classic 1 tank / 1 healer / 3 dps shape around real queued players.
+    for (TeamId teamId : {TEAM_ALLIANCE, TEAM_HORDE})
+    {
+        LfgDemandInfo const& demand = LfgDemand[teamId];
+        if (!demand.activeQueue || demand.playerLevels.empty())
+            continue;
+
+        uint32 tankTotal = demand.tankPlayerCount + demand.tankBotCount;
+        uint32 healTotal = demand.healPlayerCount + demand.healBotCount;
+        uint32 dpsTotal = demand.dpsPlayerCount + demand.dpsBotCount;
+
+        if (tankTotal < 1)
+            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, PLAYER_ROLE_TANK, 1 - tankTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
+
+        if (healTotal < 1)
+            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, PLAYER_ROLE_HEALER, 1 - healTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
+
+        if (dpsTotal < 3)
+            requestMany(RTG_QUEUE_DEMAND_PVE, teamId, PLAYER_ROLE_DAMAGE, 3 - dpsTotal, demand.playerLevels, demand.minLevel, demand.maxLevel);
+    }
+
+    // PvP demand: fill BG and arena queues at the exact player level when possible, not just the bracket cap.
+    for (auto const& queueTypePair : BattlegroundData)
+    {
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueTypePair.first);
+        BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
+        Battleground* bg = sBattlegroundMgr->GetBattlegroundTemplate(bgTypeId);
+        if (!bg)
+            continue;
+
+        ArenaType arenaType = ArenaType(BattlegroundMgr::BGArenaType(queueTypeId));
+        for (auto const& bracketPair : queueTypePair.second)
+        {
+            BattlegroundInfo const& info = bracketPair.second;
+            if (!info.minLevel)
+                continue;
+
+            if (arenaType != ARENA_TYPE_NONE)
+            {
+                uint32 bracketSize = uint32(arenaType) * 2;
+
+                uint32 skirmishTarget = bracketSize * (info.activeSkirmishArenaQueue + info.skirmishArenaInstanceCount);
+                uint32 skirmishCurrent = info.skirmishArenaPlayerCount + info.skirmishArenaBotCount;
+                if (skirmishTarget > skirmishCurrent)
+                {
+                    requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_NEUTRAL, PLAYER_ROLE_DAMAGE, skirmishTarget - skirmishCurrent,
+                                info.skirmishArenaDemandLevels, info.minLevel, info.maxLevel);
+                }
+
+                uint32 ratedTarget = bracketSize * (info.activeRatedArenaQueue + info.ratedArenaInstanceCount);
+                uint32 ratedCurrent = info.ratedArenaPlayerCount + info.ratedArenaBotCount;
+                if (ratedTarget > ratedCurrent)
+                {
+                    requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_NEUTRAL, PLAYER_ROLE_DAMAGE, ratedTarget - ratedCurrent,
+                                info.ratedArenaDemandLevels, info.minLevel, info.maxLevel);
+                }
+
+                continue;
+            }
+
+            uint32 teamSize = bg->GetMaxPlayersPerTeam();
+            uint32 targetPerTeam = teamSize * (info.activeBgQueue + info.bgInstanceCount);
+
+            uint32 allianceCurrent = info.bgAlliancePlayerCount + info.bgAllianceBotCount;
+            if (targetPerTeam > allianceCurrent)
+            {
+                requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_ALLIANCE, PLAYER_ROLE_DAMAGE, targetPerTeam - allianceCurrent,
+                            info.bgAllianceDemandLevels, info.minLevel, info.maxLevel);
+            }
+
+            uint32 hordeCurrent = info.bgHordePlayerCount + info.bgHordeBotCount;
+            if (targetPerTeam > hordeCurrent)
+            {
+                requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_HORDE, PLAYER_ROLE_DAMAGE, targetPerTeam - hordeCurrent,
+                            info.bgHordeDemandLevels, info.minLevel, info.maxLevel);
+            }
+        }
+    }
 }
 
 void RandomPlayerbotMgr::CheckPlayers()
@@ -1841,6 +2383,26 @@ void RandomPlayerbotMgr::Randomize(Player* bot)
 {
     if (bot->InBattleground())
         return;
+
+    uint32 demandLevel = GetValue(bot, "rtg_demand_level");
+    if (demandLevel)
+    {
+        if (bot->getClass() == CLASS_DEATH_KNIGHT)
+            demandLevel = std::max<uint32>(demandLevel, sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL));
+
+        demandLevel = std::min<uint32>(demandLevel, sWorld->getIntConfig(CONFIG_MAX_PLAYER_LEVEL));
+        SetValue(bot, "level", demandLevel);
+
+        PlayerbotFactory factory(bot, demandLevel);
+        factory.Randomize(false);
+
+        if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
+            botAI->Reset(true);
+
+        LOG_INFO("playerbots", "RTG demand: finalized bot {}:{} <{}> for queued demand",
+                 bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str());
+        return;
+    }
 
     if (bot->GetLevel() < 3 || (bot->GetLevel() < 56 && bot->getClass() == CLASS_DEATH_KNIGHT))
     {

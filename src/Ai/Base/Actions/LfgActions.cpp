@@ -20,6 +20,13 @@ bool LfgJoinAction::Execute(Event event) { return JoinLFG(); }
 
 uint32 LfgJoinAction::GetRoles()
 {
+    if (RandomPlayerbotMgr::instance().IsRandomBot(bot))
+    {
+        uint32 forcedRole = RandomPlayerbotMgr::instance().GetValue(bot, "rtg_demand_role");
+        if (forcedRole & (PLAYER_ROLE_TANK | PLAYER_ROLE_HEALER | PLAYER_ROLE_DAMAGE))
+            return forcedRole;
+    }
+
     if (!RandomPlayerbotMgr::instance().IsRandomBot(bot))
     {
         if (botAI->IsTank(bot))
@@ -312,8 +319,8 @@ bool LfgJoinAction::isUseful()
         return false;
     }
 
-    if (bot->GetLevel() < 15)
-        return false;
+    // Do not hard-block low-level RTG/scaled dungeons here. The selected dungeon level check in JoinLFG()
+    // decides whether this bot can enter the queued dungeon.
 
     // don't use if active player master
     if (GET_PLAYERBOT_AI(bot)->IsRealPlayer())
