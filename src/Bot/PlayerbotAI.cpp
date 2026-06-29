@@ -61,6 +61,18 @@
 constexpr uint32 SPELL_TITAN_GRIP = 49152;
 constexpr uint32 SPELL_DK_FROST_PRESENCE = 48263;
 
+namespace
+{
+bool IsRTGBotSpellAllowedForCurrentLevel(Player* bot, SpellInfo const* spellInfo)
+{
+    if (!bot || !spellInfo)
+        return false;
+
+    uint32 const requiredLevel = std::max<uint32>(spellInfo->BaseLevel, spellInfo->SpellLevel);
+    return requiredLevel <= bot->GetLevel();
+}
+}
+
 std::vector<std::string> PlayerbotAI::dispel_whitelist = {
     "mutating injection",
     "frostbolt",
@@ -3313,6 +3325,16 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, bool checkHasSpell,
         return false;
     }
 
+    if (!IsRTGBotSpellAllowedForCurrentLevel(bot, spellInfo))
+    {
+        if (!sPlayerbotAIConfig.logInGroupOnly || (bot->GetGroup() && HasRealPlayerMaster()))
+        {
+            LOG_DEBUG("playerbots", "Can cast spell failed. Spell above bot level. - target name: {}, spellid: {}, bot level: {}, bot name: {}",
+                      target->GetName(), spellid, bot->GetLevel(), bot->GetName());
+        }
+        return false;
+    }
+
     if ((bot->GetShapeshiftForm() == FORM_FLIGHT || bot->GetShapeshiftForm() == FORM_FLIGHT_EPIC) && !bot->IsInCombat())
     {
         if (!sPlayerbotAIConfig.logInGroupOnly || (bot->GetGroup() && HasRealPlayerMaster()))
@@ -3438,6 +3460,9 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, GameObject* goTarget, bool checkH
     if (!spellInfo)
         return false;
 
+    if (!IsRTGBotSpellAllowedForCurrentLevel(bot, spellInfo))
+        return false;
+
     int32 CastingTime = !spellInfo->IsChanneled() ? spellInfo->CalcCastTime(bot) : spellInfo->GetDuration();
     if (CastingTime > 0 && bot->isMoving())
         return false;
@@ -3550,6 +3575,9 @@ bool PlayerbotAI::CastSpell(uint32 spellId, Unit* target, Item* itemTarget)
 
     SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
     if (!spellInfo)
+        return false;
+
+    if (!IsRTGBotSpellAllowedForCurrentLevel(bot, spellInfo))
         return false;
 
     Pet* pet = bot->GetPet();

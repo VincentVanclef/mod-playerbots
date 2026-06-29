@@ -109,6 +109,69 @@ constexpr uint32 SPELL_IMPROVED_HOWL_OF_TERROR = 30057;
 constexpr uint32 SPELL_NEMESIS = 63123;
 constexpr uint32 SPELL_INTENSITY = 18136;
 constexpr uint32 SPELL_NETHER_PROTECTION = 30302;
+
+uint32 GetRTGSpellRequiredLevel(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return 0;
+
+    return std::max<uint32>(spellInfo->BaseLevel, spellInfo->SpellLevel);
+}
+
+bool IsRTGSpellAllowedForBotLevel(Player* bot, uint32 spellId)
+{
+    if (!bot || !spellId)
+        return false;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return false;
+
+    uint32 const botLevel = bot->GetLevel();
+
+    if (GetRTGSpellRequiredLevel(spellInfo) > botLevel)
+        return false;
+
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        if (spellInfo->Effects[i].Effect != SPELL_EFFECT_LEARN_SPELL || !spellInfo->Effects[i].TriggerSpell)
+            continue;
+
+        SpellInfo const* triggerInfo = sSpellMgr->GetSpellInfo(spellInfo->Effects[i].TriggerSpell);
+        if (GetRTGSpellRequiredLevel(triggerInfo) > botLevel)
+            return false;
+    }
+
+    return true;
+}
+
+bool IsRTGTalentRowAllowedForBotLevel(Player* bot, uint32 row)
+{
+    if (!bot)
+        return false;
+
+    // WotLK talent rows unlock at level 10, 15, 20, 25, etc.
+    // Level 19 bots must never learn row 2+ talents such as Mortal Strike.
+    return (10 + row * 5) <= bot->GetLevel();
+}
+
+bool IsRTGTalentAllowedForBotLevel(Player* bot, TalentEntry const* talentInfo, uint32 rank)
+{
+    if (!bot || !talentInfo)
+        return false;
+
+    if (!IsRTGTalentRowAllowedForBotLevel(bot, talentInfo->Row))
+        return false;
+
+    if (rank >= MAX_TALENT_RANK)
+        return false;
+
+    uint32 const rankSpellId = talentInfo->RankID[rank];
+    if (!rankSpellId)
+        return false;
+
+    return IsRTGSpellAllowedForBotLevel(bot, rankSpellId);
+}
 }
 
 bool PlayerbotFactory::IsPrimaryTradeSkill(uint16 skillId)
@@ -1594,6 +1657,8 @@ void PlayerbotFactory::InitTalentsBySpecNo(Player* bot, int specNo, bool reset)
         for (std::vector<uint32>& p : sPlayerbotAIConfig.parsedSpecLinkOrder[cls][specNo][level])
         {
             uint32 tab = p[0], row = p[1], col = p[2], lvl = p[3];
+            if (!IsRTGTalentRowAllowedForBotLevel(bot, row))
+                continue;
             uint32 talentID = -1;
 
             std::vector<TalentEntry const*>& spells = spells_row[row];
@@ -1619,7 +1684,21 @@ void PlayerbotFactory::InitTalentsBySpecNo(Player* bot, int specNo, bool reset)
                 }
                 talentID = talentInfo->TalentID;
             }
-            bot->LearnTalent(talentID, std::min(lvl, bot->GetFreeTalentPoints()) - 1);
+            uint32 learnRank = std::min(lvl, bot->GetFreeTalentPoints()) - 1;
+            bool rtgTalentAllowed = false;
+            for (TalentEntry const* talentInfo : spells)
+            {
+                if (talentInfo->TalentID == talentID && IsRTGTalentAllowedForBotLevel(bot, talentInfo, learnRank))
+                {
+                    rtgTalentAllowed = true;
+                    break;
+                }
+            }
+
+            if (!rtgTalentAllowed)
+                continue;
+
+            bot->LearnTalent(talentID, learnRank);
             if (bot->GetFreeTalentPoints() == 0)
             {
                 break;
@@ -3235,6 +3314,9 @@ void PlayerbotFactory::InitAvailableSpells()
             if (!trainer->CanTeachSpell(bot, trainerSpell))
                 continue;
 
+            if (!IsRTGSpellAllowedForBotLevel(bot, trainerSpell->SpellId))
+                continue;
+
             if (trainerSpell->IsCastable())
                 bot->CastSpell(bot, trainerSpell->SpellId, true);
             else
@@ -3346,6 +3428,9 @@ void PlayerbotFactory::InitSpecialSpells()
          i != sPlayerbotAIConfig.randomBotSpellIds.end(); ++i)
     {
         uint32 spellId = *i;
+        if (!IsRTGSpellAllowedForBotLevel(bot, spellId))
+            continue;
+
         bot->learnSpell(spellId);
     }
     // to leave DK starting area
@@ -3399,6 +3484,12 @@ void PlayerbotFactory::InitTalents(uint32 specNo)
 
                 maxRank = rank;
             }
+            if (!IsRTGTalentAllowedForBotLevel(bot, talentInfo, maxRank))
+            {
+                spells_row.erase(spells_row.begin() + index);
+                continue;
+            }
+
             if (talentInfo->DependsOn)
             {
                 bot->LearnTalent(talentInfo->DependsOn,
@@ -3452,6 +3543,8 @@ void PlayerbotFactory::InitTalentsByTemplate(uint32 specTab)
         for (std::vector<uint32>& p : sPlayerbotAIConfig.parsedSpecLinkOrder[cls][specIndex][level])
         {
             uint32 tab = p[0], row = p[1], col = p[2], lvl = p[3];
+            if (!IsRTGTalentRowAllowedForBotLevel(bot, row))
+                continue;
             if (sPlayerbotAIConfig.limitTalentsExpansion && bot->GetLevel() <= 60 && (row > 6 || (row == 6 && col != 1)))
                 continue;
 
@@ -3494,6 +3587,22 @@ void PlayerbotFactory::InitTalentsByTemplate(uint32 specTab)
                 }
                 learnLevel = std::min(lvl, bot->GetFreeTalentPoints() + currentTalentRank) - 1;
             }
+            if (!talentID)
+                continue;
+
+            bool rtgTalentAllowed = false;
+            for (TalentEntry const* talentInfo : spells)
+            {
+                if (talentInfo->TalentID == talentID && IsRTGTalentAllowedForBotLevel(bot, talentInfo, learnLevel))
+                {
+                    rtgTalentAllowed = true;
+                    break;
+                }
+            }
+
+            if (!rtgTalentAllowed)
+                continue;
+
             bot->LearnTalent(talentID, learnLevel);
             if (bot->GetFreeTalentPoints() == 0)
             {

@@ -15,6 +15,35 @@
 #include "ReputationMgr.h"
 #include "Trainer.h"
 
+namespace
+{
+bool IsRTGTrainerSpellAllowedForBotLevel(Player* bot, SpellInfo const* spellInfo)
+{
+    if (!bot || !spellInfo)
+        return false;
+
+    uint32 const requiredLevel = std::max<uint32>(spellInfo->BaseLevel, spellInfo->SpellLevel);
+    if (requiredLevel > bot->GetLevel())
+        return false;
+
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        if (spellInfo->Effects[i].Effect != SPELL_EFFECT_LEARN_SPELL || !spellInfo->Effects[i].TriggerSpell)
+            continue;
+
+        SpellInfo const* triggerInfo = sSpellMgr->GetSpellInfo(spellInfo->Effects[i].TriggerSpell);
+        if (!triggerInfo)
+            continue;
+
+        uint32 const triggerRequiredLevel = std::max<uint32>(triggerInfo->BaseLevel, triggerInfo->SpellLevel);
+        if (triggerRequiredLevel > bot->GetLevel())
+            return false;
+    }
+
+    return true;
+}
+}
+
 bool TrainerAction::Execute(Event event)
 {
     std::string const param = event.getParam();
@@ -117,6 +146,9 @@ void TrainerAction::Iterate(Creature* creature, bool learnSpells, uint32 spellId
 
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(trainerSpell->SpellId);
         if (!spellInfo)
+            continue;
+
+        if (!IsRTGTrainerSpellAllowedForBotLevel(bot, spellInfo))
             continue;
 
         uint32 cost = static_cast<uint32>(floor(trainerSpell->MoneyCost * reputationDiscount));

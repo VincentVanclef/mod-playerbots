@@ -9,6 +9,18 @@
 #include "Playerbots.h"
 #include "Vehicle.h"
 
+namespace
+{
+bool IsRTGSpellAllowedForBotLevel(Player* bot, SpellInfo const* spellInfo)
+{
+    if (!bot || !spellInfo)
+        return false;
+
+    uint32 const requiredLevel = std::max<uint32>(spellInfo->BaseLevel, spellInfo->SpellLevel);
+    return requiredLevel <= bot->GetLevel();
+}
+}
+
 SpellIdValue::SpellIdValue(PlayerbotAI* botAI) : CalculatedValue<uint32>(botAI, "spell id", 20 * 1000) {}
 
 VehicleSpellIdValue::VehicleSpellIdValue(PlayerbotAI* botAI) : CalculatedValue<uint32>(botAI, "vehicle spell id") {}
@@ -46,6 +58,9 @@ uint32 SpellIdValue::Calculate()
         if (!spellInfo || spellInfo->IsPassive())
             continue;
 
+        if (!IsRTGSpellAllowedForBotLevel(bot, spellInfo))
+            continue;
+
         if (spellInfo->Effects[0].Effect == SPELL_EFFECT_LEARN_SPELL)
             continue;
 
@@ -79,6 +94,9 @@ uint32 SpellIdValue::Calculate()
             uint32 spellId = itr->first;
             SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
             if (!spellInfo)
+                continue;
+
+            if (!IsRTGSpellAllowedForBotLevel(bot, spellInfo))
                 continue;
 
             if (spellInfo->Effects[0].Effect == SPELL_EFFECT_LEARN_SPELL)
