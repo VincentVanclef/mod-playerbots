@@ -13,13 +13,87 @@
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 #include "ReputationMgr.h"
+#include "SharedDefines.h"
 #include "Trainer.h"
 
 namespace
 {
+bool IsRTGTrainerWeaponProficiencySpellAllowedForBot(Player* bot, uint32 spellId)
+{
+    if (!bot)
+        return false;
+
+    switch (spellId)
+    {
+        // Weapon proficiency spells. These teach SkillLine entries directly, and
+        // AzerothCore removes them on load if the race/class combination is invalid.
+        // Keep random bots from learning weapon master spells their class cannot actually use.
+        case 196: // One-Handed Axes
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_HUNTER || bot->getClass() == CLASS_ROGUE ||
+                   bot->getClass() == CLASS_SHAMAN || bot->getClass() == CLASS_DEATH_KNIGHT;
+        case 197: // Two-Handed Axes
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_HUNTER || bot->getClass() == CLASS_SHAMAN ||
+                   bot->getClass() == CLASS_DEATH_KNIGHT;
+        case 198: // One-Handed Maces
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_PRIEST || bot->getClass() == CLASS_ROGUE ||
+                   bot->getClass() == CLASS_SHAMAN || bot->getClass() == CLASS_DRUID ||
+                   bot->getClass() == CLASS_DEATH_KNIGHT;
+        case 199: // Two-Handed Maces
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_SHAMAN || bot->getClass() == CLASS_DRUID ||
+                   bot->getClass() == CLASS_DEATH_KNIGHT;
+        case 200: // Polearms
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_HUNTER || bot->getClass() == CLASS_DRUID ||
+                   bot->getClass() == CLASS_DEATH_KNIGHT;
+        case 201: // One-Handed Swords
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_HUNTER || bot->getClass() == CLASS_ROGUE ||
+                   bot->getClass() == CLASS_MAGE || bot->getClass() == CLASS_WARLOCK ||
+                   bot->getClass() == CLASS_DEATH_KNIGHT;
+        case 202: // Two-Handed Swords
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_HUNTER || bot->getClass() == CLASS_DEATH_KNIGHT;
+        case 227: // Staves
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_HUNTER ||
+                   bot->getClass() == CLASS_PRIEST || bot->getClass() == CLASS_MAGE ||
+                   bot->getClass() == CLASS_WARLOCK || bot->getClass() == CLASS_DRUID ||
+                   bot->getClass() == CLASS_SHAMAN;
+        case 264: // Bows
+        case 266: // Guns
+        case 5011: // Crossbows
+        case 2567: // Thrown
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_HUNTER ||
+                   bot->getClass() == CLASS_ROGUE;
+        case 5009: // Wands
+            return bot->getClass() == CLASS_PRIEST || bot->getClass() == CLASS_MAGE ||
+                   bot->getClass() == CLASS_WARLOCK;
+        case 9116: // Shields
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_PALADIN ||
+                   bot->getClass() == CLASS_SHAMAN;
+        case 1180: // Daggers
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_HUNTER ||
+                   bot->getClass() == CLASS_ROGUE || bot->getClass() == CLASS_PRIEST ||
+                   bot->getClass() == CLASS_MAGE || bot->getClass() == CLASS_WARLOCK ||
+                   bot->getClass() == CLASS_DRUID || bot->getClass() == CLASS_SHAMAN;
+        case 15590: // Fist Weapons
+            return bot->getClass() == CLASS_WARRIOR || bot->getClass() == CLASS_HUNTER ||
+                   bot->getClass() == CLASS_ROGUE || bot->getClass() == CLASS_SHAMAN ||
+                   bot->getClass() == CLASS_DRUID;
+        default:
+            return true;
+    }
+}
+
 bool IsRTGTrainerSpellAllowedForBotLevel(Player* bot, SpellInfo const* spellInfo)
 {
     if (!bot || !spellInfo)
+        return false;
+
+    if (!IsRTGTrainerWeaponProficiencySpellAllowedForBot(bot, spellInfo->Id))
         return false;
 
     uint32 const requiredLevel = std::max<uint32>(spellInfo->BaseLevel, spellInfo->SpellLevel);
@@ -31,7 +105,11 @@ bool IsRTGTrainerSpellAllowedForBotLevel(Player* bot, SpellInfo const* spellInfo
         if (spellInfo->Effects[i].Effect != SPELL_EFFECT_LEARN_SPELL || !spellInfo->Effects[i].TriggerSpell)
             continue;
 
-        SpellInfo const* triggerInfo = sSpellMgr->GetSpellInfo(spellInfo->Effects[i].TriggerSpell);
+        uint32 const triggerSpellId = spellInfo->Effects[i].TriggerSpell;
+        if (!IsRTGTrainerWeaponProficiencySpellAllowedForBot(bot, triggerSpellId))
+            return false;
+
+        SpellInfo const* triggerInfo = sSpellMgr->GetSpellInfo(triggerSpellId);
         if (!triggerInfo)
             continue;
 
