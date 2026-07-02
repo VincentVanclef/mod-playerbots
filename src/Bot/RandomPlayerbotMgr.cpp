@@ -1397,14 +1397,14 @@ uint8 RandomPlayerbotMgr::GetQueueDemandTargetLevel(std::vector<uint8> const& le
         for (uint8 level : levels)
             totalLevel += level;
 
-        // Rounded average of the real queued player levels.
-        // Example: 19 + 18 -> 19, 19 + 10 -> 15.
+        // RTG: rounded average of the real queued player levels.
+        // Examples: 19 + 18 -> 19, 19 + 10 -> 15.
         targetLevel = (totalLevel + (levels.size() / 2)) / levels.size();
     }
     else if (fallbackMin && fallbackMax)
     {
-        // No real queued-player levels were captured, usually an auto-start/min-instance request.
-        // Use the middle of the bracket instead of blindly choosing the floor or ceiling.
+        // No captured real-player level list: use the middle of the bracket,
+        // not the floor or ceiling.
         targetLevel = (uint32(fallbackMin) + uint32(fallbackMax) + 1) / 2;
     }
     else if (fallbackMin)
@@ -1421,6 +1421,11 @@ uint8 RandomPlayerbotMgr::GetQueueDemandTargetLevel(std::vector<uint8> const& le
         targetLevel = std::min<uint32>(fallbackMax, targetLevel);
 
     return static_cast<uint8>(std::max<uint32>(1, targetLevel));
+}
+
+uint8 RandomPlayerbotMgr::GetQueueDemandBgTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax)
+{
+    return GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
 }
 
 uint32 RandomPlayerbotMgr::FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp)
@@ -1718,7 +1723,6 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
     auto countPrepared = [&](uint32 mode, TeamId teamId, uint32 roleMask, std::vector<uint8> const& levels,
                              uint8 fallbackMin, uint8 fallbackMax) -> uint32
     {
-        uint8 targetLevel = GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
         uint32 prepared = 0;
         for (auto const& [guid, bot] : playerBots)
         {
@@ -1732,6 +1736,7 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             if (GetValue(botId, "rtg_demand_mode") != mode || !(GetValue(botId, "rtg_demand_role") & roleMask))
                 continue;
 
+            uint8 targetLevel = GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
             if (static_cast<uint8>(GetValue(botId, "rtg_demand_level")) != targetLevel)
                 continue;
 
@@ -1829,8 +1834,8 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             uint32 teamSize = bg->GetMaxPlayersPerTeam();
             uint32 targetPerTeam = teamSize * (info.activeBgQueue + info.bgInstanceCount);
 
-            // For BGs, use the average level of every real player queued for this BG/bracket, not one
-            // faction's floor/ceiling. This keeps both sides in the same reward-feeling level band.
+            // RTG: use the average level of every real player queued for this BG/bracket,
+            // not one faction's floor/ceiling. Both teams should fill the same reward band.
             std::vector<uint8> bgDemandLevels = info.bgAllianceDemandLevels;
             bgDemandLevels.insert(bgDemandLevels.end(), info.bgHordeDemandLevels.begin(), info.bgHordeDemandLevels.end());
 

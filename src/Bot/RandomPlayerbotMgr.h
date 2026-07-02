@@ -196,6 +196,9 @@ public:
     void AssignAccountTypes();
     bool IsAccountType(uint32 accountId, uint8 accountType);
 
+    // RTG: public BG-safe target-level helper used by BG join actions.
+    uint8 GetQueueDemandBgTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax);
+
 protected:
     void OnBotLoginInternal(Player* const bot) override;
 
@@ -270,7 +273,7 @@ private:
     uint32 FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp);
     bool TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
     bool RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
-    uint8 GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax, bool pvp);
+    uint8 GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax);
     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
     std::vector<Player*> players;
     uint32 processTicks;
