@@ -154,8 +154,7 @@ public:
     uint32 disabledWithoutRealPlayerLoginDelay, disabledWithoutRealPlayerLogoutDelay;
     bool randomBotJoinLfg;
     bool randomBotQueueDemandSwap;
-    bool randomBotQueueDemandPvpPreferBracketMaxLevel;
-    uint32 randomBotQueueDemandPvpMinRewardLevel;
+    bool randomBotQueueDemandPvpAverageQueuedPlayerLevel;
     uint32 randomBotQueueDemandMaxPerCheck;
     uint32 randomBotQueueDemandRetireCooldown;
 

@@ -1425,7 +1425,20 @@ uint8 RandomPlayerbotMgr::GetQueueDemandTargetLevel(std::vector<uint8> const& le
 
 uint8 RandomPlayerbotMgr::GetQueueDemandBgTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax)
 {
-    return GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
+    if (sPlayerbotAIConfig.randomBotQueueDemandPvpAverageQueuedPlayerLevel)
+        return GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
+
+    // RTG: average-level targeting disabled. Keep the old safe PvP behavior by
+    // preferring the top of the active bracket, then min level, then global bot min.
+    uint32 targetLevel = fallbackMax ? fallbackMax : (fallbackMin ? fallbackMin : sPlayerbotAIConfig.randomBotMinLevel);
+
+    if (fallbackMin)
+        targetLevel = std::max<uint32>(fallbackMin, targetLevel);
+
+    if (fallbackMax)
+        targetLevel = std::min<uint32>(fallbackMax, targetLevel);
+
+    return static_cast<uint8>(std::max<uint32>(1, targetLevel));
 }
 
 uint32 RandomPlayerbotMgr::FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp)
