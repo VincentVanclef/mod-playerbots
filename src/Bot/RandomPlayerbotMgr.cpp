@@ -1389,16 +1389,38 @@ void RandomPlayerbotMgr::CheckLfgQueue()
 
 uint8 RandomPlayerbotMgr::GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax)
 {
+    uint32 targetLevel = 0;
+
     if (!levels.empty())
-        return levels.front();
+    {
+        uint32 totalLevel = 0;
+        for (uint8 level : levels)
+            totalLevel += level;
+
+        // Rounded average of the real queued player levels.
+        // Example: 19 + 18 -> 19, 19 + 10 -> 15.
+        targetLevel = (totalLevel + (levels.size() / 2)) / levels.size();
+    }
+    else if (fallbackMin && fallbackMax)
+    {
+        // No real queued-player levels were captured, usually an auto-start/min-instance request.
+        // Use the middle of the bracket instead of blindly choosing the floor or ceiling.
+        targetLevel = (uint32(fallbackMin) + uint32(fallbackMax) + 1) / 2;
+    }
+    else if (fallbackMin)
+        targetLevel = fallbackMin;
+    else if (fallbackMax)
+        targetLevel = fallbackMax;
+    else
+        targetLevel = std::max<uint32>(1, sPlayerbotAIConfig.randomBotMinLevel);
 
     if (fallbackMin)
-        return fallbackMin;
+        targetLevel = std::max<uint32>(fallbackMin, targetLevel);
 
     if (fallbackMax)
-        return fallbackMax;
+        targetLevel = std::min<uint32>(fallbackMax, targetLevel);
 
-    return static_cast<uint8>(std::max<uint32>(1, sPlayerbotAIConfig.randomBotMinLevel));
+    return static_cast<uint8>(std::max<uint32>(1, targetLevel));
 }
 
 uint32 RandomPlayerbotMgr::FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp)
@@ -1696,6 +1718,7 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
     auto countPrepared = [&](uint32 mode, TeamId teamId, uint32 roleMask, std::vector<uint8> const& levels,
                              uint8 fallbackMin, uint8 fallbackMax) -> uint32
     {
+        uint8 targetLevel = GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
         uint32 prepared = 0;
         for (auto const& [guid, bot] : playerBots)
         {
@@ -1709,13 +1732,7 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             if (GetValue(botId, "rtg_demand_mode") != mode || !(GetValue(botId, "rtg_demand_role") & roleMask))
                 continue;
 
-            uint8 botLevel = static_cast<uint8>(GetValue(botId, "rtg_demand_level"));
-            if (levels.empty())
-            {
-                if (botLevel != GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax))
-                    continue;
-            }
-            else if (std::find(levels.begin(), levels.end(), botLevel) == levels.end())
+            if (static_cast<uint8>(GetValue(botId, "rtg_demand_level")) != targetLevel)
                 continue;
 
             ++prepared;
@@ -1744,11 +1761,9 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             return;
 
         count -= prepared;
+        uint8 targetLevel = GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
         for (uint32 i = 0; i < count && actions < maxActions; ++i)
-        {
-            uint8 targetLevel = !levels.empty() ? levels[i % levels.size()] : GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
             requestOne(mode, teamId, roleMask, targetLevel);
-        }
     };
 
     // PvE/LFG demand: complete the classic 1 tank / 1 healer / 3 dps shape around real queued players.
@@ -1814,18 +1829,23 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             uint32 teamSize = bg->GetMaxPlayersPerTeam();
             uint32 targetPerTeam = teamSize * (info.activeBgQueue + info.bgInstanceCount);
 
+            // For BGs, use the average level of every real player queued for this BG/bracket, not one
+            // faction's floor/ceiling. This keeps both sides in the same reward-feeling level band.
+            std::vector<uint8> bgDemandLevels = info.bgAllianceDemandLevels;
+            bgDemandLevels.insert(bgDemandLevels.end(), info.bgHordeDemandLevels.begin(), info.bgHordeDemandLevels.end());
+
             uint32 allianceCurrent = info.bgAlliancePlayerCount + info.bgAllianceBotCount;
             if (targetPerTeam > allianceCurrent)
             {
                 requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_ALLIANCE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - allianceCurrent,
-                            info.bgAllianceDemandLevels, info.minLevel, info.maxLevel);
+                            bgDemandLevels, info.minLevel, info.maxLevel);
             }
 
             uint32 hordeCurrent = info.bgHordePlayerCount + info.bgHordeBotCount;
             if (targetPerTeam > hordeCurrent)
             {
                 requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_HORDE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - hordeCurrent,
-                            info.bgHordeDemandLevels, info.minLevel, info.maxLevel);
+                            bgDemandLevels, info.minLevel, info.maxLevel);
             }
         }
     }

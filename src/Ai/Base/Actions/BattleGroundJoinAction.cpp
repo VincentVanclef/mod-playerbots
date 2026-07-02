@@ -287,12 +287,25 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
     }
 
     // Check if bots should join Battleground
-    uint32 bgAllianceBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAllianceBotCount;
-    uint32 bgAlliancePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAlliancePlayerCount;
-    uint32 bgHordeBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordeBotCount;
-    uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
-    uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
-    uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
+    auto const& bgInfo = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId];
+    uint32 bgAllianceBotCount = bgInfo.bgAllianceBotCount;
+    uint32 bgAlliancePlayerCount = bgInfo.bgAlliancePlayerCount;
+    uint32 bgHordeBotCount = bgInfo.bgHordeBotCount;
+    uint32 bgHordePlayerCount = bgInfo.bgHordePlayerCount;
+    uint32 activeBgQueue = bgInfo.activeBgQueue;
+    uint32 bgInstanceCount = bgInfo.bgInstanceCount;
+
+    // RTG: when real players are queued, only let bots near the queue's average level fill it.
+    // This prevents random level-10 bodies from joining a mostly level-19 match while still
+    // allowing mixed queues to settle naturally around the players' actual average.
+    std::vector<uint8> demandLevels = bgInfo.bgAllianceDemandLevels;
+    demandLevels.insert(demandLevels.end(), bgInfo.bgHordeDemandLevels.begin(), bgInfo.bgHordeDemandLevels.end());
+    if (!demandLevels.empty())
+    {
+        uint8 targetLevel = sRandomPlayerbotMgr.GetQueueDemandTargetLevel(demandLevels, bgInfo.minLevel, bgInfo.maxLevel);
+        if (bot->GetLevel() != targetLevel)
+            return false;
+    }
 
     if (teamId == TEAM_ALLIANCE)
     {
@@ -617,12 +630,25 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
     }
 
     // Check if bots should join Battleground
-    uint32 bgAllianceBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAllianceBotCount;
-    uint32 bgAlliancePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgAlliancePlayerCount;
-    uint32 bgHordeBotCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordeBotCount;
-    uint32 bgHordePlayerCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgHordePlayerCount;
-    uint32 activeBgQueue = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].activeBgQueue;
-    uint32 bgInstanceCount = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId].bgInstanceCount;
+    auto const& bgInfo = sRandomPlayerbotMgr.BattlegroundData[queueTypeId][bracketId];
+    uint32 bgAllianceBotCount = bgInfo.bgAllianceBotCount;
+    uint32 bgAlliancePlayerCount = bgInfo.bgAlliancePlayerCount;
+    uint32 bgHordeBotCount = bgInfo.bgHordeBotCount;
+    uint32 bgHordePlayerCount = bgInfo.bgHordePlayerCount;
+    uint32 activeBgQueue = bgInfo.activeBgQueue;
+    uint32 bgInstanceCount = bgInfo.bgInstanceCount;
+
+    // RTG: when real players are queued, only let bots near the queue's average level fill it.
+    // This prevents random level-10 bodies from joining a mostly level-19 match while still
+    // allowing mixed queues to settle naturally around the players' actual average.
+    std::vector<uint8> demandLevels = bgInfo.bgAllianceDemandLevels;
+    demandLevels.insert(demandLevels.end(), bgInfo.bgHordeDemandLevels.begin(), bgInfo.bgHordeDemandLevels.end());
+    if (!demandLevels.empty())
+    {
+        uint8 targetLevel = sRandomPlayerbotMgr.GetQueueDemandTargetLevel(demandLevels, bgInfo.minLevel, bgInfo.maxLevel);
+        if (bot->GetLevel() != targetLevel)
+            return false;
+    }
 
     if (teamId == TEAM_ALLIANCE)
     {

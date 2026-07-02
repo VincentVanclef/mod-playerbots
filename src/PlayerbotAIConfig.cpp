@@ -248,6 +248,10 @@ bool PlayerbotAIConfig::Initialize()
         sConfigMgr->GetOption<int32>("AiPlayerbot.MaxRandomBotsPriceChangeInterval", 48 * HOUR);
     randomBotJoinLfg = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotJoinLfg", true);
     randomBotQueueDemandSwap = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotQueueDemandSwap", true);
+    randomBotQueueDemandPvpPreferBracketMaxLevel =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotQueueDemandPvPPreferBracketMaxLevel", true);
+    randomBotQueueDemandPvpMinRewardLevel =
+        sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotQueueDemandPvPMinRewardLevel", 0);
     randomBotQueueDemandMaxPerCheck = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotQueueDemandMaxPerCheck", 4);
     randomBotQueueDemandRetireCooldown = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotQueueDemandRetireCooldown", 90);
 

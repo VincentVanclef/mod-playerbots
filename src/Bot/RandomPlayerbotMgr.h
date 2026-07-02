@@ -270,7 +270,7 @@ private:
     uint32 FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp);
     bool TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
     bool RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
-    uint8 GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax);
+    uint8 GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax, bool pvp);
     typedef void (RandomPlayerbotMgr::*ConsoleCommandHandler)(Player*);
     std::vector<Player*> players;
     uint32 processTicks;

@@ -706,6 +706,16 @@ AiPlayerbot.RandomBotJoinLfg = 1
 # RTG queue-demand swapper. When a real player is waiting in BG/arena/LFG,
 # idle random bots can be retargeted or swapped for bots matching the requested mode, role and level.
 AiPlayerbot.RandomBotQueueDemandSwap = 1
+
+# RTG PvP queue levels.  When enabled, BG/arena demand bots are prepared at the top
+# of the active bracket instead of the bracket floor.  This keeps 10-19 BG fillers
+# from spawning as level 10 grey/no-reward targets for level 19 players.
+AiPlayerbot.RandomBotQueueDemandPvPPreferBracketMaxLevel = 1
+
+# Optional floor for reward-useful PvP bots.  0 = disabled.
+# Example for a 19 twink realm: set 18 or 19 to prevent low-level filler bots.
+AiPlayerbot.RandomBotQueueDemandPvPMinRewardLevel = 0
+
 AiPlayerbot.RandomBotQueueDemandMaxPerCheck = 4
 AiPlayerbot.RandomBotQueueDemandRetireCooldown = 90
 
