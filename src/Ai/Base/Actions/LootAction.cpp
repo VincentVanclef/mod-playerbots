@@ -20,6 +20,14 @@
 
 bool LootAction::Execute(Event /*event*/)
 {
+    // RTG: bots do not loot in battlegrounds, preventing them from taking player insignias.
+    if (bot->InBattleground() && !bot->InArena())
+    {
+        AI_VALUE(LootObjectStack*, "available loot")->Clear();
+        context->GetValue<LootObject>("loot target")->Set(LootObject());
+        return false;
+    }
+
     if (!AI_VALUE(bool, "has available loot"))
         return false;
 
@@ -84,6 +92,11 @@ bool OpenLootAction::Execute(Event /*event*/)
 
 bool OpenLootAction::DoLoot(LootObject& lootObject)
 {
+    // RTG: never open loot in battlegrounds. This protects real-player insignias even if
+    // some other strategy accidentally adds a PvP corpse to the bot's loot stack.
+    if (bot->InBattleground() && !bot->InArena())
+        return false;
+
     if (lootObject.IsEmpty())
         return false;
 
@@ -352,6 +365,26 @@ proto->Name1.c_str(), 1, bidPrice, buyoutPrice);
 
 bool StoreLootAction::Execute(Event event)
 {
+    // RTG safety net: if a bot somehow receives a loot response while inside a battleground,
+    // release it without taking money/items.
+    if (bot->InBattleground() && !bot->InArena())
+    {
+        WorldPacket p(event.getPacket());
+        ObjectGuid guid;
+        p.rpos(0);
+        p >> guid;
+
+        if (guid)
+        {
+            AI_VALUE(LootObjectStack*, "available loot")->Remove(guid);
+            WorldPacket* packet = new WorldPacket(CMSG_LOOT_RELEASE, 8);
+            *packet << guid;
+            bot->GetSession()->QueuePacket(packet);
+        }
+
+        return true;
+    }
+
     WorldPacket p(event.getPacket());  // (8+1+4+1+1+4+4+4+4+4+1)
     ObjectGuid guid;
     uint8 loot_type;

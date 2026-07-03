@@ -7,10 +7,13 @@
 #define PLAYERBOTS_RANDOMPLAYERBOTMGR_H
 
 #include "NewRpgInfo.h"
+#include "DBCEnums.h"
 #include "ObjectGuid.h"
 #include "PlayerbotMgr.h"
 #include "GameTime.h"
 #include "PlayerbotCommandServer.h"
+
+#include <set>
 
 struct BattlegroundInfo
 {
@@ -66,6 +69,7 @@ struct LfgDemandInfo
     uint32 dpsBotCount = 0;
 };
 
+class Battleground;
 class ChatHandler;
 class PerfMonitorOperation;
 class WorldLocation;
@@ -199,6 +203,11 @@ public:
     // RTG: public BG-safe target-level helper used by BG join actions.
     uint8 GetQueueDemandBgTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax);
 
+    // RTG: allow waiting real players to take occupied bot seats in an already-running BG
+    // instead of encouraging the queue system to form a separate fresh battleground.
+    bool HasReplaceableBattlegroundBotForRealPlayer(BattlegroundQueueTypeId queueTypeId,
+                                                    BattlegroundBracketId bracketId, TeamId teamId);
+
 protected:
     void OnBotLoginInternal(Player* const bot) override;
 
@@ -253,6 +262,14 @@ private:
                          std::string const& data = "");
     void GetBots();
     std::vector<uint32> GetBgBots(uint32 bracket);
+    void ProtectRealPlayerBattlegroundSeats();
+    bool DisplaceBattlegroundBotForRealPlayer(BattlegroundQueueTypeId queueTypeId, BattlegroundBracketId bracketId,
+                                              TeamId teamId, std::set<ObjectGuid>& displacedThisPass);
+    Player* FindReplaceableBattlegroundBotForRealPlayer(BattlegroundQueueTypeId queueTypeId,
+                                                        BattlegroundBracketId bracketId, TeamId teamId,
+                                                        std::set<ObjectGuid> const& skippedBots);
+    uint32 CountBattlegroundTeamPlayers(Battleground* bg, TeamId teamId, std::set<ObjectGuid> const& skippedBots);
+    uint32 CountRealPlayersInBattleground(Battleground* bg);
     time_t BgCheckTimer;
     time_t LfgCheckTimer;
     time_t PlayersCheckTimer;

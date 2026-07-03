@@ -328,6 +328,32 @@ public:
         SERVERHOOK_CAN_PACKET_RECEIVE
     }) {}
 
+    bool CanPacketReceive(WorldSession* session, WorldPacket const& packet) override
+    {
+        if (!session || !session->IsBot())
+            return true;
+
+        Player* player = session->GetPlayer();
+        if (!player || !player->InBattleground() || player->InArena())
+            return true;
+
+        // RTG: bots should never remove player insignias or take PvP corpse loot away from real
+        // players.  WSG/AB/EotS do not need bot looting, so block the full BG loot flow for bots.
+        switch (packet.GetOpcode())
+        {
+            case CMSG_LOOT:
+            case CMSG_LOOT_MONEY:
+            case CMSG_AUTOSTORE_LOOT_ITEM:
+                LOG_DEBUG("playerbots", "RTG BG loot protection: blocked bot {} <{}> opcode {}",
+                          player->GetGUID().ToString().c_str(), player->GetName().c_str(), uint32(packet.GetOpcode()));
+                return false;
+            default:
+                break;
+        }
+
+        return true;
+    }
+
     void OnPacketReceived(WorldSession* session, WorldPacket const& packet) override
     {
         if (Player* player = session->GetPlayer())

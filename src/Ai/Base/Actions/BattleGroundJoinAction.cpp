@@ -307,14 +307,23 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
             return false;
     }
 
+    bool canSeatQueuedPlayerInExistingBg =
+        (!bgInfo.bgAllianceDemandLevels.empty() &&
+         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE)) ||
+        (!bgInfo.bgHordeDemandLevels.empty() &&
+         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE));
+
+    uint32 targetInstances = bgInstanceCount + ((activeBgQueue && !canSeatQueuedPlayerInExistingBg) ? 1 : 0);
+    uint32 targetPerTeam = TeamSize * targetInstances;
+
     if (teamId == TEAM_ALLIANCE)
     {
-        if ((bgAllianceBotCount + bgAlliancePlayerCount) < TeamSize * (activeBgQueue + bgInstanceCount))
+        if ((bgAllianceBotCount + bgAlliancePlayerCount) < targetPerTeam)
             return true;
     }
     else
     {
-        if ((bgHordeBotCount + bgHordePlayerCount) < TeamSize * (activeBgQueue + bgInstanceCount))
+        if ((bgHordeBotCount + bgHordePlayerCount) < targetPerTeam)
             return true;
     }
 
@@ -650,14 +659,23 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
             return false;
     }
 
+    bool canSeatQueuedPlayerInExistingBg =
+        (!bgInfo.bgAllianceDemandLevels.empty() &&
+         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE)) ||
+        (!bgInfo.bgHordeDemandLevels.empty() &&
+         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE));
+
+    uint32 targetInstances = bgInstanceCount + ((activeBgQueue && !canSeatQueuedPlayerInExistingBg) ? 1 : 0);
+    uint32 targetPerTeam = TeamSize * targetInstances;
+
     if (teamId == TEAM_ALLIANCE)
     {
-        if ((bgAllianceBotCount + bgAlliancePlayerCount) < TeamSize * (activeBgQueue + bgInstanceCount))
+        if ((bgAllianceBotCount + bgAlliancePlayerCount) < targetPerTeam)
             return true;
     }
     else
     {
-        if ((bgHordeBotCount + bgHordePlayerCount) < TeamSize * (activeBgQueue + bgInstanceCount))
+        if ((bgHordeBotCount + bgHordePlayerCount) < targetPerTeam)
             return true;
     }
 

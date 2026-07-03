@@ -16,6 +16,7 @@
 #include <random>
 
 #include "AiFactory.h"
+#include "BattleGroundJoinAction.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
 #include "ChannelMgr.h"
@@ -1221,6 +1222,7 @@ void RandomPlayerbotMgr::CheckBgQueue()
         updateBGInstanceCount(BATTLEGROUND_QUEUE_WS, wsBrackets, randomBotAutoJoinBGWSCount);
     }
 
+    ProtectRealPlayerBattlegroundSeats();
     LogBattlegroundInfo();
     EnsureQueueDemandBots();
 }
@@ -1439,6 +1441,163 @@ uint8 RandomPlayerbotMgr::GetQueueDemandBgTargetLevel(std::vector<uint8> const& 
         targetLevel = std::min<uint32>(fallbackMax, targetLevel);
 
     return static_cast<uint8>(std::max<uint32>(1, targetLevel));
+}
+
+uint32 RandomPlayerbotMgr::CountBattlegroundTeamPlayers(Battleground* bg, TeamId teamId,
+                                                       std::set<ObjectGuid> const& skippedBots)
+{
+    if (!bg || !bg->GetBgMap())
+        return 0;
+
+    uint32 count = 0;
+    for (auto& ref : bg->GetBgMap()->GetPlayers())
+    {
+        Player* player = ref.GetSource();
+        if (!player || !player->IsInWorld())
+            continue;
+
+        if (skippedBots.find(player->GetGUID()) != skippedBots.end())
+            continue;
+
+        if (player->GetTeamId() != teamId)
+            continue;
+
+        ++count;
+    }
+
+    return count;
+}
+
+uint32 RandomPlayerbotMgr::CountRealPlayersInBattleground(Battleground* bg)
+{
+    if (!bg || !bg->GetBgMap())
+        return 0;
+
+    uint32 count = 0;
+    for (auto& ref : bg->GetBgMap()->GetPlayers())
+    {
+        Player* player = ref.GetSource();
+        if (!player || !player->IsInWorld())
+            continue;
+
+        PlayerbotAI* ai = GET_PLAYERBOT_AI(player);
+        if (!ai || ai->IsRealPlayer())
+            ++count;
+    }
+
+    return count;
+}
+
+Player* RandomPlayerbotMgr::FindReplaceableBattlegroundBotForRealPlayer(BattlegroundQueueTypeId queueTypeId,
+                                                                        BattlegroundBracketId bracketId, TeamId teamId,
+                                                                        std::set<ObjectGuid> const& skippedBots)
+{
+    BattlegroundTypeId bgTypeId = BattlegroundMgr::BGTemplateId(queueTypeId);
+
+    Player* bestBot = nullptr;
+    int32 bestScore = -1;
+
+    for (auto const& [guid, bot] : playerBots)
+    {
+        if (!bot || !bot->IsInWorld() || !IsRandomBot(bot))
+            continue;
+
+        if (skippedBots.find(bot->GetGUID()) != skippedBots.end())
+            continue;
+
+        if (!bot->InBattleground() || bot->InArena())
+            continue;
+
+        if (bot->GetTeamId() != teamId)
+            continue;
+
+        Battleground* bg = bot->GetBattleground();
+        if (!bg || bg->GetStatus() == STATUS_WAIT_LEAVE || bg->GetBgTypeID() != bgTypeId)
+            continue;
+
+        PvPDifficultyEntry const* pvpDiff = GetBattlegroundBracketByLevel(bg->GetMapId(), bot->GetLevel());
+        if (!pvpDiff || pvpDiff->GetBracketId() != bracketId)
+            continue;
+
+        // Only displace when this team is actually full.  If the active BG already has a free
+        // same-team seat, the queue can invite the real player naturally without removing anyone.
+        if (CountBattlegroundTeamPlayers(bg, teamId, skippedBots) < bg->GetMaxPlayersPerTeam())
+            continue;
+
+        int32 score = int32(CountRealPlayersInBattleground(bg)) * 100;
+        if (bot->isDead())
+            score += 20;
+        if (!bot->IsInCombat())
+            score += 10;
+
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestBot = bot;
+        }
+    }
+
+    return bestBot;
+}
+
+bool RandomPlayerbotMgr::HasReplaceableBattlegroundBotForRealPlayer(BattlegroundQueueTypeId queueTypeId,
+                                                                    BattlegroundBracketId bracketId, TeamId teamId)
+{
+    std::set<ObjectGuid> skippedBots;
+    return FindReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, teamId, skippedBots) != nullptr;
+}
+
+bool RandomPlayerbotMgr::DisplaceBattlegroundBotForRealPlayer(BattlegroundQueueTypeId queueTypeId,
+                                                             BattlegroundBracketId bracketId, TeamId teamId,
+                                                             std::set<ObjectGuid>& displacedThisPass)
+{
+    Player* bot = FindReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, teamId, displacedThisPass);
+    if (!bot)
+        return false;
+
+    PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot);
+    if (!botAI)
+        return false;
+
+    Battleground* bg = bot->GetBattleground();
+    uint32 instanceId = bg ? bg->GetInstanceID() : 0;
+    BattlegroundTypeId bgTypeId = bg ? bg->GetBgTypeID() : BattlegroundMgr::BGTemplateId(queueTypeId);
+
+    displacedThisPass.insert(bot->GetGUID());
+
+    LOG_INFO("playerbots",
+             "RTG BG real-player priority: removing bot {} {}:{} <{}> from BG {} instance {} to free a same-team real-player seat.",
+             bot->GetGUID().ToString().c_str(), bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(),
+             bot->GetName().c_str(), uint32(bgTypeId), instanceId);
+
+    return BGStatusAction::LeaveBG(botAI);
+}
+
+void RandomPlayerbotMgr::ProtectRealPlayerBattlegroundSeats()
+{
+    std::set<ObjectGuid> displacedThisPass;
+
+    for (auto const& queueTypePair : BattlegroundData)
+    {
+        BattlegroundQueueTypeId queueTypeId = BattlegroundQueueTypeId(queueTypePair.first);
+        if (BattlegroundMgr::BGArenaType(queueTypeId))
+            continue;
+
+        for (auto const& bracketIdPair : queueTypePair.second)
+        {
+            BattlegroundBracketId bracketId = BattlegroundBracketId(bracketIdPair.first);
+            BattlegroundInfo const& info = bracketIdPair.second;
+
+            if (!info.activeBgQueue || info.bgInstances.empty())
+                continue;
+
+            if (!info.bgAllianceDemandLevels.empty())
+                DisplaceBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE, displacedThisPass);
+
+            if (!info.bgHordeDemandLevels.empty())
+                DisplaceBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE, displacedThisPass);
+        }
+    }
 }
 
 uint32 RandomPlayerbotMgr::FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp)
@@ -1845,7 +2004,20 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             }
 
             uint32 teamSize = bg->GetMaxPlayersPerTeam();
-            uint32 targetPerTeam = teamSize * (info.activeBgQueue + info.bgInstanceCount);
+            BattlegroundBracketId bracketId = BattlegroundBracketId(bracketPair.first);
+
+            // RTG: if a real player is waiting and an existing BG has a replaceable same-team bot,
+            // do not spin up extra queue-demand bots for a new BG.  The displacement pass frees
+            // that occupied bot seat so the real player can join the active match instead.
+            bool canSeatQueuedPlayerInExistingBg =
+                (!info.bgAllianceDemandLevels.empty() &&
+                 HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE)) ||
+                (!info.bgHordeDemandLevels.empty() &&
+                 HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE));
+
+            uint32 targetInstances = info.bgInstanceCount +
+                                     ((info.activeBgQueue && !canSeatQueuedPlayerInExistingBg) ? 1 : 0);
+            uint32 targetPerTeam = teamSize * targetInstances;
 
             // RTG: use the average level of every real player queued for this BG/bracket,
             // not one faction's floor/ceiling. Both teams should fill the same reward band.

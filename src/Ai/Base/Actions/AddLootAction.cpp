@@ -15,6 +15,10 @@
 
 bool AddLootAction::Execute(Event event)
 {
+    // RTG: battleground corpses/insignias belong to real players.
+    if (bot->InBattleground() && !bot->InArena())
+        return false;
+
     ObjectGuid guid = event.getObject();
     if (!guid)
         return false;
@@ -24,6 +28,10 @@ bool AddLootAction::Execute(Event event)
 
 bool AddAllLootAction::Execute(Event /*event*/)
 {
+    // RTG: do not let bots chase or open loot/insignias inside battlegrounds.
+    if (bot->InBattleground() && !bot->InArena())
+        return false;
+
     bool added = false;
 
     GuidVector gos = context->GetValue<GuidVector>("nearest game objects")->Get();
