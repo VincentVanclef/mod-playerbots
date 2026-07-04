@@ -1269,7 +1269,7 @@ AiPlayerbot.AutoTeleportForLevel = 1
 # RTG battleground bot movement/objective safety. These are enabled by default because flying/gliding bots
 # and EotS flag neglect are very visible to players.
 RTG.Playerbots.BG.DisableAirTravel = 1
-RTG.Playerbots.BG.ClampToGround = 0
+RTG.Playerbots.BG.ClampToGround = 1
 RTG.Playerbots.BG.AntiCliffMovement = 1
 RTG.Playerbots.BG.EOTS.EnableObjectiveAI = 1
 
