@@ -1270,8 +1270,8 @@ AiPlayerbot.AutoTeleportForLevel = 1
 # and EotS flag neglect are very visible to players.
 RTG.Playerbots.BG.DisableAirTravel = 1
 RTG.Playerbots.BG.ClampToGround = 0
-RTG.Playerbots.BG.AntiCliffMovement = 0
-RTG.Playerbots.BG.EOTS.EnableObjectiveAI = 0
+RTG.Playerbots.BG.AntiCliffMovement = 1
+RTG.Playerbots.BG.EOTS.EnableObjectiveAI = 1
 
 # Enable battlegrounds/arenas for randombots
 AiPlayerbot.RandomBotJoinBG = 1
