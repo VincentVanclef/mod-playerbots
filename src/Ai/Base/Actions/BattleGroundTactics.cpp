@@ -1268,55 +1268,6 @@ static std::unordered_map<uint32, Position> EY_NodePositions = {
     {POINT_MAGE_TOWER, Position(2284.720f, 1728.457f, 1189.153f)}
 };
 
-
-Position const EY_CENTER_FLAG_POS = {2174.782f, 1569.054f, 1159.450f, 0.0f};
-
-static bool RTG_IsValidBgHeight(float z)
-{
-    return z != INVALID_HEIGHT && z != VMAP_INVALID_HEIGHT_VALUE;
-}
-
-static float RTG_GetSafeGroundZ(Player* bot, float x, float y, float z)
-{
-    if (!bot)
-        return z;
-
-    float groundZ = bot->GetMapHeight(x, y, z + 5.0f);
-    if (!RTG_IsValidBgHeight(groundZ))
-    {
-        if (Map* map = bot->GetMap())
-            groundZ = map->GetHeight(x, y, z + 5.0f);
-    }
-
-    return RTG_IsValidBgHeight(groundZ) ? groundZ + 0.05f : z;
-}
-
-static void RTG_SetGroundObjective(Player* bot, PositionInfo& pos, Position const& origin, float radius = 0.0f)
-{
-    if (!bot)
-        return;
-
-    float x = origin.GetPositionX();
-    float y = origin.GetPositionY();
-    float z = origin.GetPositionZ();
-
-    if (radius > 0.0f)
-        bot->GetRandomPoint(origin, radius, x, y, z);
-
-    z = RTG_GetSafeGroundZ(bot, x, y, z);
-    pos.Set(x, y, z, bot->GetMapId());
-}
-
-static bool RTG_EYNodePosition(uint32 nodeId, Position& out)
-{
-    auto itr = EY_NodePositions.find(nodeId);
-    if (itr == EY_NodePositions.end())
-        return false;
-
-    out = itr->second;
-    return true;
-}
-
 static std::pair<uint32, uint32> IC_AttackObjectives[] = {
     {NODE_TYPE_WORKSHOP, BG_IC_GO_WORKSHOP_BANNER},
     {NODE_TYPE_DOCKS, BG_IC_GO_DOCKS_BANNER},
@@ -2020,8 +1971,8 @@ bool BGTactics::selectObjective(bool reset)
                         if (Map* map = bot->GetMap())
                         {
                             float groundZ = map->GetHeight(rx, ry, rz);
-                            if (groundZ != VMAP_INVALID_HEIGHT_VALUE && groundZ != INVALID_HEIGHT)
-                                rz = groundZ + 0.05f;
+                            if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                                rz = groundZ;
                         }
 
                         pos.Set(rx, ry, rz, go->GetMapId());
@@ -2138,8 +2089,8 @@ bool BGTactics::selectObjective(bool reset)
                     if (Map* map = bot->GetMap())
                     {
                         float groundZ = map->GetHeight(rx, ry, rz);
-                        if (groundZ != VMAP_INVALID_HEIGHT_VALUE && groundZ != INVALID_HEIGHT)
-                            rz = groundZ + 0.05f;
+                        if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                            rz = groundZ;
                     }
 
                     pos.Set(rx, ry, rz, bot->GetMapId());
@@ -2181,8 +2132,8 @@ bool BGTactics::selectObjective(bool reset)
                 if (Map* map = bot->GetMap())
                 {
                     float groundZ = map->GetHeight(rx, ry, rz);
-                    if (groundZ != VMAP_INVALID_HEIGHT_VALUE && groundZ != INVALID_HEIGHT)
-                        rz = groundZ + 0.05f;
+                    if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                        rz = groundZ;
                 }
 
                 pos.Set(rx, ry, rz, BgObjective->GetMapId());
@@ -2204,8 +2155,10 @@ bool BGTactics::selectObjective(bool reset)
                 if (radius > 0.0f)
                 {
                     bot->GetRandomPoint(origin, radius, rx, ry, rz);
-                    rz = RTG_GetSafeGroundZ(bot, rx, ry, rz);
-                    target.Relocate(rx, ry, rz);
+                    if (rz == VMAP_INVALID_HEIGHT_VALUE)
+                        target.Relocate(rx, ry, rz);
+                    else
+                        target.Relocate(origin);
                 }
                 else
                 {
@@ -2435,8 +2388,8 @@ bool BGTactics::selectObjective(bool reset)
                 if (Map* map = bot->GetMap())
                 {
                     float groundZ = map->GetHeight(rx, ry, rz);
-                    if (groundZ != VMAP_INVALID_HEIGHT_VALUE && groundZ != INVALID_HEIGHT)
-                        rz = groundZ + 0.05f;
+                    if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                        rz = groundZ;
                 }
                 pos.Set(rx, ry, rz, bot->GetMapId());
                 posMap["bg objective"] = pos;
@@ -2526,8 +2479,8 @@ bool BGTactics::selectObjective(bool reset)
                 if (Map* map = bot->GetMap())
                 {
                     float groundZ = map->GetHeight(rx, ry, rz);
-                    if (groundZ != VMAP_INVALID_HEIGHT_VALUE && groundZ != INVALID_HEIGHT)
-                        rz = groundZ + 0.05f;
+                    if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                        rz = groundZ;
                 }
 
                 pos.Set(rx, ry, rz, BgObjective->GetMapId());
@@ -2546,178 +2499,282 @@ bool BGTactics::selectObjective(bool reset)
             EYBotStrategy strategyAlliance = static_cast<EYBotStrategy>(GetBotStrategyForTeam(bg, TEAM_ALLIANCE));
             EYBotStrategy strategy = (team == TEAM_ALLIANCE) ? strategyAlliance : strategyHorde;
 
-            auto OwnerOf = [&](uint32 nodeId) -> uint32
-            { return eyeOfTheStormBG->GetCapturePointInfo(nodeId)._ownerTeamId; };
-
             auto IsOwned = [&](uint32 nodeId) -> bool
-            { return OwnerOf(nodeId) == team; };
+            { return eyeOfTheStormBG->GetCapturePointInfo(nodeId)._ownerTeamId == team; };
 
-            auto IsNotOwned = [&](uint32 nodeId) -> bool
-            { return OwnerOf(nodeId) != team; };
-
-            auto PickNearestNode = [&](bool ownedOnly, bool notOwnedOnly, uint32& outNodeId) -> bool
+            uint8 defendersProhab = 4;
+            switch (strategy)
             {
-                outNodeId = 0;
+                case EY_STRATEGY_FLAG_FOCUS:
+                    defendersProhab = 2;
+                    break;
+                case EY_STRATEGY_FRONT_FOCUS:
+                case EY_STRATEGY_BACK_FOCUS:
+                    defendersProhab = 3;
+                    break;
+                default:
+                    defendersProhab = 4;
+                    break;
+            }
+
+            bool isDefender = role < defendersProhab;
+
+            std::tuple<uint32, uint32, uint32> front[2];
+            std::tuple<uint32, uint32, uint32> back[2];
+
+            if (team == TEAM_HORDE)
+            {
+                front[0] = EY_AttackObjectives[0];
+                front[1] = EY_AttackObjectives[1];
+                back[0] = EY_AttackObjectives[2];
+                back[1] = EY_AttackObjectives[3];
+            }
+            else
+            {
+                front[0] = EY_AttackObjectives[2];
+                front[1] = EY_AttackObjectives[3];
+                back[0] = EY_AttackObjectives[0];
+                back[1] = EY_AttackObjectives[1];
+            }
+
+            bool foundObjective = false;
+
+            // --- PRIORITY 1: FLAG CARRIER ---
+            if (bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+            {
+                uint32 bestNodeId = 0;
                 float bestDist = FLT_MAX;
+                uint32 bestTrigger = 0;
 
-                for (auto const& objective : EY_AttackObjectives)
+                for (auto const& [nodeId, _, areaTrigger] : EY_AttackObjectives)
                 {
-                    uint32 nodeId = std::get<0>(objective);
-                    if (ownedOnly && !IsOwned(nodeId))
-                        continue;
-                    if (notOwnedOnly && !IsNotOwned(nodeId))
+                    if (!IsOwned(nodeId))
                         continue;
 
-                    Position nodePos;
-                    if (!RTG_EYNodePosition(nodeId, nodePos))
+                    auto it = EY_NodePositions.find(nodeId);
+                    if (it == EY_NodePositions.end())
                         continue;
 
-                    float dist = bot->GetDistance(nodePos);
+                    float dist = bot->GetDistance(it->second);
                     if (dist < bestDist)
                     {
                         bestDist = dist;
-                        outNodeId = nodeId;
+                        bestNodeId = nodeId;
+                        bestTrigger = areaTrigger;
                     }
                 }
 
-                return outNodeId != 0;
-            };
-
-            auto SetNodeObjective = [&](uint32 nodeId, float radius = 6.0f) -> bool
-            {
-                Position nodePos;
-                if (!RTG_EYNodePosition(nodeId, nodePos))
-                    return false;
-
-                RTG_SetGroundObjective(bot, pos, nodePos, radius);
-                return pos.isSet();
-            };
-
-            auto TryCaptureAreaTrigger = [&](uint32 nodeId) -> void
-            {
-                for (auto const& objective : EY_AttackObjectives)
+                if (bestNodeId != 0 && EY_NodePositions.contains(bestNodeId))
                 {
-                    if (std::get<0>(objective) != nodeId)
-                        continue;
+                    const Position& targetPos = EY_NodePositions[bestNodeId];
+                    float rx, ry, rz;
+                    bot->GetRandomPoint(targetPos, 5.0f, rx, ry, rz);
 
-                    uint32 areaTrigger = std::get<2>(objective);
-                    if (!areaTrigger)
-                        return;
+                    if (Map* map = bot->GetMap())
+                    {
+                        float groundZ = map->GetHeight(rx, ry, rz);
+                        if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                            rz = groundZ;
+                    }
 
-                    Position nodePos;
-                    if (!RTG_EYNodePosition(nodeId, nodePos))
-                        return;
+                    pos.Set(rx, ry, rz, bot->GetMapId());
 
-                    if (bot->IsWithinDist3d(nodePos.GetPositionX(), nodePos.GetPositionY(), nodePos.GetPositionZ(), 12.0f))
+                    // Check AreaTrigger activation range
+                    if (bestTrigger && bot->IsWithinDist3d(pos.x, pos.y, pos.z, INTERACTION_DISTANCE))
                     {
                         WorldPacket data(CMSG_AREATRIGGER);
-                        data << uint32(areaTrigger);
+                        data << uint32(bestTrigger);
                         bot->GetSession()->HandleAreaTriggerOpcode(data);
-                        resetObjective();
+                        pos.Reset();
                     }
-                    return;
-                }
-            };
 
-            bool foundObjective = false;
-            uint32 ownedNodeCount = 0;
-            for (auto const& objective : EY_AttackObjectives)
-            {
-                if (IsOwned(std::get<0>(objective)))
-                    ++ownedNodeCount;
-            }
-
-            GameObject* centerFlag = bg->GetBGObject(BG_EY_OBJECT_FLAG_NETHERSTORM);
-            bool centerFlagReady = centerFlag && centerFlag->isSpawned();
-            bool flagObjectiveEnabled = sPlayerbotAIConfig.rtgPlayerbotsBgEotsObjectiveAI;
-
-            // 1) If the bot is carrying the Netherstorm flag, deliver it to the closest owned tower immediately.
-            if (bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
-            {
-                uint32 deliverNode = 0;
-                if (PickNearestNode(true, false, deliverNode))
-                {
-                    foundObjective = SetNodeObjective(deliverNode, 4.0f);
-                    TryCaptureAreaTrigger(deliverNode);
+                    foundObjective = true;
                 }
                 else
                 {
-                    // No owned tower yet: retreat toward the safe side instead of wandering/fighting on cliffs.
-                    Position const& fallback = (team == TEAM_ALLIANCE) ? EY_FLAG_RETURN_POS_RETREAT_ALLIANCE
+                    const Position& fallback = (team == TEAM_ALLIANCE) ? EY_FLAG_RETURN_POS_RETREAT_ALLIANCE
                                                                        : EY_FLAG_RETURN_POS_RETREAT_HORDE;
-                    RTG_SetGroundObjective(bot, pos, fallback, 5.0f);
-                    foundObjective = pos.isSet();
-                }
-            }
 
-            // 2) Kill the enemy flag carrier before chasing random fights.
-            if (!foundObjective && flagObjectiveEnabled)
-            {
-                if (Unit* enemyFC = AI_VALUE(Unit*, "enemy flag carrier"))
-                {
-                    if (enemyFC->IsAlive())
+                    float rx, ry, rz;
+                    bot->GetRandomPoint(fallback, 5.0f, rx, ry, rz);
+
+                    if (Map* map = bot->GetMap())
                     {
-                        RTG_SetGroundObjective(bot, pos, enemyFC->GetPosition(), 2.0f);
-                        foundObjective = pos.isSet();
+                        float groundZ = map->GetHeight(rx, ry, rz);
+                        if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                            rz = groundZ;
                     }
+
+                    pos.Set(rx, ry, rz, bot->GetMapId());
+                    foundObjective = true;
                 }
             }
 
-            // 3) Actually play EotS: when we own at least one tower, send most bots to the center flag.
-            if (!foundObjective && flagObjectiveEnabled && centerFlagReady && ownedNodeCount > 0)
-            {
-                bool wantsFlag = strategy == EY_STRATEGY_FLAG_FOCUS || role <= 6 || urand(0, 99) < 65;
-                if (wantsFlag)
-                {
-                    RTG_SetGroundObjective(bot, pos, centerFlag->GetPosition(), 1.5f);
-                    foundObjective = pos.isSet();
-                }
-            }
-
-            // 4) Support friendly carrier if nearby; otherwise keep taking/defending towers.
-            if (!foundObjective && flagObjectiveEnabled)
-            {
-                if (Unit* friendlyFC = AI_VALUE(Unit*, "team flag carrier"))
-                {
-                    if (friendlyFC->IsAlive() && bot->GetDistance(friendlyFC) < 180.0f)
-                    {
-                        RTG_SetGroundObjective(bot, pos, friendlyFC->GetPosition(), 5.0f);
-                        foundObjective = pos.isSet();
-                    }
-                }
-            }
-
-            // 5) If we have no towers, do not chase the center flag forever; take the nearest tower first.
-            if (!foundObjective && ownedNodeCount == 0)
-            {
-                uint32 assaultNode = 0;
-                if (PickNearestNode(false, true, assaultNode))
-                    foundObjective = SetNodeObjective(assaultNode, 6.0f);
-            }
-
-            // 6) Strategy tower pressure/defense.
+            // --- PRIORITY 2: Nearby unowned contested node ---
             if (!foundObjective)
             {
-                std::tuple<uint32, uint32, uint32> front[2];
-                std::tuple<uint32, uint32, uint32> back[2];
-
-                if (team == TEAM_HORDE)
+                for (auto const& [nodeId, _, __] : EY_AttackObjectives)
                 {
-                    front[0] = EY_AttackObjectives[0]; // Fel Reaver
-                    front[1] = EY_AttackObjectives[1]; // Blood Elf
-                    back[0] = EY_AttackObjectives[2];  // Draenei
-                    back[1] = EY_AttackObjectives[3];  // Mage
+                    if (IsOwned(nodeId))
+                        continue;
+
+                    auto it = EY_NodePositions.find(nodeId);
+                    if (it == EY_NodePositions.end())
+                        continue;
+
+                    const Position& p = it->second;
+                    if (bot->IsWithinDist2d(p.GetPositionX(), p.GetPositionY(), 125.0f))
+                    {
+                        float rx, ry, rz;
+                        bot->GetRandomPoint(p, 5.0f, rx, ry, rz);
+                        rz = bot->GetMap()->GetHeight(rx, ry, rz);
+                        pos.Set(rx, ry, rz, bot->GetMapId());
+                        foundObjective = true;
+                    }
+                }
+            }
+
+            // --- PRIORITY 3: Random nearby enemy (20%) ---
+            if (!foundObjective && urand(0, 99) < 20)
+            {
+                if (Unit* enemy = AI_VALUE(Unit*, "enemy player target"))
+                {
+                    if (bot->GetDistance(enemy) < 250.0f)
+                    {
+                        pos.Set(enemy->GetPositionX(), enemy->GetPositionY(), enemy->GetPositionZ(), bot->GetMapId());
+                        foundObjective = true;
+                    }
+                }
+            }
+
+            // --- PRIORITY 4: Defender Logic ---
+            if (!foundObjective && isDefender && urand(0, 99) <= 80)
+            {
+                // 1. Chase enemy flag carrier
+                if (Unit* enemyFC = AI_VALUE(Unit*, "enemy flag carrier"))
+                {
+                    if (bot->CanSeeOrDetect(enemyFC, false, false, true) && enemyFC->IsAlive())
+                    {
+                        pos.Set(enemyFC->GetPositionX(), enemyFC->GetPositionY(), enemyFC->GetPositionZ(), bot->GetMapId());
+                        foundObjective = true;
+                    }
+                }
+
+                // 2. Support friendly flag carrier
+                if (!foundObjective)
+                {
+                    if (Unit* friendlyFC = AI_VALUE(Unit*, "team flag carrier"))
+                    {
+                        if (friendlyFC->IsAlive())
+                        {
+                            pos.Set(friendlyFC->GetPositionX(), friendlyFC->GetPositionY(), friendlyFC->GetPositionZ(), bot->GetMapId());
+                            foundObjective = true;
+                        }
+                    }
+                }
+
+                // 3. Pick up the flag
+                if (!foundObjective)
+                {
+                    if (GameObject* flag = bg->GetBGObject(BG_EY_OBJECT_FLAG_NETHERSTORM); flag && flag->isSpawned())
+                    {
+                        pos.Set(flag->GetPositionX(), flag->GetPositionY(), flag->GetPositionZ(), flag->GetMapId());
+                        foundObjective = true;
+                    }
+                }
+
+                // 4. Default: defend owned node
+                if (!foundObjective && urand(0, 99) < 50)
+                {
+                    std::vector<uint32> owned;
+                    for (auto const& obj : front)
+                    {
+                        uint32 nodeId = std::get<0>(obj);
+                        if (IsOwned(nodeId))
+                            owned.push_back(nodeId);
+                    }
+
+                    if (!owned.empty())
+                    {
+                        uint32 chosenId = owned[urand(0, owned.size() - 1)];
+                        if (EY_NodePositions.contains(chosenId))
+                        {
+                            const Position& p = EY_NodePositions[chosenId];
+                            float rx, ry, rz;
+                            bot->GetRandomPoint(p, 5.0f, rx, ry, rz);
+                            rz = bot->GetMap()->GetHeight(rx, ry, rz);
+                            pos.Set(rx, ry, rz, bot->GetMapId());
+                            foundObjective = true;
+                        }
+                    }
+                }
+            }
+
+            // --- PRIORITY 5: Flag Strategy ---
+            if (!foundObjective && strategy == EY_STRATEGY_FLAG_FOCUS)
+            {
+                bool ownsAny = false;
+                for (auto const& [nodeId, _, __] : EY_AttackObjectives)
+                {
+                    if (IsOwned(nodeId))
+                    {
+                        ownsAny = true;
+                        break;
+                    }
+                }
+
+                if (ownsAny)
+                {
+                    if (Unit* fc = AI_VALUE(Unit*, "enemy flag carrier"))
+                    {
+                        pos.Set(fc->GetPositionX(), fc->GetPositionY(), fc->GetPositionZ(), bot->GetMapId());
+                        foundObjective = true;
+                    }
+                    else if (GameObject* flag = bg->GetBGObject(BG_EY_OBJECT_FLAG_NETHERSTORM);
+                             flag && flag->isSpawned())
+                    {
+                        pos.Set(flag->GetPositionX(), flag->GetPositionY(), flag->GetPositionZ(), flag->GetMapId());
+                        foundObjective = true;
+                    }
                 }
                 else
                 {
-                    front[0] = EY_AttackObjectives[2];
-                    front[1] = EY_AttackObjectives[3];
-                    back[0] = EY_AttackObjectives[0];
-                    back[1] = EY_AttackObjectives[1];
-                }
+                    float bestDist = FLT_MAX;
+                    Optional<uint32> bestNode;
 
-                std::vector<std::tuple<uint32, uint32, uint32>> priority;
-                std::vector<std::tuple<uint32, uint32, uint32>> secondary;
+                    for (auto const& [nodeId, _, __] : EY_AttackObjectives)
+                    {
+                        if (IsOwned(nodeId))
+                            continue;
+
+                        auto it = EY_NodePositions.find(nodeId);
+                        if (it == EY_NodePositions.end())
+                            continue;
+
+                        float dist = bot->GetDistance(it->second);
+                        if (dist < bestDist)
+                        {
+                            bestDist = dist;
+                            bestNode = nodeId;
+                        }
+                    }
+
+                    if (bestNode && EY_NodePositions.contains(*bestNode))
+                    {
+                        const Position& p = EY_NodePositions[*bestNode];
+                        float rx, ry, rz;
+                        bot->GetRandomPoint(p, 5.0f, rx, ry, rz);
+                        rz = bot->GetMap()->GetHeight(rx, ry, rz);
+                        pos.Set(rx, ry, rz, bot->GetMapId());
+                        foundObjective = true;
+                    }
+                }
+            }
+
+            // --- PRIORITY 6: Strategy Objectives ---
+            if (!foundObjective)
+            {
+                std::vector<std::tuple<uint32, uint32, uint32>> priority, secondary;
 
                 switch (strategy)
                 {
@@ -2729,7 +2786,6 @@ bool BGTactics::selectObjective(bool reset)
                         priority = {back[0], back[1]};
                         secondary = {front[0], front[1]};
                         break;
-                    case EY_STRATEGY_FLAG_FOCUS:
                     case EY_STRATEGY_BALANCED:
                     default:
                         priority = {front[0], front[1], back[0], back[1]};
@@ -2737,30 +2793,20 @@ bool BGTactics::selectObjective(bool reset)
                 }
 
                 std::vector<uint32> candidates;
-                for (auto const& objective : priority)
+
+                for (auto const& obj : priority)
                 {
-                    uint32 nodeId = std::get<0>(objective);
-                    if (IsNotOwned(nodeId))
+                    uint32 nodeId = std::get<0>(obj);
+                    if (!IsOwned(nodeId))
                         candidates.push_back(nodeId);
                 }
 
                 if (candidates.empty())
                 {
-                    for (auto const& objective : secondary)
+                    for (auto const& obj : secondary)
                     {
-                        uint32 nodeId = std::get<0>(objective);
-                        if (IsNotOwned(nodeId))
-                            candidates.push_back(nodeId);
-                    }
-                }
-
-                // If everything is owned, defend a useful owned tower instead of camping graveyards/cliffs.
-                if (candidates.empty())
-                {
-                    for (auto const& objective : priority)
-                    {
-                        uint32 nodeId = std::get<0>(objective);
-                        if (IsOwned(nodeId))
+                        uint32 nodeId = std::get<0>(obj);
+                        if (!IsOwned(nodeId))
                             candidates.push_back(nodeId);
                     }
                 }
@@ -2768,15 +2814,27 @@ bool BGTactics::selectObjective(bool reset)
                 if (!candidates.empty())
                 {
                     uint32 chosen = candidates[urand(0, candidates.size() - 1)];
-                    foundObjective = SetNodeObjective(chosen, 7.0f);
+                    if (EY_NodePositions.contains(chosen))
+                    {
+                        const Position& p = EY_NodePositions[chosen];
+                        pos.Set(p.GetPositionX(), p.GetPositionY(), p.GetPositionZ(), bot->GetMapId());
+                        foundObjective = true;
+                    }
                 }
             }
 
-            // 7) Last resort: hold center instead of drifting to random fights in the air/edges.
-            if (!foundObjective)
+            // --- PRIORITY 7: Camp GY if everything is owned ---
+            bool ownsAll = IsOwned(std::get<0>(front[0])) && IsOwned(std::get<0>(front[1])) &&
+                           IsOwned(std::get<0>(back[0])) && IsOwned(std::get<0>(back[1]));
+
+            if (!foundObjective && ownsAll)
             {
-                RTG_SetGroundObjective(bot, pos, EY_CENTER_FLAG_POS, 8.0f);
-                foundObjective = pos.isSet();
+                Position camp = (team == TEAM_HORDE) ? EY_GY_CAMPING_ALLIANCE : EY_GY_CAMPING_HORDE;
+                float rx, ry, rz;
+                bot->GetRandomPoint(camp, 10.0f, rx, ry, rz);
+                rz = bot->GetMap()->GetHeight(rx, ry, rz);
+                pos.Set(rx, ry, rz, bot->GetMapId());
+                foundObjective = true;
             }
 
             if (foundObjective)

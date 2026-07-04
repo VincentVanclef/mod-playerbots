@@ -75,8 +75,8 @@ bool PlayerbotAIConfig::Initialize()
     maxMovementSearchTime = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxMovementSearchTime", 3);
     rtgPlayerbotsBgDisableAirTravel = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.DisableAirTravel", true);
     rtgPlayerbotsBgClampToGround = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.ClampToGround", false);
-    rtgPlayerbotsBgAntiCliffMovement = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.AntiCliffMovement", true);
-    rtgPlayerbotsBgEotsObjectiveAI = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.EOTS.EnableObjectiveAI", true);
+    rtgPlayerbotsBgAntiCliffMovement = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.AntiCliffMovement", false);
+    rtgPlayerbotsBgEotsObjectiveAI = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.EOTS.EnableObjectiveAI", false);
     expireActionTime = sConfigMgr->GetOption<int32>("AiPlayerbot.ExpireActionTime", 5000);
     dispelAuraDuration = sConfigMgr->GetOption<int32>("AiPlayerbot.DispelAuraDuration", 700);
     reactDelay = sConfigMgr->GetOption<int32>("AiPlayerbot.ReactDelay", 100);
