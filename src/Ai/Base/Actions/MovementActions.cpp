@@ -45,6 +45,61 @@ MovementAction::MovementAction(PlayerbotAI* botAI, std::string const name) : Act
     bot = botAI->GetBot();
 }
 
+
+namespace
+{
+    bool RTG_IsValidMovementHeight(float z)
+    {
+        return z != INVALID_HEIGHT && z != VMAP_INVALID_HEIGHT_VALUE;
+    }
+
+    void RTG_RemoveBgAirMovementFlags(Player* bot)
+    {
+        if (!bot || !bot->InBattleground() || !sPlayerbotAIConfig.rtgPlayerbotsBgDisableAirTravel)
+            return;
+
+        bool const hadAirFlags = bot->HasUnitMovementFlag(MOVEMENTFLAG_CAN_FLY) ||
+                                 bot->HasUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY) ||
+                                 bot->HasUnitMovementFlag(MOVEMENTFLAG_FLYING);
+
+        if (!hadAirFlags)
+            return;
+
+        bot->RemoveUnitMovementFlag(MOVEMENTFLAG_CAN_FLY);
+        bot->RemoveUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY);
+        bot->RemoveUnitMovementFlag(MOVEMENTFLAG_FLYING);
+        bot->SendMovementFlagUpdate();
+    }
+
+    bool RTG_AdjustBgDestinationToGround(Player* bot, float& x, float& y, float& z, bool rejectLargeDrop)
+    {
+        if (!bot || !bot->InBattleground() || !sPlayerbotAIConfig.rtgPlayerbotsBgClampToGround)
+            return true;
+
+        Map* map = bot->GetMap();
+        if (!map)
+            return true;
+
+        float groundZ = bot->GetMapHeight(x, y, z + 5.0f);
+        if (!RTG_IsValidMovementHeight(groundZ))
+            groundZ = map->GetHeight(x, y, z + 5.0f);
+
+        if (!RTG_IsValidMovementHeight(groundZ))
+            return true;
+
+        // Combat flee/retreat points should never choose a cliff drop in BGs.
+        if (rejectLargeDrop && sPlayerbotAIConfig.rtgPlayerbotsBgAntiCliffMovement &&
+            groundZ < bot->GetPositionZ() - 8.0f)
+            return false;
+
+        // Normal movement may still intentionally move down ramps/jumps, but should not spline through open air.
+        if (z > groundZ + 2.0f || z < groundZ - 6.0f)
+            z = groundZ + 0.05f;
+
+        return true;
+    }
+}
+
 void MovementAction::CreateWp(Player* wpOwner, float x, float y, float z, float o, uint32 entry, bool important)
 {
     float dist = wpOwner->GetDistance(x, y, z);
@@ -184,7 +239,13 @@ bool MovementAction::MoveTo(uint32 mapId, float x, float y, float z, bool idle, 
         return false;
     }
 
+    RTG_RemoveBgAirMovementFlags(bot);
+    if (mapId == bot->GetMapId() && !RTG_AdjustBgDestinationToGround(bot, x, y, z, false))
+        return false;
+
     bool generatePath = !bot->IsFlying() && !bot->isSwimming();
+    if (bot->InBattleground() && sPlayerbotAIConfig.rtgPlayerbotsBgClampToGround && !bot->isSwimming())
+        generatePath = true;
     bool disableMoveSplinePath =
         sPlayerbotAIConfig.disableMoveSplinePath >= 2 ||
         (sPlayerbotAIConfig.disableMoveSplinePath == 1 && bot->InBattleground());
@@ -986,7 +1047,15 @@ void MovementAction::UpdateMovementState()
         }
 
         // handle flying
-        if (wantsFly && !isFlying && isMasterFlying)
+        if (bot->InBattleground() && sPlayerbotAIConfig.rtgPlayerbotsBgDisableAirTravel &&
+            (isFlying || hasGravityDisabled || bot->HasUnitMovementFlag(MOVEMENTFLAG_CAN_FLY)))
+        {
+            bot->RemoveUnitMovementFlag(MOVEMENTFLAG_CAN_FLY);
+            bot->RemoveUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY);
+            bot->RemoveUnitMovementFlag(MOVEMENTFLAG_FLYING);
+            movementFlagsUpdated = true;
+        }
+        else if (!bot->InBattleground() && wantsFly && !isFlying && isMasterFlying)
         {
             bot->AddUnitMovementFlag(MOVEMENTFLAG_CAN_FLY);
             bot->AddUnitMovementFlag(MOVEMENTFLAG_DISABLE_GRAVITY);
@@ -1564,6 +1633,8 @@ bool MovementAction::MoveAway(Unit* target, float distance, bool backwards)
             dz = bot->GetPositionZ();
             exact = false;
         }
+        if (!RTG_AdjustBgDestinationToGround(bot, dx, dy, dz, true))
+            continue;
         if (MoveTo(target->GetMapId(), dx, dy, dz, false, false, true, exact, MovementPriority::MOVEMENT_COMBAT, false,
                    backwards))
         {
@@ -1587,6 +1658,8 @@ bool MovementAction::MoveAway(Unit* target, float distance, bool backwards)
             dz = bot->GetPositionZ();
             exact = false;
         }
+        if (!RTG_AdjustBgDestinationToGround(bot, dx, dy, dz, true))
+            continue;
         if (MoveTo(target->GetMapId(), dx, dy, dz, false, false, true, exact, MovementPriority::MOVEMENT_COMBAT, false,
                    backwards))
         {
@@ -2122,6 +2195,10 @@ Position MovementAction::BestPositionForMeleeToFlee(Position pos, float radius)
         {
             continue;
         }
+        if (!RTG_AdjustBgDestinationToGround(bot, dx, dy, dz, true))
+        {
+            continue;
+        }
         Position fleePos{dx, dy, dz};
         if (strict && currentTarget &&
             fleePos.GetExactDist(currentTarget) - currentTarget->GetCombatReach() >
@@ -2182,6 +2259,10 @@ Position MovementAction::BestPositionForRangedToFlee(Position pos, float radius)
         float dz = bot->GetPositionZ();
         if (!bot->GetMap()->CheckCollisionAndGetValidCoords(bot, bot->GetPositionX(), bot->GetPositionY(),
                                                             bot->GetPositionZ(), dx, dy, dz))
+        {
+            continue;
+        }
+        if (!RTG_AdjustBgDestinationToGround(bot, dx, dy, dz, true))
         {
             continue;
         }
