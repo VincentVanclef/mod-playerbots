@@ -1321,7 +1321,7 @@ static void RTG_EotsDebug(Player* bot, Battleground* bg, char const* phase, char
              "RTG EOTS {} bot={} guid={} bgInstance={} team={} role={} strategy={} owned={} hasFlag={} reason={} posSet={} pos={:.2f},{:.2f},{:.2f}",
              phase ? phase : "?", bot->GetName(), botGuid, bg->GetInstanceID(), uint32(bot->GetTeamId()), role,
              RTG_EotsStrategyName(strategy), ownedCount, bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL),
-             reason ? reason : "?", pos.isSet(), pos.x, pos.y, pos.z);
+             reason ? reason : "?", pos.valueSet, pos.x, pos.y, pos.z);
 }
 
 static std::pair<uint32, uint32> IC_AttackObjectives[] = {
