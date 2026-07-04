@@ -1203,6 +1203,11 @@ std::vector<BattleBotPath*> const vPaths_NoReverseAllowed = {
     &vPath_WSG_HordeGraveyardJump,
     &vPath_IC_Central_Graveyard_to_Workshop,
     &vPath_IC_Docks_Graveyard_to_Docks_Flag,
+    // RTG: Eye of the Storm start-rock paths are exit-only. Bots may use these
+    // paths to leave the spawn/rez rock, but they should never reverse them and
+    // run back up toward the inaccessible starting platform during live play.
+    &vPath_EY_Horde_Spawn_to_Crossroad1Horde,
+    &vPath_EY_Alliance_Spawn_to_Crossroad1Alliance,
 };
 
 static std::vector<std::pair<uint8, uint32>> AV_AttackObjectives_Horde = {
@@ -1290,6 +1295,10 @@ static bool RTG_EotsUnitValidForObjective(Player* bot, Unit* unit)
     return bot && unit && unit->IsInWorld() && unit->IsAlive() && unit->GetMapId() == bot->GetMapId();
 }
 
+// RTG: static, walkable-feeling center anchor used only when the Netherstorm flag GO is not spawned
+// or cannot be resolved. This avoids falling back to the EotS start rock / retreat positions.
+static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f};
+
 static bool RTG_EotsGetNodePosition(uint32 nodeId, Position& out)
 {
     auto itr = EY_NodePositions.find(nodeId);
@@ -1297,6 +1306,134 @@ static bool RTG_EotsGetNodePosition(uint32 nodeId, Position& out)
         return false;
 
     out = itr->second;
+    return true;
+}
+
+static bool RTG_EotsGetCenterFlagPosition(Battleground* bg, Position& out, bool* flagSpawned = nullptr)
+{
+    bool spawned = false;
+    if (bg)
+    {
+        if (GameObject* flag = bg->GetBGObject(BG_EY_OBJECT_FLAG_NETHERSTORM))
+        {
+            if (flag->isSpawned())
+            {
+                out = flag->GetPosition();
+                spawned = true;
+            }
+        }
+    }
+
+    if (!spawned)
+        out = RTG_EOTS_CENTER_ANCHOR;
+
+    if (flagSpawned)
+        *flagSpawned = spawned;
+
+    return true;
+}
+
+static bool RTG_EotsIsStartRockPath(BattleBotPath const* path)
+{
+    return path == &vPath_EY_Horde_Spawn_to_Crossroad1Horde ||
+           path == &vPath_EY_Alliance_Spawn_to_Crossroad1Alliance;
+}
+
+static bool RTG_EotsIsNearStartRock(Player* bot)
+{
+    if (!bot)
+        return false;
+
+    Position const& start = bot->GetTeamId() == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
+    return bot->GetDistance(start) < 95.0f;
+}
+
+static void RTG_EotsDebugRaw(Player* bot, Battleground* bg, char const* phase, char const* reason, uint32 nodeId = 0, uint32 triggerId = 0)
+{
+    if (!sPlayerbotAIConfig.rtgPlayerbotsBgEotsDebug || !bot || !bg)
+        return;
+
+    static std::unordered_map<uint64, uint32> lastLogMs;
+    uint64 const key = (uint64(bot->GetGUID().GetCounter()) << 16) ^ uint64(nodeId) ^ (uint64(triggerId) << 32);
+    uint32 const now = getMSTime();
+    uint32 const throttleMs = std::max<uint32>(1000, sPlayerbotAIConfig.rtgPlayerbotsBgEotsDebugThrottleMs);
+
+    auto itr = lastLogMs.find(key);
+    if (itr != lastLogMs.end() && getMSTimeDiff(itr->second, now) < throttleMs)
+        return;
+
+    lastLogMs[key] = now;
+
+    LOG_INFO("playerbots",
+             "RTG EOTS {} bot={} guid={} bgInstance={} team={} hasFlag={} reason={} node={} trigger={} pos={:.2f},{:.2f},{:.2f}",
+             phase ? phase : "?", bot->GetName(), bot->GetGUID().GetCounter(), bg->GetInstanceID(),
+             uint32(bot->GetTeamId()), bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL), reason ? reason : "?",
+             nodeId, triggerId, bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
+}
+
+static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, BattlegroundEY* eyeBg, Battleground* bg)
+{
+    if (!bot || !botAI || !eyeBg || !bg || !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+        return false;
+
+    // Be strict: only the actual Netherstorm flag carrier should fire the turn-in area trigger.
+    ObjectGuid const picker = eyeBg->GetFlagPickerGUID();
+    if (!picker.IsEmpty() && picker != bot->GetGUID())
+    {
+        RTG_EotsDebugRaw(bot, bg, "turnin_skip", "aura_but_not_picker");
+        return false;
+    }
+
+    TeamId const team = bot->GetTeamId();
+    uint32 bestNodeId = 0;
+    uint32 bestTriggerId = 0;
+    float bestDist = FLT_MAX;
+
+    for (auto const& objective : EY_AttackObjectives)
+    {
+        uint32 const nodeId = std::get<0>(objective);
+        if (eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId != team)
+            continue;
+
+        Position nodePos;
+        if (!RTG_EotsGetNodePosition(nodeId, nodePos))
+            continue;
+
+        float const dist = bot->GetDistance(nodePos);
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            bestNodeId = nodeId;
+            bestTriggerId = std::get<2>(objective);
+        }
+    }
+
+    // EotS turn-in is an area trigger at an owned tower. Bots do not reliably fire client area
+    // triggers from movement alone, so do it only when the carrier is already basically at the tower.
+    if (!bestNodeId || !bestTriggerId)
+        return false;
+
+    if (bestDist > 22.0f)
+    {
+        if (bestDist < 80.0f)
+            RTG_EotsDebugRaw(bot, bg, "turnin_wait", "owned_tower_not_close", bestNodeId, bestTriggerId);
+        return false;
+    }
+
+    static std::unordered_map<uint32, uint32> lastTurnInMsByBot;
+    uint32 const botGuid = bot->GetGUID().GetCounter();
+    uint32 const now = getMSTime();
+    auto itr = lastTurnInMsByBot.find(botGuid);
+    if (itr != lastTurnInMsByBot.end() && getMSTimeDiff(itr->second, now) < 1500)
+        return true;
+
+    lastTurnInMsByBot[botGuid] = now;
+
+    RTG_EotsDebugRaw(bot, bg, "turnin", "owned_tower_area_trigger", bestNodeId, bestTriggerId);
+    WorldPacket data(CMSG_AREATRIGGER);
+    data << uint32(bestTriggerId);
+    bot->GetSession()->HandleAreaTriggerOpcode(data);
+    botAI->SetNextCheckDelay(1000);
     return true;
 }
 
@@ -2234,7 +2371,7 @@ bool BGTactics::selectObjective(bool reset)
 
             uint8 defendersProhab = 3;  // Default balanced
 
-            switch (strategy)
+            switch (uint8(strategy))
             {
                 case 0:
                 case 1:
@@ -2627,81 +2764,102 @@ bool BGTactics::selectObjective(bool reset)
                 return outNodeId != 0;
             };
 
-            // RTG EotS v3: intentionally strategy-only. No movement flag edits, no ground clamps,
-            // no forced path generation, and no manual area-trigger firing. Captures/turn-ins are
-            // left to the normal battleground/object interaction path when the bot reaches the point.
+            bool centerFlagSpawned = false;
+            Position centerPos;
+            RTG_EotsGetCenterFlagPosition(bg, centerPos, &centerFlagSpawned);
+
+            auto FindNearestOwnedNode = [&](uint32& outNodeId, Position& outPos) -> bool
+            {
+                return FindNearestNode(true, false, outNodeId, outPos);
+            };
+
+            auto FindNearestAttackableNode = [&](uint32& outNodeId, Position& outPos) -> bool
+            {
+                return FindNearestNode(false, true, outNodeId, outPos);
+            };
+
+            // RTG EotS v5: strategy-only. No movement flag edits, no ground clamps, and no forced path generation.
+            // Keep carriers away from the start rock: if we own no tower yet, wait at/pressure a real tower instead.
             if (sPlayerbotAIConfig.rtgPlayerbotsBgEotsObjectiveAI)
             {
-                // 1) Carrier: go to the nearest owned tower. Do not fire area triggers here.
+                // 1) Carrier: take the flag to an owned tower. If no tower is owned yet, stay on a real tower/center
+                // objective instead of retreating to EotS spawn. Actual capping is handled by a guarded area-trigger
+                // helper when the carrier reaches an owned tower.
                 if (bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
                 {
                     uint32 nodeId = 0;
                     Position nodePos;
-                    if (FindNearestNode(true, false, nodeId, nodePos))
-                        SetObjective(nodePos, "carrier_to_owned_tower");
+                    if (FindNearestOwnedNode(nodeId, nodePos))
+                        SetObjective(nodePos, "carrier_owned_tower");
+                    else if (FindNearestAttackableNode(nodeId, nodePos))
+                        SetObjective(nodePos, "carrier_wait_attackable_tower");
                     else
-                    {
-                        Position const fallback = (team == TEAM_ALLIANCE) ? EY_FLAG_RETURN_POS_RETREAT_ALLIANCE
-                                                                           : EY_FLAG_RETURN_POS_RETREAT_HORDE;
-                        SetObjective(fallback, "carrier_no_owned_tower_fallback");
-                    }
+                        SetObjective(centerPos, "carrier_hold_center");
                 }
 
-                // 2) Non-carriers: punish enemy flag carrier first.
+                // 2) Non-carriers: collapse on enemy flag carrier.
                 if (!foundObjective)
                     SetUnitObjective(AI_VALUE(Unit*, "enemy flag carrier"), "enemy_flag_carrier");
 
-                // 3) Support own flag carrier if close enough to matter, but do not drag the whole team away.
+                // 3) If our team has the flag, support it broadly enough that bots do not idle while the flag is out.
                 if (!foundObjective)
                 {
                     Unit* friendlyFC = AI_VALUE(Unit*, "team flag carrier");
-                    if (RTG_EotsUnitValidForObjective(bot, friendlyFC) && bot->GetDistance(friendlyFC) < 180.0f && role <= 3)
-                        SetUnitObjective(friendlyFC, "support_friendly_carrier");
-                }
-
-                // 4) If we own at least one tower and the center flag is spawned, send most bots center.
-                if (!foundObjective && ownedCount > 0)
-                {
-                    bool const wantsFlag = strategy == EY_STRATEGY_FLAG_FOCUS || role <= 6 ||
-                                           urand(0, 99) < sPlayerbotAIConfig.rtgPlayerbotsBgEotsCenterFlagChance;
-                    if (wantsFlag)
+                    if (RTG_EotsUnitValidForObjective(bot, friendlyFC))
                     {
-                        if (GameObject* flag = bg->GetBGObject(BG_EY_OBJECT_FLAG_NETHERSTORM); flag && flag->isSpawned())
-                        {
-                            pos.Set(flag->GetPositionX(), flag->GetPositionY(), flag->GetPositionZ(), flag->GetMapId());
-                            foundObjective = true;
-                            reason = "center_flag";
-                        }
+                        bool const closeSupport = bot->GetDistance(friendlyFC) < 220.0f;
+                        bool const assignedSupport = role <= 7;
+                        bool const noCenterFlagToTake = !centerFlagSpawned;
+                        if (closeSupport || assignedSupport || noCenterFlagToTake)
+                            SetUnitObjective(friendlyFC, "support_friendly_carrier");
                     }
                 }
 
-                // 5) No tower owned yet, or flag unavailable: take the nearest unowned/neutral tower.
+                // 4) If we own at least one tower and the center flag is actually up, send most bots center.
+                if (!foundObjective && ownedCount > 0 && centerFlagSpawned)
+                {
+                    bool const wantsFlag = strategy == EY_STRATEGY_FLAG_FOCUS || role <= 7 ||
+                                           urand(0, 99) < sPlayerbotAIConfig.rtgPlayerbotsBgEotsCenterFlagChance;
+                    if (wantsFlag)
+                        SetObjective(centerPos, "center_flag");
+                }
+
+                // 5) No flag objective, no friendly carrier support, or no tower yet: take/pressure a real tower.
                 if (!foundObjective)
                 {
                     uint32 nodeId = 0;
                     Position nodePos;
-                    if (FindNearestNode(false, true, nodeId, nodePos))
-                        SetObjective(nodePos, "nearest_unowned_tower");
+                    if (FindNearestAttackableNode(nodeId, nodePos))
+                        SetObjective(nodePos, "nearest_attackable_tower");
                 }
 
-                // 6) If everything is owned or the map state is odd, hold center instead of running back to start.
+                // 6) If everything is owned and no flag is up, defend nearest owned tower.
                 if (!foundObjective)
                 {
-                    if (GameObject* flag = bg->GetBGObject(BG_EY_OBJECT_FLAG_NETHERSTORM); flag && flag->isSpawned())
-                    {
-                        pos.Set(flag->GetPositionX(), flag->GetPositionY(), flag->GetPositionZ(), flag->GetMapId());
-                        foundObjective = true;
-                        reason = "fallback_center_flag";
-                    }
+                    uint32 nodeId = 0;
+                    Position nodePos;
+                    if (FindNearestOwnedNode(nodeId, nodePos))
+                        SetObjective(nodePos, "nearest_owned_tower_defense");
                 }
+
+                // 7) Last resort: center anchor. Never choose the EotS start/retreat positions here.
+                if (!foundObjective)
+                    SetObjective(centerPos, "fallback_hold_center");
             }
             else
             {
-                // Config-off fallback: keep it tiny and safe. This is intentionally not the old experimental logic.
+                // Config-off fallback: do not use the old experimental logic and do not send carriers to the start rock.
+                // This still provides a minimal valid objective so bots do not stand AFK if the action is active.
                 uint32 nodeId = 0;
                 Position nodePos;
-                if (FindNearestNode(false, true, nodeId, nodePos))
-                    SetObjective(nodePos, "disabled_nearest_unowned_tower");
+                if (bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) && FindNearestOwnedNode(nodeId, nodePos))
+                    SetObjective(nodePos, "disabled_carrier_owned_tower");
+                else if (FindNearestAttackableNode(nodeId, nodePos))
+                    SetObjective(nodePos, "disabled_nearest_attackable_tower");
+                else if (FindNearestOwnedNode(nodeId, nodePos))
+                    SetObjective(nodePos, "disabled_nearest_owned_tower");
+                else
+                    SetObjective(centerPos, "disabled_hold_center");
             }
 
             if (foundObjective)
@@ -3177,6 +3335,22 @@ bool BGTactics::selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths)
 
         bool reverse = startPointDistToDestination < endPointDistToDestination;
 
+        // RTG EotS: spawn-rock paths are only for getting bots out of the start/rez area.
+        // Never select them as a route back toward the start rock during live play.
+        if (bgType == BATTLEGROUND_EY && RTG_EotsIsStartRockPath(path))
+        {
+            if (reverse)
+            {
+                RTG_EotsDebugRaw(bot, bg, "path_skip", "blocked_reverse_start_rock");
+                continue;
+            }
+
+            // If the bot is already in the field, do not send it onto a spawn-exit path.
+            // The only valid use is exiting after join/rez from the start rock area.
+            if (!RTG_EotsIsNearStartRock(bot))
+                continue;
+        }
+
         // dont travel reverse if it's a reverse paths
         if (reverse && std::find(vPaths_NoReverseAllowed.begin(), vPaths_NoReverseAllowed.end(), path) !=
                            vPaths_NoReverseAllowed.end())
@@ -3342,14 +3516,23 @@ bool BGTactics::startNewPathBegin(std::vector<BattleBotPath*> const& vPaths)
     for (auto const& pPath : vPaths)
     {
         // TODO remove sqrt
+        bool const isEyStartPath = bgType == BATTLEGROUND_EY && RTG_EotsIsStartRockPath(pPath);
+
         BattleBotWaypoint* pStart = &((*pPath)[0]);
         if (sqrt(bot->GetDistance(pStart->x, pStart->y, pStart->z)) < INTERACTION_DISTANCE)
-            availablePaths.emplace_back(AvailablePath(pPath, false));
+        {
+            if (!isEyStartPath || RTG_EotsIsNearStartRock(bot))
+                availablePaths.emplace_back(AvailablePath(pPath, false));
+        }
 
         // Some paths are not allowed backwards.
         if (std::find(vPaths_NoReverseAllowed.begin(), vPaths_NoReverseAllowed.end(), pPath) !=
             vPaths_NoReverseAllowed.end())
+        {
+            if (isEyStartPath)
+                RTG_EotsDebugRaw(bot, bg, "path_skip", "blocked_start_rock_reverse_endpoint");
             continue;
+        }
 
         // TODO remove sqrt
         BattleBotWaypoint* pEnd = &((*pPath)[(*pPath).size() - 1]);
@@ -3397,6 +3580,9 @@ bool BGTactics::startNewPathFree(std::vector<BattleBotPath*> const& vPaths)
 
     for (auto const& pPath : vPaths)
     {
+        if (bgType == BATTLEGROUND_EY && RTG_EotsIsStartRockPath(pPath) && !RTG_EotsIsNearStartRock(bot))
+            continue;
+
         for (uint32 i = 0; i < pPath->size(); i++)
         {
             BattleBotWaypoint& waypoint = ((*pPath)[i]);
@@ -3460,6 +3646,20 @@ bool BGTactics::atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<ui
         eyeBg = static_cast<BattlegroundEY*>(bg);
         if (eyeBg)
             eyCenterFlag = eyeBg->GetBGObject(BG_EY_OBJECT_FLAG_NETHERSTORM);
+    }
+
+    // RTG EotS: carriers should never try to interact with the center/dropped flag while already carrying.
+    // First, try a guarded area-trigger turn-in if the carrier is already at an owned tower; otherwise
+    // return to normal objective movement and avoid flag/object stealing loops.
+    if (bgType == BATTLEGROUND_EY && eyeBg && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+    {
+        if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
+        {
+            resetObjective();
+            return true;
+        }
+
+        return false;
     }
 
     // Set up appropriate search ranges and object lists based on BG type
@@ -3821,6 +4021,7 @@ bool BGTactics::atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<ui
                         Spell* spell = new Spell(bot, spellInfo, TRIGGERED_NONE);
                         spell->m_targets.SetGOTarget(go);
 
+                        RTG_EotsDebugRaw(bot, bg, "center", "start_capture_channel");
                         bot->StopMoving();
                         spell->prepare(&spell->m_targets);
 
@@ -3829,7 +4030,8 @@ bool BGTactics::atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<ui
                         return true;
                     }
 
-                    // Pick up dropped flag
+                    // Pick up dropped flag. Carriers are blocked before this point so they cannot steal/reuse flags.
+                    RTG_EotsDebugRaw(bot, bg, "flag_use", "pickup_dropped_flag");
                     WorldPacket data(CMSG_GAMEOBJ_USE);
                     data << go->GetGUID();
                     bot->GetSession()->HandleGameObjectUseOpcode(data);
