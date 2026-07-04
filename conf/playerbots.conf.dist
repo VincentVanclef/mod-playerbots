@@ -1266,6 +1266,15 @@ AiPlayerbot.AutoTeleportForLevel = 1
 # BATTLEGROUNDS & ARENAS & PVP
 #
 
+# RTG Eye of the Storm objective assist.
+# Narrow EotS-only strategy layer: no movement/flying edits, no area-trigger firing,
+# no ground/path scans. Set Debug=1 temporarily if EotS hangs/crashes so the last
+# selected objective appears in the playerbots log.
+RTG.Playerbots.BG.EOTS.EnableObjectiveAI = 1
+RTG.Playerbots.BG.EOTS.CenterFlagChance = 75
+RTG.Playerbots.BG.EOTS.Debug = 0
+RTG.Playerbots.BG.EOTS.DebugThrottleMs = 5000
+
 # Enable battlegrounds/arenas for randombots
 AiPlayerbot.RandomBotJoinBG = 1
 
