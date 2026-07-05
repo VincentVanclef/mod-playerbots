@@ -1299,6 +1299,27 @@ static bool RTG_EotsUnitValidForObjective(Player* bot, Unit* unit)
 // or cannot be resolved. This avoids falling back to the EotS start rock / retreat positions.
 static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f};
 
+// RTG EotS start/rez rocks sit far above the playable field. Generic MovePoint/MoveNear
+// calls from this area can spline bots through the air or leave them idling on the rock.
+// Keep rock exit explicit and sequential until the bot reaches the walkable field.
+static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 145.0f;
+static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1195.0f;
+
+static bool RTG_EotsNeedsStartExit(Player* bot)
+{
+    if (!bot)
+        return false;
+
+    Position const& start = bot->GetTeamId() == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
+    return bot->GetPositionZ() > RTG_EOTS_START_EXIT_MIN_Z &&
+           bot->GetDistance(start) < RTG_EOTS_START_EXIT_MAX_DIST;
+}
+
+static bool RTG_EotsShouldJumpStep(Position const& from, Position const& to)
+{
+    return from.GetPositionZ() - to.GetPositionZ() > 7.5f;
+}
+
 static bool RTG_EotsGetNodePosition(uint32 nodeId, Position& out)
 {
     auto itr = EY_NodePositions.find(nodeId);
@@ -1308,6 +1329,42 @@ static bool RTG_EotsGetNodePosition(uint32 nodeId, Position& out)
     out = itr->second;
     return true;
 }
+
+static bool RTG_EotsIsHomeNode(TeamId team, uint32 nodeId)
+{
+    if (team == TEAM_HORDE)
+        return nodeId == POINT_FEL_REAVER || nodeId == POINT_BLOOD_ELF;
+
+    return nodeId == POINT_MAGE_TOWER || nodeId == POINT_DRAENEI_RUINS;
+}
+
+static bool RTG_EotsIsEnemySideNode(TeamId team, uint32 nodeId)
+{
+    return !RTG_EotsIsHomeNode(team, nodeId);
+}
+
+static uint32 RTG_EotsAssignedHomeNode(TeamId team, uint32 role, uint32 botGuid)
+{
+    // Split the opening push. Without this, most bots pick the same nearest tower
+    // and the match starts with only one side base being pressured.
+    uint32 const seed = role ? role : botGuid;
+    if (team == TEAM_HORDE)
+        return (seed % 2) ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
+
+    return (seed % 2) ? POINT_DRAENEI_RUINS : POINT_MAGE_TOWER;
+}
+
+static uint32 RTG_EotsAssignedEnemySideNode(TeamId team, uint32 role, uint32 botGuid)
+{
+    // After home bases are handled, split pressure across the enemy-side towers
+    // instead of marching clockwise/counter-clockwise as one clump.
+    uint32 const seed = role ? role : botGuid;
+    if (team == TEAM_HORDE)
+        return (seed % 2) ? POINT_DRAENEI_RUINS : POINT_MAGE_TOWER;
+
+    return (seed % 2) ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
+}
+
 
 static bool RTG_EotsGetCenterFlagPosition(Battleground* bg, Position& out, bool* flagSpawned = nullptr)
 {
@@ -1341,11 +1398,7 @@ static bool RTG_EotsIsStartRockPath(BattleBotPath const* path)
 
 static bool RTG_EotsIsNearStartRock(Player* bot)
 {
-    if (!bot)
-        return false;
-
-    Position const& start = bot->GetTeamId() == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
-    return bot->GetDistance(start) < 95.0f;
+    return RTG_EotsNeedsStartExit(bot);
 }
 
 static void RTG_EotsDebugRaw(Player* bot, Battleground* bg, char const* phase, char const* reason, uint32 nodeId = 0, uint32 triggerId = 0)
@@ -1413,9 +1466,9 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     if (!bestNodeId || !bestTriggerId)
         return false;
 
-    if (bestDist > 22.0f)
+    if (bestDist > 40.0f)
     {
-        if (bestDist < 80.0f)
+        if (bestDist < 100.0f)
             RTG_EotsDebugRaw(bot, bg, "turnin_wait", "owned_tower_not_close", bestNodeId, bestTriggerId);
         return false;
     }
@@ -1708,44 +1761,88 @@ bool BGTactics::eyJumpDown()
     Battleground* bg = bot->GetBattleground();
     if (!bg)
         return false;
-    Position const hordeJumpPositions[] = {
-        EY_WAITING_POS_HORDE,
-        {1838.007f, 1539.856f, 1253.383f},
-        {1846.264f, 1535.062f, 1240.796f},
-        {1849.813f, 1527.303f, 1237.262f},
-        {1849.041f, 1518.884f, 1223.624f},
-    };
-    Position const allianceJumpPositions[] = {
-        EY_WAITING_POS_ALLIANCE,
-        {2492.955f, 1597.769f, 1254.828f},
-        {2484.601f, 1598.209f, 1244.344f},
-        {2478.424f, 1609.539f, 1238.651f},
-        {2475.926f, 1619.658f, 1218.706f},
-    };
-    Position const* positons = bot->GetTeamId() == TEAM_HORDE ? hordeJumpPositions : allianceJumpPositions;
+
+    struct EotsExitStep
     {
-        if (bot->GetDistance(positons[0]) < 16.0f)
+        Position pos;
+        bool preferJump;
+        float reach;
+    };
+
+    // Include the lower crossroad endpoint. The old helper stopped on the side shelf
+    // (~1218-1223 Z), after which normal objective movement could send bots across
+    // the void. These steps carry them all the way down to the playable field.
+    static EotsExitStep const hordeExit[] = {
+        {EY_WAITING_POS_HORDE, false, 22.0f},
+        {{1838.007f, 1539.856f, 1253.383f, 0.0f}, false, 11.0f},
+        {{1846.264f, 1535.062f, 1240.796f, 0.0f}, true, 11.0f},
+        {{1849.813f, 1527.303f, 1237.262f, 0.0f}, false, 12.0f},
+        {{1849.041f, 1518.884f, 1223.624f, 0.0f}, true, 14.0f},
+        {{1883.154f, 1532.143f, 1202.143f, 0.0f}, true, 18.0f},
+        {{1941.452f, 1549.086f, 1176.700f, 0.0f}, false, 0.0f},
+    };
+
+    static EotsExitStep const allianceExit[] = {
+        {EY_WAITING_POS_ALLIANCE, false, 22.0f},
+        {{2492.955f, 1597.769f, 1254.828f, 0.0f}, false, 11.0f},
+        {{2484.601f, 1598.209f, 1244.344f, 0.0f}, true, 11.0f},
+        {{2478.424f, 1609.539f, 1238.651f, 0.0f}, false, 12.0f},
+        {{2475.926f, 1619.658f, 1218.706f, 0.0f}, true, 14.0f},
+        {{2449.150f, 1601.792f, 1201.552f, 0.0f}, true, 18.0f},
+        {{2395.737f, 1588.287f, 1176.570f, 0.0f}, false, 0.0f},
+    };
+
+    EotsExitStep const* steps = bot->GetTeamId() == TEAM_HORDE ? hordeExit : allianceExit;
+    uint32 const stepCount = bot->GetTeamId() == TEAM_HORDE
+                               ? uint32(sizeof(hordeExit) / sizeof(hordeExit[0]))
+                               : uint32(sizeof(allianceExit) / sizeof(allianceExit[0]));
+
+    bool const mustExit = RTG_EotsNeedsStartExit(bot);
+    if (!mustExit)
+        return false;
+
+    uint32 closest = 0;
+    float closestDist = FLT_MAX;
+    for (uint32 i = 0; i < stepCount; ++i)
+    {
+        float const dist = bot->GetDistance(steps[i].pos);
+        if (dist < closestDist)
         {
-            MoveTo(bg->GetMapId(), positons[1].GetPositionX(), positons[1].GetPositionY(), positons[1].GetPositionZ());
-            return true;
-        }
-        if (bot->GetDistance(positons[1]) < 4.0f)
-        {
-            JumpTo(bg->GetMapId(), positons[2].GetPositionX(), positons[2].GetPositionY(), positons[2].GetPositionZ());
-            return true;
-        }
-        if (bot->GetDistance(positons[2]) < 4.0f)
-        {
-            MoveTo(bg->GetMapId(), positons[3].GetPositionX(), positons[3].GetPositionY(), positons[3].GetPositionZ());
-            return true;
-        }
-        if (bot->GetDistance(positons[3]) < 4.0f)
-        {
-            JumpTo(bg->GetMapId(), positons[4].GetPositionX(), positons[4].GetPositionY(), positons[4].GetPositionZ());
-            return true;
+            closest = i;
+            closestDist = dist;
         }
     }
-    return false;
+
+    // If movement landed closer to the next marker than the previous one, advance.
+    while (closest + 1 < stepCount && bot->GetDistance(steps[closest + 1].pos) + 1.5f < bot->GetDistance(steps[closest].pos))
+        ++closest;
+
+    if (closest + 1 >= stepCount)
+        return false;
+
+    EotsExitStep const& current = steps[closest];
+    EotsExitStep const& next = steps[closest + 1];
+
+    // If we are not close to any marker but still above/near the rock, recover by moving
+    // toward the first lower field marker instead of allowing objective movement to spline.
+    if (current.reach > 0.0f && closestDist > std::max(38.0f, current.reach * 2.5f))
+    {
+        RTG_EotsDebugRaw(bot, bg, "rock_exit", "recover_to_exit_lane");
+        MoveTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
+        return true;
+    }
+
+    bool const shouldJump = current.preferJump || RTG_EotsShouldJumpStep(current.pos, next.pos);
+    RTG_EotsDebugRaw(bot, bg, "rock_exit", shouldJump ? "jump_step" : "move_step");
+
+    if (shouldJump)
+        JumpTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
+    else
+        MoveTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
+
+    // Return true even if the movement call was suppressed as a duplicate. While the bot
+    // is still on the rock/shelf, this helper owns movement and blocks normal objective moves.
+    return true;
 }
 
 //
@@ -1848,6 +1945,29 @@ bool BGTactics::Execute(Event /*event*/)
     {
         if (bg->GetStatus() == STATUS_WAIT_JOIN)
             return false;
+
+        // EotS start rocks are not normal pathable terrain. Force bots down the
+        // explicit exit lane before any generic objective movement/path search.
+        if (bgType == BATTLEGROUND_EY && RTG_EotsNeedsStartExit(bot))
+        {
+            eyJumpDown();
+            return true;
+        }
+
+        // Carriers sometimes pass through an owned tower while still moving, and the normal
+        // flag interaction action is skipped while movement is active. Try the guarded EotS
+        // area-trigger here too so bots stop holding the Netherstorm flag forever.
+        if (bgType == BATTLEGROUND_EY && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+        {
+            if (BattlegroundEY* eyeBg = static_cast<BattlegroundEY*>(bg))
+            {
+                if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
+                {
+                    resetObjective();
+                    return true;
+                }
+            }
+        }
 
         if (bot->isMoving())
             return false;
@@ -2778,71 +2898,139 @@ bool BGTactics::selectObjective(bool reset)
                 return FindNearestNode(false, true, outNodeId, outPos);
             };
 
-            // RTG EotS v5: strategy-only. No movement flag edits, no ground clamps, and no forced path generation.
-            // Keep carriers away from the start rock: if we own no tower yet, wait at/pressure a real tower instead.
+            auto SetNodeObjective = [&](uint32 nodeId, char const* why) -> bool
+            {
+                Position nodePos;
+                if (!nodeId || !RTG_EotsGetNodePosition(nodeId, nodePos))
+                    return false;
+
+                return SetObjective(nodePos, why);
+            };
+
+            auto SetAssignedHomeObjective = [&](char const* why) -> bool
+            {
+                uint32 const assigned = RTG_EotsAssignedHomeNode(team, role, bot->GetGUID().GetCounter());
+                if (IsNotOwned(assigned))
+                    return SetNodeObjective(assigned, why);
+
+                for (auto const& objective : EY_AttackObjectives)
+                {
+                    uint32 const nodeId = std::get<0>(objective);
+                    if (RTG_EotsIsHomeNode(team, nodeId) && IsNotOwned(nodeId))
+                        return SetNodeObjective(nodeId, why);
+                }
+
+                return false;
+            };
+
+            auto SetAssignedEnemySideObjective = [&](char const* why) -> bool
+            {
+                uint32 const assigned = RTG_EotsAssignedEnemySideNode(team, role, bot->GetGUID().GetCounter());
+                if (IsNotOwned(assigned))
+                    return SetNodeObjective(assigned, why);
+
+                for (auto const& objective : EY_AttackObjectives)
+                {
+                    uint32 const nodeId = std::get<0>(objective);
+                    if (RTG_EotsIsEnemySideNode(team, nodeId) && IsNotOwned(nodeId))
+                        return SetNodeObjective(nodeId, why);
+                }
+
+                return false;
+            };
+
+            auto SetAssignedOwnedDefenseObjective = [&](char const* why) -> bool
+            {
+                uint32 const home = RTG_EotsAssignedHomeNode(team, role, bot->GetGUID().GetCounter());
+                if (IsOwned(home))
+                    return SetNodeObjective(home, why);
+
+                uint32 const enemySide = RTG_EotsAssignedEnemySideNode(team, role, bot->GetGUID().GetCounter());
+                if (IsOwned(enemySide))
+                    return SetNodeObjective(enemySide, why);
+
+                uint32 nodeId = 0;
+                Position nodePos;
+                if (FindNearestOwnedNode(nodeId, nodePos))
+                    return SetObjective(nodePos, why);
+
+                return false;
+            };
+
+            uint32 homeOwnedCount = 0;
+            for (auto const& objective : EY_AttackObjectives)
+            {
+                uint32 const nodeId = std::get<0>(objective);
+                if (RTG_EotsIsHomeNode(team, nodeId) && IsOwned(nodeId))
+                    ++homeOwnedCount;
+            }
+
+            // RTG EotS v6: strategy-only. No movement flag edits, no ground clamps, and no forced path generation.
+            // Goals:
+            // - open by splitting each team across both home-side towers;
+            // - do not rush center flag until at least two towers are owned;
+            // - avoid endless clockwise/counter-clockwise base hopping by using role-stable assignments;
+            // - make carriers turn in at owned towers instead of roaming with the flag.
             if (sPlayerbotAIConfig.rtgPlayerbotsBgEotsObjectiveAI)
             {
-                // 1) Carrier: take the flag to an owned tower. If no tower is owned yet, stay on a real tower/center
-                // objective instead of retreating to EotS spawn. Actual capping is handled by a guarded area-trigger
-                // helper when the carrier reaches an owned tower.
+                // 1) Carrier: go directly to an owned tower. The guarded area-trigger helper above handles capping.
                 if (bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
                 {
                     uint32 nodeId = 0;
                     Position nodePos;
                     if (FindNearestOwnedNode(nodeId, nodePos))
                         SetObjective(nodePos, "carrier_owned_tower");
+                    else if (SetAssignedHomeObjective("carrier_help_home_tower"))
+                    {
+                        // wait/pressure a real home tower until one flips, never retreat to rock/spawn
+                    }
                     else if (FindNearestAttackableNode(nodeId, nodePos))
                         SetObjective(nodePos, "carrier_wait_attackable_tower");
                     else
                         SetObjective(centerPos, "carrier_hold_center");
                 }
 
-                // 2) Non-carriers: collapse on enemy flag carrier.
+                // 2) Opening: split bots across both home-side towers until both are controlled.
+                // This fixes the one-base start where the whole team rushes MT/one side and stalls.
+                if (!foundObjective && homeOwnedCount < 2)
+                    SetAssignedHomeObjective("opening_split_home_tower");
+
+                // 3) Non-carriers: collapse on enemy flag carrier.
                 if (!foundObjective)
                     SetUnitObjective(AI_VALUE(Unit*, "enemy flag carrier"), "enemy_flag_carrier");
 
-                // 3) If our team has the flag, support it broadly enough that bots do not idle while the flag is out.
+                // 4) If our team has the flag, assign only a small escort group. Do not let the whole team abandon bases.
                 if (!foundObjective)
                 {
                     Unit* friendlyFC = AI_VALUE(Unit*, "team flag carrier");
                     if (RTG_EotsUnitValidForObjective(bot, friendlyFC))
                     {
-                        bool const closeSupport = bot->GetDistance(friendlyFC) < 220.0f;
-                        bool const assignedSupport = role <= 7;
-                        bool const noCenterFlagToTake = !centerFlagSpawned;
-                        if (closeSupport || assignedSupport || noCenterFlagToTake)
+                        bool const closeSupport = bot->GetDistance(friendlyFC) < 140.0f;
+                        bool const assignedSupport = (role % 5) == 0;
+                        if (closeSupport || assignedSupport)
                             SetUnitObjective(friendlyFC, "support_friendly_carrier");
                     }
                 }
 
-                // 4) If we own at least one tower and the center flag is actually up, send most bots center.
-                if (!foundObjective && ownedCount > 0 && centerFlagSpawned)
+                // 5) Once both home bases are owned, let a controlled group work center flag.
+                // Sending flag teams before two towers exist creates flag holders with nowhere reliable to cap.
+                if (!foundObjective && ownedCount >= 2 && centerFlagSpawned)
                 {
-                    bool const wantsFlag = strategy == EY_STRATEGY_FLAG_FOCUS || role <= 7 ||
+                    bool const wantsFlag = strategy == EY_STRATEGY_FLAG_FOCUS || (role % 4) == 0 ||
                                            urand(0, 99) < sPlayerbotAIConfig.rtgPlayerbotsBgEotsCenterFlagChance;
                     if (wantsFlag)
-                        SetObjective(centerPos, "center_flag");
+                        SetObjective(centerPos, "center_flag_after_two_towers");
                 }
 
-                // 5) No flag objective, no friendly carrier support, or no tower yet: take/pressure a real tower.
+                // 6) Pressure enemy-side towers using stable role assignments, not nearest clockwise hopping.
                 if (!foundObjective)
-                {
-                    uint32 nodeId = 0;
-                    Position nodePos;
-                    if (FindNearestAttackableNode(nodeId, nodePos))
-                        SetObjective(nodePos, "nearest_attackable_tower");
-                }
+                    SetAssignedEnemySideObjective("assigned_enemy_side_tower");
 
-                // 6) If everything is owned and no flag is up, defend nearest owned tower.
+                // 7) If no enemy-side tower is attackable, defend a stable owned tower instead of rotating endlessly.
                 if (!foundObjective)
-                {
-                    uint32 nodeId = 0;
-                    Position nodePos;
-                    if (FindNearestOwnedNode(nodeId, nodePos))
-                        SetObjective(nodePos, "nearest_owned_tower_defense");
-                }
+                    SetAssignedOwnedDefenseObjective("assigned_owned_tower_defense");
 
-                // 7) Last resort: center anchor. Never choose the EotS start/retreat positions here.
+                // 8) Last resort: center anchor. Never choose the EotS start/retreat positions here.
                 if (!foundObjective)
                     SetObjective(centerPos, "fallback_hold_center");
             }
@@ -3227,6 +3415,12 @@ bool BGTactics::moveToObjective(bool ignoreDist)
                 return true;
         }
 
+        if (bgType == BATTLEGROUND_EY && RTG_EotsNeedsStartExit(bot))
+        {
+            eyJumpDown();
+            return true;
+        }
+
         if (!ignoreDist && ServerFacade::instance().IsDistanceGreaterThan(ServerFacade::instance().GetDistance2d(bot, pos.x, pos.y), 100.0f))
         {
             // std::ostringstream out;
@@ -3446,6 +3640,12 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
     if (!currentPath)
         return false;
 
+    Battleground* bg = bot->GetBattleground();
+    BattlegroundTypeId bgType = bg ? bg->GetBgTypeID() : BATTLEGROUND_TYPE_NONE;
+    if (bgType == BATTLEGROUND_RB && bg)
+        bgType = bg->GetBgTypeID(true);
+
+    bool const isEyStartPath = bgType == BATTLEGROUND_EY && RTG_EotsIsStartRockPath(currentPath);
     uint32 const lastPointInPath = reverse ? 0 : ((*currentPath).size() - 1);
 
     // NOTE: can't use IsInCombat() when in vehicle as player is stuck in combat forever while in vehicle (ac bug?)
@@ -3467,10 +3667,14 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
     else
         currPoint++;
 
-    uint32 nPoint = reverse ? std::max((int)(currPoint - urand(1, 5)), 0)
-                            : std::min((uint32)(currPoint + urand(1, 5)), lastPointInPath);
-    if (reverse && nPoint < 0)
-        nPoint = 0;
+    uint32 nPoint = currPoint;
+    if (!isEyStartPath)
+    {
+        nPoint = reverse ? std::max((int)(currPoint - urand(1, 5)), 0)
+                         : std::min((uint32)(currPoint + urand(1, 5)), lastPointInPath);
+        if (reverse && nPoint < 0)
+            nPoint = 0;
+    }
 
     BattleBotWaypoint& nextPoint = currentPath->at(nPoint);
 
@@ -3479,6 +3683,17 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
     // reverse ? out << currPoint << " <<< -> " << nPoint : out << currPoint << ">>> ->" << nPoint;
     // out << ", " << nextPoint.x << ", " << nextPoint.y << " Path Size: " << currentPath->size() << ", Dist: " <<
     // ServerFacade::instance().GetDistance2d(bot, nextPoint.x, nextPoint.y); bot->Say(out.str(), LANG_UNIVERSAL);
+
+    if (isEyStartPath)
+    {
+        BattleBotWaypoint& fromPoint = currentPath->at(currentPoint);
+        Position from(fromPoint.x, fromPoint.y, fromPoint.z, 0.0f);
+        Position to(nextPoint.x, nextPoint.y, nextPoint.z, 0.0f);
+        if (RTG_EotsShouldJumpStep(from, to))
+            return JumpTo(bot->GetMapId(), nextPoint.x, nextPoint.y, nextPoint.z);
+
+        return MoveTo(bot->GetMapId(), nextPoint.x, nextPoint.y, nextPoint.z);
+    }
 
     return MoveTo(bot->GetMapId(), nextPoint.x + frand(-2, 2), nextPoint.y + frand(-2, 2), nextPoint.z);
 }
@@ -3602,7 +3817,7 @@ bool BGTactics::startNewPathFree(std::vector<BattleBotPath*> const& vPaths)
 
     BattleBotPath* currentPath = pClosestPath;
     bool reverse = false;
-    uint32 currentPoint = closestPoint - 1;
+    uint32 currentPoint = closestPoint > 0 ? closestPoint - 1 : 0;
 
     return moveToObjectiveWp(currentPath, currentPoint, reverse);
 }
