@@ -1302,17 +1302,39 @@ static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f}
 // RTG EotS start/rez rocks sit far above the playable field. Generic MovePoint/MoveNear
 // calls from this area can spline bots through the air or leave them idling on the rock.
 // Keep rock exit explicit and sequential until the bot reaches the walkable field.
-static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 145.0f;
-static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1195.0f;
+static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 340.0f;
+static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1198.0f;
+static float constexpr RTG_EOTS_UPPER_SLOPE_RESCUE_MIN_START_DIST = 60.0f;
+
+static Position RTG_EotsStartPosition(TeamId team)
+{
+    return team == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
+}
+
+static Position RTG_EotsLandingPosition(TeamId team)
+{
+    return team == TEAM_HORDE
+             ? Position(1941.452f, 1549.086f, 1176.700f, 0.0f)
+             : Position(2395.737f, 1588.287f, 1176.570f, 0.0f);
+}
 
 static bool RTG_EotsNeedsStartExit(Player* bot)
 {
     if (!bot)
         return false;
 
-    Position const& start = bot->GetTeamId() == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
+    Position const start = RTG_EotsStartPosition(bot->GetTeamId());
     return bot->GetPositionZ() > RTG_EOTS_START_EXIT_MIN_Z &&
            bot->GetDistance(start) < RTG_EOTS_START_EXIT_MAX_DIST;
+}
+
+static bool RTG_EotsNeedsUpperSlopeRescue(Player* bot)
+{
+    if (!RTG_EotsNeedsStartExit(bot))
+        return false;
+
+    Position const start = RTG_EotsStartPosition(bot->GetTeamId());
+    return bot->GetDistance(start) > RTG_EOTS_UPPER_SLOPE_RESCUE_MIN_START_DIST;
 }
 
 static bool RTG_EotsShouldJumpStep(Position const& from, Position const& to)
@@ -1422,6 +1444,23 @@ static void RTG_EotsDebugRaw(Player* bot, Battleground* bg, char const* phase, c
              phase ? phase : "?", bot->GetName(), bot->GetGUID().GetCounter(), bg->GetInstanceID(),
              uint32(bot->GetTeamId()), bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL), reason ? reason : "?",
              nodeId, triggerId, bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
+}
+
+static bool RTG_EotsRescueToLanding(Player* bot, Battleground* bg, char const* reason)
+{
+    if (!bot || !bg)
+        return false;
+
+    Position landing = RTG_EotsLandingPosition(bot->GetTeamId());
+    float const x = landing.GetPositionX() + frand(-3.0f, 3.0f);
+    float const y = landing.GetPositionY() + frand(-3.0f, 3.0f);
+    float const z = landing.GetPositionZ();
+
+    RTG_EotsDebugRaw(bot, bg, "rock_exit", reason ? reason : "upper_slope_rescue");
+    bot->StopMoving();
+    bot->GetMotionMaster()->Clear();
+    bot->TeleportTo(bg->GetMapId(), x, y, z, bot->GetOrientation());
+    return true;
 }
 
 static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, BattlegroundEY* eyeBg, Battleground* bg)
@@ -1801,6 +1840,12 @@ bool BGTactics::eyJumpDown()
     if (!mustExit)
         return false;
 
+    // Once a bot has left the waiting rock but is still on the high upper slope,
+    // do not let generic EotS movement/pathing try to glide down the hillside.
+    // Snap only this bad transition band to the lower playable landing.
+    if (RTG_EotsNeedsUpperSlopeRescue(bot))
+        return RTG_EotsRescueToLanding(bot, bg, "upper_slope_snap_to_landing");
+
     uint32 closest = 0;
     float closestDist = FLT_MAX;
     for (uint32 i = 0; i < stepCount; ++i)
@@ -1818,7 +1863,7 @@ bool BGTactics::eyJumpDown()
         ++closest;
 
     if (closest + 1 >= stepCount)
-        return false;
+        return RTG_EotsRescueToLanding(bot, bg, "exit_path_end_high_rescue");
 
     EotsExitStep const& current = steps[closest];
     EotsExitStep const& next = steps[closest + 1];
@@ -1826,11 +1871,7 @@ bool BGTactics::eyJumpDown()
     // If we are not close to any marker but still above/near the rock, recover by moving
     // toward the first lower field marker instead of allowing objective movement to spline.
     if (current.reach > 0.0f && closestDist > std::max(38.0f, current.reach * 2.5f))
-    {
-        RTG_EotsDebugRaw(bot, bg, "rock_exit", "recover_to_exit_lane");
-        MoveTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
-        return true;
-    }
+        return RTG_EotsRescueToLanding(bot, bg, "lost_on_upper_slope_rescue");
 
     bool const shouldJump = current.preferJump || RTG_EotsShouldJumpStep(current.pos, next.pos);
     RTG_EotsDebugRaw(bot, bg, "rock_exit", shouldJump ? "jump_step" : "move_step");
