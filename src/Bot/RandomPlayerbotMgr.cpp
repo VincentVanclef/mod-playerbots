@@ -65,6 +65,11 @@ namespace
 constexpr uint32 RTG_QUEUE_DEMAND_PVP = 1;
 constexpr uint32 RTG_QUEUE_DEMAND_PVE = 2;
 
+// RTG performance smoothing: cache the offline random-bot character list briefly
+// instead of querying every random-bot account during each queue-demand fill attempt.
+constexpr uint32 RTG_QUEUE_DEMAND_OFFLINE_CACHE_TTL = 60;
+constexpr uint32 RTG_QUEUE_DEMAND_EMPTY_BACKOFF = 30;
+
 std::string RTGToLower(std::string value)
 {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return std::tolower(c); });
@@ -1745,22 +1750,23 @@ bool RandomPlayerbotMgr::ConfigureBotForQueueDemand(Player* bot, uint32 mode, ui
     return true;
 }
 
-bool RandomPlayerbotMgr::TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel)
+uint64 RandomPlayerbotMgr::BuildQueueDemandBackoffKey(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel) const
 {
-    bool pvp = mode == RTG_QUEUE_DEMAND_PVP;
+    return (uint64(mode & 0xFF) << 56) | (uint64(static_cast<uint32>(teamId) & 0xFF) << 48) |
+           (uint64(roleMask & 0xFFFF) << 32) | uint64(targetLevel);
+}
 
-    std::vector<uint32> accountsToUse = rndBotTypeAccounts;
-    std::shuffle(accountsToUse.begin(), accountsToUse.end(), RandomEngine::Instance());
+void RandomPlayerbotMgr::RefreshQueueDemandOfflineCandidates(bool force)
+{
+    uint32 now = NowSeconds();
+    if (!force && queueDemandOfflineCandidatesLoadedAt &&
+        now < queueDemandOfflineCandidatesLoadedAt + RTG_QUEUE_DEMAND_OFFLINE_CACHE_TTL)
+        return;
 
-    struct DemandCharacterInfo
-    {
-        uint32 guid;
-        uint8 cls;
-        uint8 race;
-    };
+    queueDemandOfflineCandidatesLoadedAt = now;
+    queueDemandOfflineCandidates.clear();
 
-    std::vector<DemandCharacterInfo> candidates;
-    for (uint32 accountId : accountsToUse)
+    for (uint32 accountId : rndBotTypeAccounts)
     {
         CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
         stmt->SetData(0, accountId);
@@ -1771,38 +1777,70 @@ bool RandomPlayerbotMgr::TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint
         do
         {
             Field* fields = result->Fetch();
-            DemandCharacterInfo info;
+            QueueDemandOfflineCandidate info;
             info.guid = fields[0].Get<uint32>();
             info.cls = fields[1].Get<uint8>();
             info.race = fields[2].Get<uint8>();
 
-            if (GetEventValue(info.guid, "add") || GetEventValue(info.guid, "logout") ||
-                std::find(currentBots.begin(), currentBots.end(), info.guid) != currentBots.end() ||
-                GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(info.guid)))
-                continue;
-
-            if (teamId != TEAM_NEUTRAL)
-            {
-                bool isAlliance = IsAlliance(info.race);
-                if ((teamId == TEAM_ALLIANCE && !isAlliance) || (teamId == TEAM_HORDE && isAlliance))
-                    continue;
-            }
-
-            if (!IsClassAllowedForQueueDemand(info.cls, roleMask, pvp))
-                continue;
-
-            if (info.cls == CLASS_DEATH_KNIGHT && targetLevel < sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
-                continue;
-
-            candidates.push_back(info);
+            queueDemandOfflineCandidates.push_back(info);
         } while (result->NextRow());
     }
 
+    LOG_DEBUG("playerbots", "RTG demand: refreshed offline candidate cache with {} characters",
+              queueDemandOfflineCandidates.size());
+}
+
+bool RandomPlayerbotMgr::TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel)
+{
+    bool pvp = mode == RTG_QUEUE_DEMAND_PVP;
+    uint32 now = NowSeconds();
+    uint64 backoffKey = BuildQueueDemandBackoffKey(mode, teamId, roleMask, targetLevel);
+
+    auto backoffItr = queueDemandEmptyBackoffUntil.find(backoffKey);
+    if (backoffItr != queueDemandEmptyBackoffUntil.end())
+    {
+        if (now < backoffItr->second)
+            return false;
+
+        queueDemandEmptyBackoffUntil.erase(backoffItr);
+    }
+
+    RefreshQueueDemandOfflineCandidates(false);
+
+    std::vector<QueueDemandOfflineCandidate> candidates;
+    for (QueueDemandOfflineCandidate const& info : queueDemandOfflineCandidates)
+    {
+        // Cheap static filters first; only touch bot events / world lookup for viable bucket matches.
+        if (teamId != TEAM_NEUTRAL)
+        {
+            bool isAlliance = IsAlliance(info.race);
+            if ((teamId == TEAM_ALLIANCE && !isAlliance) || (teamId == TEAM_HORDE && isAlliance))
+                continue;
+        }
+
+        if (!IsClassAllowedForQueueDemand(info.cls, roleMask, pvp))
+            continue;
+
+        if (info.cls == CLASS_DEATH_KNIGHT && targetLevel < sWorld->getIntConfig(CONFIG_START_HEROIC_PLAYER_LEVEL))
+            continue;
+
+        if (GetEventValue(info.guid, "add") || GetEventValue(info.guid, "logout") ||
+            std::find(currentBots.begin(), currentBots.end(), info.guid) != currentBots.end() ||
+            GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(info.guid)))
+            continue;
+
+        candidates.push_back(info);
+    }
+
     if (candidates.empty())
+    {
+        // Avoid repeating the same empty filtered scan several times per queue cycle.
+        queueDemandEmptyBackoffUntil[backoffKey] = now + RTG_QUEUE_DEMAND_EMPTY_BACKOFF;
         return false;
+    }
 
     std::shuffle(candidates.begin(), candidates.end(), RandomEngine::Instance());
-    DemandCharacterInfo const& candidate = candidates.front();
+    QueueDemandOfflineCandidate const& candidate = candidates.front();
     uint32 specNo = FindQueueDemandSpecNo(candidate.cls, roleMask, pvp);
     if (!specNo)
         return false;

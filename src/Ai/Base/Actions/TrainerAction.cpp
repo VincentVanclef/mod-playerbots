@@ -14,10 +14,55 @@
 #include "Playerbots.h"
 #include "ReputationMgr.h"
 #include "SharedDefines.h"
+#include "SpellMgr.h"
 #include "Trainer.h"
 
 namespace
 {
+bool RTGSpellOrLearnEffectsKnown(Player* bot, uint32 spellId)
+{
+    if (!bot || !spellId)
+        return true;
+
+    if (bot->HasSpell(spellId))
+        return true;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return true;
+
+    bool hasLearnEffect = false;
+    bool hasMissingTriggeredSpell = false;
+
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        if (spellInfo->Effects[i].Effect != SPELL_EFFECT_LEARN_SPELL || !spellInfo->Effects[i].TriggerSpell)
+            continue;
+
+        hasLearnEffect = true;
+        if (!bot->HasSpell(spellInfo->Effects[i].TriggerSpell))
+            hasMissingTriggeredSpell = true;
+    }
+
+    return hasLearnEffect && !hasMissingTriggeredSpell;
+}
+
+void RTGLearnSpellIfMissing(Player* bot, uint32 spellId, bool dependent = false)
+{
+    if (RTGSpellOrLearnEffectsKnown(bot, spellId))
+        return;
+
+    bot->learnSpell(spellId, dependent);
+}
+
+void RTGCastSpellIfLearnEffectMissing(Player* bot, uint32 spellId)
+{
+    if (RTGSpellOrLearnEffectsKnown(bot, spellId))
+        return;
+
+    bot->CastSpell(bot, spellId, true);
+}
+
 bool IsRTGTrainerWeaponProficiencySpellAllowedForBot(Player* bot, uint32 spellId)
 {
     if (!bot)
@@ -246,6 +291,12 @@ void TrainerAction::Iterate(Creature* creature, bool learnSpells, uint32 spellId
 
 void TrainerAction::Learn(SpellInfo const* spellInfo, uint32 cost, std::ostringstream& out)
 {
+    if (RTGSpellOrLearnEffectsKnown(bot, spellInfo->Id))
+    {
+        out << " - already known";
+        return;
+    }
+
     if (!botAI->HasCheat(BotCheatMask::gold))
     {
         if (AI_VALUE2(uint32, "free money for", (uint32)NeedMoneyFor::spells) < cost)
@@ -258,9 +309,9 @@ void TrainerAction::Learn(SpellInfo const* spellInfo, uint32 cost, std::ostrings
     }
 
     if (spellInfo->HasEffect(SPELL_EFFECT_LEARN_SPELL))
-        bot->CastSpell(bot, spellInfo->Id, true);
+        RTGCastSpellIfLearnEffectMissing(bot, spellInfo->Id);
     else
-        bot->learnSpell(spellInfo->Id, false);
+        RTGLearnSpellIfMissing(bot, spellInfo->Id, false);
 
     out << " - learned";
 }

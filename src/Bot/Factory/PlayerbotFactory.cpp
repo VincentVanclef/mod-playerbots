@@ -35,6 +35,7 @@
 #include "RandomPlayerbotFactory.h"
 #include "ReputationMgr.h"
 #include "SharedDefines.h"
+#include "SpellMgr.h"
 #include "StatsWeightCalculator.h"
 #include "World.h"
 #include "AiObjectContext.h"
@@ -58,6 +59,53 @@ std::list<uint32> PlayerbotFactory::classQuestIds;
 std::list<uint32> PlayerbotFactory::specialQuestIds;
 std::vector<uint32> PlayerbotFactory::enchantSpellIdCache;
 std::vector<uint32> PlayerbotFactory::enchantGemIdCache;
+
+namespace
+{
+bool RTGSpellOrLearnEffectsKnown(Player* bot, uint32 spellId)
+{
+    if (!bot || !spellId)
+        return true;
+
+    if (bot->HasSpell(spellId))
+        return true;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return true;
+
+    bool hasLearnEffect = false;
+    bool hasMissingTriggeredSpell = false;
+
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        if (spellInfo->Effects[i].Effect != SPELL_EFFECT_LEARN_SPELL || !spellInfo->Effects[i].TriggerSpell)
+            continue;
+
+        hasLearnEffect = true;
+        if (!bot->HasSpell(spellInfo->Effects[i].TriggerSpell))
+            hasMissingTriggeredSpell = true;
+    }
+
+    return hasLearnEffect && !hasMissingTriggeredSpell;
+}
+
+void RTGLearnSpellIfMissing(Player* bot, uint32 spellId, bool dependent = false)
+{
+    if (RTGSpellOrLearnEffectsKnown(bot, spellId))
+        return;
+
+    bot->learnSpell(spellId, dependent);
+}
+
+void RTGCastSpellIfLearnEffectMissing(Player* bot, uint32 spellId)
+{
+    if (RTGSpellOrLearnEffectsKnown(bot, spellId))
+        return;
+
+    bot->CastSpell(bot, spellId, true);
+}
+}
 std::unordered_map<uint32, std::vector<uint32>> PlayerbotFactory::trainerIdCache;
 std::vector<uint32> PlayerbotFactory::ccBreakTrinketCache;
 
@@ -505,7 +553,7 @@ bool PlayerbotFactory::LearnProfessionSpecialization(Player* bot,
     if (bot->HasSpell(knownSpellId) || !sSpellMgr->GetSpellInfo(learnSpellId))
         return false;
 
-    bot->CastSpell(bot, learnSpellId, true);
+    RTGCastSpellIfLearnEffectMissing(bot, learnSpellId);
     return bot->HasSpell(knownSpellId);
 }
 
@@ -1513,6 +1561,11 @@ void PlayerbotFactory::InitPet()
         pet->SetLevel(bot->GetLevel());
         pet->SetPower(POWER_HAPPINESS, pet->GetMaxPower(Powers(POWER_HAPPINESS)));
         pet->SetHealth(pet->GetMaxHealth());
+
+        // Tamed templates can carry waypoint movement defaults. Pets should follow their owner,
+        // not try to start a waypoint path id 0 and spam worldserver logs.
+        pet->GetMotionMaster()->Clear();
+        pet->GetMotionMaster()->MoveFollow(bot, PET_FOLLOW_DIST, pet->GetFollowAngle());
     }
     else
     {
@@ -3001,7 +3054,7 @@ void PlayerbotFactory::InitTradeSkills()
             !(keepExistingProfessionPair && bot->HasSkill(skillId)))
             continue;
 
-        bot->learnSpell(spellId, false);
+        RTGLearnSpellIfMissing(bot, spellId, false);
     }
 
     InitTradeSpecializations();
@@ -3200,13 +3253,13 @@ void PlayerbotFactory::InitSkills()
 
     bot->SetSkill(SKILL_RIDING, 0, 0, 0);
     if (bot->GetLevel() >= sPlayerbotAIConfig.useGroundMountAtMinLevel)
-        bot->learnSpell(33388);
+        RTGLearnSpellIfMissing(bot, 33388);
     if (bot->GetLevel() >= sPlayerbotAIConfig.useFastGroundMountAtMinLevel)
-        bot->learnSpell(33391);
+        RTGLearnSpellIfMissing(bot, 33391);
     if (bot->GetLevel() >= sPlayerbotAIConfig.useFlyMountAtMinLevel)
-        bot->learnSpell(34090);
+        RTGLearnSpellIfMissing(bot, 34090);
     if (bot->GetLevel() >= sPlayerbotAIConfig.useFastFlyMountAtMinLevel)
-        bot->learnSpell(34091);
+        RTGLearnSpellIfMissing(bot, 34091);
 
     uint32 skillLevel = bot->GetLevel() < 40 ? 0 : 1;
     uint32 dualWieldLevel = bot->GetLevel() < 20 ? 0 : 1;
@@ -3406,9 +3459,9 @@ void PlayerbotFactory::InitAvailableSpells()
                 continue;
 
             if (trainerSpell->IsCastable())
-                bot->CastSpell(bot, trainerSpell->SpellId, true);
+                RTGCastSpellIfLearnEffectMissing(bot, trainerSpell->SpellId);
             else
-                bot->learnSpell(trainerSpell->SpellId, false);
+                RTGLearnSpellIfMissing(bot, trainerSpell->SpellId, false);
         }
     }
 }
@@ -3419,91 +3472,91 @@ void PlayerbotFactory::InitClassSpells()
     switch (bot->getClass())
     {
         case CLASS_WARRIOR:
-            bot->learnSpell(78, true);
-            bot->learnSpell(2457, true);
+            RTGLearnSpellIfMissing(bot, 78, true);
+            RTGLearnSpellIfMissing(bot, 2457, true);
             if (level >= 10)
             {
-                bot->learnSpell(71, false);    // Defensive Stance
-                bot->learnSpell(355, false);   // Taunt
-                bot->learnSpell(7386, false);  // Sunder Armor
+                RTGLearnSpellIfMissing(bot, 71, false);    // Defensive Stance
+                RTGLearnSpellIfMissing(bot, 355, false);   // Taunt
+                RTGLearnSpellIfMissing(bot, 7386, false);  // Sunder Armor
             }
             if (level >= 30)
-                bot->learnSpell(2458, false);  // Berserker Stance
+                RTGLearnSpellIfMissing(bot, 2458, false);  // Berserker Stance
             break;
         case CLASS_PALADIN:
-            bot->learnSpell(21084, true);
-            bot->learnSpell(635, true);
+            RTGLearnSpellIfMissing(bot, 21084, true);
+            RTGLearnSpellIfMissing(bot, 635, true);
             if (level >= 12)
-                bot->learnSpell(7328, false);  // Redemption
+                RTGLearnSpellIfMissing(bot, 7328, false);  // Redemption
             if (level >= 20)
-                bot->learnSpell(5502, false); // Sense Undead
+                RTGLearnSpellIfMissing(bot, 5502, false); // Sense Undead
             break;
         case CLASS_ROGUE:
-            bot->learnSpell(1752, true);
-            bot->learnSpell(2098, true);
+            RTGLearnSpellIfMissing(bot, 1752, true);
+            RTGLearnSpellIfMissing(bot, 2098, true);
             break;
         case CLASS_DEATH_KNIGHT:
-            bot->learnSpell(45477, true);
-            bot->learnSpell(47541, true);
-            bot->learnSpell(45462, true);
-            bot->learnSpell(45902, true);
+            RTGLearnSpellIfMissing(bot, 45477, true);
+            RTGLearnSpellIfMissing(bot, 47541, true);
+            RTGLearnSpellIfMissing(bot, 45462, true);
+            RTGLearnSpellIfMissing(bot, 45902, true);
             // to leave DK starting area
-            bot->learnSpell(53428, false);
-            bot->learnSpell(50977, false);
-            bot->learnSpell(49142, false);
-            bot->learnSpell(48778, false);
+            RTGLearnSpellIfMissing(bot, 53428, false);
+            RTGLearnSpellIfMissing(bot, 50977, false);
+            RTGLearnSpellIfMissing(bot, 49142, false);
+            RTGLearnSpellIfMissing(bot, 48778, false);
             break;
         case CLASS_HUNTER:
-            bot->learnSpell(2973, true);
-            bot->learnSpell(75, true);
+            RTGLearnSpellIfMissing(bot, 2973, true);
+            RTGLearnSpellIfMissing(bot, 75, true);
             if (level >= 10)
             {
-                bot->learnSpell(883, false);   // call pet
-                bot->learnSpell(1515, false);  // tame pet
-                bot->learnSpell(6991, false);  // feed pet
-                bot->learnSpell(982, false);   // revive pet
-                bot->learnSpell(2641, false);  // dismiss pet
+                RTGLearnSpellIfMissing(bot, 883, false);   // call pet
+                RTGLearnSpellIfMissing(bot, 1515, false);  // tame pet
+                RTGLearnSpellIfMissing(bot, 6991, false);  // feed pet
+                RTGLearnSpellIfMissing(bot, 982, false);   // revive pet
+                RTGLearnSpellIfMissing(bot, 2641, false);  // dismiss pet
             }
             break;
         case CLASS_PRIEST:
-            bot->learnSpell(585, true);
-            bot->learnSpell(2050, true);
+            RTGLearnSpellIfMissing(bot, 585, true);
+            RTGLearnSpellIfMissing(bot, 2050, true);
             break;
         case CLASS_MAGE:
-            bot->learnSpell(133, true);
-            bot->learnSpell(168, true);
+            RTGLearnSpellIfMissing(bot, 133, true);
+            RTGLearnSpellIfMissing(bot, 168, true);
             break;
         case CLASS_WARLOCK:
-            bot->learnSpell(687, true);
-            bot->learnSpell(686, true);
-            bot->learnSpell(688, false);  // summon imp
+            RTGLearnSpellIfMissing(bot, 687, true);
+            RTGLearnSpellIfMissing(bot, 686, true);
+            RTGLearnSpellIfMissing(bot, 688, false);  // summon imp
             if (level >= 10)
-                bot->learnSpell(697, false);  // summon voidwalker
+                RTGLearnSpellIfMissing(bot, 697, false);  // summon voidwalker
             if (level >= 20)
-                bot->learnSpell(712, false);  // summon succubus
+                RTGLearnSpellIfMissing(bot, 712, false);  // summon succubus
             if (level >= 30)
-                bot->learnSpell(691, false);  // summon felhunter
+                RTGLearnSpellIfMissing(bot, 691, false);  // summon felhunter
             break;
         case CLASS_DRUID:
-            bot->learnSpell(5176, true);
-            bot->learnSpell(5185, true);
+            RTGLearnSpellIfMissing(bot, 5176, true);
+            RTGLearnSpellIfMissing(bot, 5185, true);
             if (level >= 10)
             {
-                bot->learnSpell(5487, false);  // bear form
-                bot->learnSpell(6795, false);  // Growl
-                bot->learnSpell(6807, false);  // Maul
+                RTGLearnSpellIfMissing(bot, 5487, false);  // bear form
+                RTGLearnSpellIfMissing(bot, 6795, false);  // Growl
+                RTGLearnSpellIfMissing(bot, 6807, false);  // Maul
             }
             break;
         case CLASS_SHAMAN:
-            bot->learnSpell(403, true);
-            bot->learnSpell(331, true);
-            // bot->learnSpell(66747, true); // Totem of the Earthen Ring
+            RTGLearnSpellIfMissing(bot, 403, true);
+            RTGLearnSpellIfMissing(bot, 331, true);
+            // RTGLearnSpellIfMissing(bot, 66747, true); // Totem of the Earthen Ring
             if (level >= 4)
-                bot->learnSpell(8071, false);  // stoneskin totem
+                RTGLearnSpellIfMissing(bot, 8071, false);  // stoneskin totem
             if (level >= 10)
-                bot->learnSpell(3599, false);  // searing totem
+                RTGLearnSpellIfMissing(bot, 3599, false);  // searing totem
             if (level >= 20)
-                bot->learnSpell(5394, false);  // healing stream totem
+                RTGLearnSpellIfMissing(bot, 5394, false);  // healing stream totem
             break;
         default:
             break;
@@ -3519,12 +3572,12 @@ void PlayerbotFactory::InitSpecialSpells()
         if (!IsRTGSpellAllowedForBotLevel(bot, spellId))
             continue;
 
-        bot->learnSpell(spellId);
+        RTGLearnSpellIfMissing(bot, spellId);
     }
     // to leave DK starting area
     if (bot->getClass() == CLASS_DEATH_KNIGHT)
     {
-        bot->learnSpell(50977, false);
+        RTGLearnSpellIfMissing(bot, 50977, false);
     }
 }
 
@@ -3993,7 +4046,7 @@ void PlayerbotFactory::InitMounts()
         uint32 spell = mounts[bot->getRace()][type][index];
         if (spell)
         {
-            bot->learnSpell(spell);
+            RTGLearnSpellIfMissing(bot, spell);
             LOG_DEBUG("playerbots", "Bot {} ({}) learned {} mount {}", bot->GetGUID().ToString().c_str(),
                       bot->GetLevel(), type == 0 ? "slow" : (type == 1 ? "fast" : "flying"), spell);
         }

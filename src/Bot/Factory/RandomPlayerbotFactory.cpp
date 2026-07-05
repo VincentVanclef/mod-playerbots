@@ -162,7 +162,7 @@ Player* RandomPlayerbotFactory::CreateRandomBot(WorldSession* session, uint8 cls
     player->setCinematic(2);
     player->SetAtLoginFlag(AT_LOGIN_NONE);
 
-    if (cls == CLASS_DEATH_KNIGHT)
+    if (cls == CLASS_DEATH_KNIGHT && !player->HasSpell(50977))
     {
         player->learnSpell(50977, false);
     }

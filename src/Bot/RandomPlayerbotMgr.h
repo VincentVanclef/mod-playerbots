@@ -14,6 +14,8 @@
 #include "PlayerbotCommandServer.h"
 
 #include <set>
+#include <unordered_map>
+#include <vector>
 
 struct BattlegroundInfo
 {
@@ -67,6 +69,13 @@ struct LfgDemandInfo
     uint32 tankBotCount = 0;
     uint32 healBotCount = 0;
     uint32 dpsBotCount = 0;
+};
+
+struct QueueDemandOfflineCandidate
+{
+    uint32 guid = 0;
+    uint8 cls = 0;
+    uint8 race = 0;
 };
 
 class Battleground;
@@ -288,6 +297,8 @@ private:
     bool IsWorldIdleQueueDemandCandidate(Player* bot);
     bool IsClassAllowedForQueueDemand(uint8 cls, uint32 roleMask, bool pvp);
     uint32 FindQueueDemandSpecNo(uint8 cls, uint32 roleMask, bool pvp);
+    void RefreshQueueDemandOfflineCandidates(bool force = false);
+    uint64 BuildQueueDemandBackoffKey(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel) const;
     bool TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
     bool RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, uint32 roleMask, uint8 targetLevel);
     uint8 GetQueueDemandTargetLevel(std::vector<uint8> const& levels, uint8 fallbackMin, uint8 fallbackMax);
@@ -306,6 +317,11 @@ private:
     // Account lists
     std::vector<uint32> rndBotTypeAccounts;             // Accounts marked as RNDbot (type 1)
     std::vector<uint32> addClassTypeAccounts;           // Accounts marked as AddClass (type 2)
+
+    // RTG queue-demand cache: avoids walking every random-bot account on every demand tick.
+    std::vector<QueueDemandOfflineCandidate> queueDemandOfflineCandidates;
+    uint32 queueDemandOfflineCandidatesLoadedAt = 0;
+    std::unordered_map<uint64, uint32> queueDemandEmptyBackoffUntil;
 
     //void ScaleBotActivity();      // Deprecated function
     static inline uint32 NowSeconds() { return static_cast<uint32>(GameTime::GetGameTime().count()); }
