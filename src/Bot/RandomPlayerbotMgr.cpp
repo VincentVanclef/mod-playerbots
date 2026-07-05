@@ -19,6 +19,7 @@
 #include "BattleGroundJoinAction.h"
 #include "Battleground.h"
 #include "BattlegroundMgr.h"
+#include "BattlegroundUtils.h"
 #include "ChannelMgr.h"
 #include "DBCStores.h"
 #include "DBCStructure.h"
@@ -1247,7 +1248,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
                 auto& bgInfo = bracketIdPair.second;
                 if (bgInfo.minLevel == 0)
                     continue;
-                LOG_INFO("playerbots",
+                LOG_DEBUG("playerbots",
                          "ARENA:{} {}: Player (Skirmish:{}, Rated:{}) Bots (Skirmish:{}, Rated:{}) Total (Skirmish:{} "
                          "Rated:{}), Instances (Skirmish:{} Rated:{})",
                          type == ARENA_TYPE_2v2   ? "2v2"
@@ -1298,7 +1299,7 @@ void RandomPlayerbotMgr::LogBattlegroundInfo()
             if (bgInfo.minLevel == 0)
                 continue;
 
-            LOG_INFO("playerbots",
+            LOG_DEBUG("playerbots",
                      "BG:{} {}: Player ({}:{}) Bot ({}:{}) Total (A:{} H:{}), Instances {}, Active Queue: {}", _bgType,
                      std::to_string(bgInfo.minLevel) + "-" + std::to_string(bgInfo.maxLevel),
                      bgInfo.bgAlliancePlayerCount, bgInfo.bgHordePlayerCount, bgInfo.bgAllianceBotCount,
@@ -1743,7 +1744,7 @@ bool RandomPlayerbotMgr::ConfigureBotForQueueDemand(Player* bot, uint32 mode, ui
     if (PlayerbotAI* botAI = GET_PLAYERBOT_AI(bot))
         botAI->Reset(true);
 
-    LOG_INFO("playerbots", "RTG demand: prepared {} {}:{} <{}> for {} as {} spec#{}",
+    LOG_DEBUG("playerbots", "RTG demand: prepared {} {}:{} <{}> for {} as {} spec#{}",
              bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->getClass(), bot->GetName().c_str(),
              RTGQueueDemandModeName(mode), RTGQueueDemandRoleName(roleMask), specNo - 1);
 
@@ -1861,7 +1862,7 @@ bool RandomPlayerbotMgr::TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint
     SetEventValue(candidate.guid, "update", 0, 0);
     currentBots.push_back(candidate.guid);
 
-    LOG_INFO("playerbots", "RTG demand: queued offline bot #{} class {} level {} for {} as {} spec#{}",
+    LOG_DEBUG("playerbots", "RTG demand: queued offline bot #{} class {} level {} for {} as {} spec#{}",
              candidate.guid, candidate.cls, targetLevel, RTGQueueDemandModeName(mode), RTGQueueDemandRoleName(roleMask),
              specNo - 1);
     return true;
@@ -1881,7 +1882,7 @@ bool RandomPlayerbotMgr::RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, ui
             continue;
 
         uint32 botId = bot->GetGUID().GetCounter();
-        LOG_INFO("playerbots", "RTG demand: retiring idle bot {}:{} <{}> to free a {} level {} {} slot",
+        LOG_DEBUG("playerbots", "RTG demand: retiring idle bot {}:{} <{}> to free a {} level {} {} slot",
                  bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(),
                  RTGQueueDemandModeName(mode), targetLevel, RTGQueueDemandRoleName(roleMask));
 
@@ -1930,10 +1931,19 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
     uint32 actions = 0;
     uint32 maxActions = std::max<uint32>(1, sPlayerbotAIConfig.randomBotQueueDemandMaxPerCheck);
 
+    auto pickTargetLevel = [&](bool useBgTargetLevel, std::vector<uint8> const& levels,
+                               uint8 fallbackMin, uint8 fallbackMax) -> uint8
+    {
+        return useBgTargetLevel ? GetQueueDemandBgTargetLevel(levels, fallbackMin, fallbackMax)
+                                : GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
+    };
+
     auto countPrepared = [&](uint32 mode, TeamId teamId, uint32 roleMask, std::vector<uint8> const& levels,
-                             uint8 fallbackMin, uint8 fallbackMax) -> uint32
+                             uint8 fallbackMin, uint8 fallbackMax, bool useBgTargetLevel = false) -> uint32
     {
         uint32 prepared = 0;
+        uint8 targetLevel = pickTargetLevel(useBgTargetLevel, levels, fallbackMin, fallbackMax);
+
         for (auto const& [guid, bot] : playerBots)
         {
             if (!IsWorldIdleQueueDemandCandidate(bot))
@@ -1946,7 +1956,6 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             if (GetValue(botId, "rtg_demand_mode") != mode || !(GetValue(botId, "rtg_demand_role") & roleMask))
                 continue;
 
-            uint8 targetLevel = GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
             if (static_cast<uint8>(GetValue(botId, "rtg_demand_level")) != targetLevel)
                 continue;
 
@@ -1969,14 +1978,14 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
     };
 
     auto requestMany = [&](uint32 mode, TeamId teamId, uint32 roleMask, uint32 count, std::vector<uint8> const& levels,
-                           uint8 fallbackMin, uint8 fallbackMax) -> void
+                           uint8 fallbackMin, uint8 fallbackMax, bool useBgTargetLevel = false) -> void
     {
-        uint32 prepared = countPrepared(mode, teamId, roleMask, levels, fallbackMin, fallbackMax);
+        uint32 prepared = countPrepared(mode, teamId, roleMask, levels, fallbackMin, fallbackMax, useBgTargetLevel);
         if (prepared >= count)
             return;
 
         count -= prepared;
-        uint8 targetLevel = GetQueueDemandTargetLevel(levels, fallbackMin, fallbackMax);
+        uint8 targetLevel = pickTargetLevel(useBgTargetLevel, levels, fallbackMin, fallbackMax);
         for (uint32 i = 0; i < count && actions < maxActions; ++i)
             requestOne(mode, teamId, roleMask, targetLevel);
     };
@@ -2041,8 +2050,13 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
                 continue;
             }
 
-            uint32 teamSize = bg->GetMaxPlayersPerTeam();
             BattlegroundBracketId bracketId = BattlegroundBracketId(bracketPair.first);
+            PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bg->GetMapId(), bracketId);
+
+            // RTG: only prepare enough queue-demand bots to start/maintain the BG,
+            // not enough to hard-fill it to MaxPlayersPerTeam.  This removes the
+            // big queue/login burst while keeping room for late real players.
+            uint32 teamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
 
             // RTG: if a real player is waiting and an existing BG has a replaceable same-team bot,
             // do not spin up extra queue-demand bots for a new BG.  The displacement pass frees
@@ -2066,14 +2080,14 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             if (targetPerTeam > allianceCurrent)
             {
                 requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_ALLIANCE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - allianceCurrent,
-                            bgDemandLevels, info.minLevel, info.maxLevel);
+                            bgDemandLevels, info.minLevel, info.maxLevel, true);
             }
 
             uint32 hordeCurrent = info.bgHordePlayerCount + info.bgHordeBotCount;
             if (targetPerTeam > hordeCurrent)
             {
                 requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_HORDE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - hordeCurrent,
-                            bgDemandLevels, info.minLevel, info.maxLevel);
+                            bgDemandLevels, info.minLevel, info.maxLevel, true);
             }
         }
     }

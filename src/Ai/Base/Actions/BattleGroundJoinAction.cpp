@@ -8,6 +8,7 @@
 #include "ArenaTeam.h"
 #include "ArenaTeamMgr.h"
 #include "BattlegroundMgr.h"
+#include "BattlegroundUtils.h"
 #include "Event.h"
 #include "GroupMgr.h"
 #include "PlayerbotAI.h"
@@ -228,8 +229,12 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
         return false;
 
     TeamId teamId = bot->GetTeamId();
-    uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
-    uint32 TeamSize = bg->GetMaxPlayersPerTeam();
+    // RTG: demand-fill bots should only fill a BG to the configured start threshold.
+    // Filling to MaxPlayersPerTeam logs in/queues many extra bots, causes queue bursts,
+    // and leaves less room for late real players.
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bg->GetMapId(), bracketId);
+    uint32 TeamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+    uint32 BracketSize = TeamSize * 2;
 
     // If the bot is in a group, only the leader can queue
     if (bot->GetGroup() && !bot->GetGroup()->IsLeader(bot->GetGUID()))
@@ -523,7 +528,7 @@ bool BGJoinAction::JoinQueue(uint32 type)
         }
     }
 
-    LOG_INFO("playerbots", "Bot {} {}:{} <{}> queued {} {}", bot->GetGUID().ToString().c_str(),
+    LOG_DEBUG("playerbots", "Bot {} {}:{} <{}> queued {} {}", bot->GetGUID().ToString().c_str(),
              bot->GetTeamId() == TEAM_ALLIANCE ? "A" : "H", bot->GetLevel(), bot->GetName().c_str(), _bgType.c_str(),
              isRated   ? "Rated Arena"
              : isArena ? "Arena"
@@ -580,8 +585,12 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
 
     TeamId teamId = bot->GetTeamId();
 
-    uint32 BracketSize = bg->GetMaxPlayersPerTeam() * 2;
-    uint32 TeamSize = bg->GetMaxPlayersPerTeam();
+    // RTG: demand-fill bots should only fill a BG to the configured start threshold.
+    // Filling to MaxPlayersPerTeam logs in/queues many extra bots, causes queue bursts,
+    // and leaves less room for late real players.
+    PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bg->GetMapId(), bracketId);
+    uint32 TeamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+    uint32 BracketSize = TeamSize * 2;
 
     // If the bot is in a group, only the leader can queue
     if (bot->GetGroup() && !bot->GetGroup()->IsLeader(bot->GetGUID()))

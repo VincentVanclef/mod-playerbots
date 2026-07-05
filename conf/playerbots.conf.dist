@@ -715,7 +715,8 @@ AiPlayerbot.RandomBotQueueDemandPvPAverageQueuedPlayerLevel = 1
 
 # RTG performance: offline queue-demand candidates are cached in code for 60s,
 # and empty candidate buckets back off for 30s to avoid repeated DB scans.
-AiPlayerbot.RandomBotQueueDemandMaxPerCheck = 4
+# Keep this modest so BG queue fills do not login/queue too many bots in one burst.
+AiPlayerbot.RandomBotQueueDemandMaxPerCheck = 2
 AiPlayerbot.RandomBotQueueDemandRetireCooldown = 90
 
 # Enable/Disable periodic online - offline of randombots to mimic the real-world scenario where not all players are online simultaneously
