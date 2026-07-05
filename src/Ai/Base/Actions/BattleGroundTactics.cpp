@@ -1299,24 +1299,17 @@ static bool RTG_EotsUnitValidForObjective(Player* bot, Unit* unit)
 // or cannot be resolved. This avoids falling back to the EotS start rock / retreat positions.
 static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f};
 
-// RTG EotS start/rez rocks sit far above the playable field. Generic MovePoint/MoveNear
-// calls from this area can spline bots through the air or leave them idling on the rock.
-// Keep rock exit explicit and sequential until the bot reaches the walkable field.
-static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 340.0f;
-static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1198.0f;
-static float constexpr RTG_EOTS_UPPER_SLOPE_RESCUE_MIN_START_DIST = 60.0f;
+// RTG EotS start/rez rocks sit far above the playable field. Keep the custom
+// helper limited to the actual start shelf only. Once a bot is on the lower
+// playable slope/road, normal EotS objective movement should take over.
+static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 125.0f;
+static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1216.0f;
 
 static Position RTG_EotsStartPosition(TeamId team)
 {
     return team == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
 }
 
-static Position RTG_EotsLandingPosition(TeamId team)
-{
-    return team == TEAM_HORDE
-             ? Position(1941.452f, 1549.086f, 1176.700f, 0.0f)
-             : Position(2395.737f, 1588.287f, 1176.570f, 0.0f);
-}
 
 static bool RTG_EotsNeedsStartExit(Player* bot)
 {
@@ -1328,19 +1321,7 @@ static bool RTG_EotsNeedsStartExit(Player* bot)
            bot->GetDistance(start) < RTG_EOTS_START_EXIT_MAX_DIST;
 }
 
-static bool RTG_EotsNeedsUpperSlopeRescue(Player* bot)
-{
-    if (!RTG_EotsNeedsStartExit(bot))
-        return false;
 
-    Position const start = RTG_EotsStartPosition(bot->GetTeamId());
-    return bot->GetDistance(start) > RTG_EOTS_UPPER_SLOPE_RESCUE_MIN_START_DIST;
-}
-
-static bool RTG_EotsShouldJumpStep(Position const& from, Position const& to)
-{
-    return from.GetPositionZ() - to.GetPositionZ() > 7.5f;
-}
 
 static bool RTG_EotsGetNodePosition(uint32 nodeId, Position& out)
 {
@@ -1446,22 +1427,53 @@ static void RTG_EotsDebugRaw(Player* bot, Battleground* bg, char const* phase, c
              nodeId, triggerId, bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
 }
 
-static bool RTG_EotsRescueToLanding(Player* bot, Battleground* bg, char const* reason)
+static void RTG_EotsClearStaleMove(Player* bot, Battleground* bg)
 {
-    if (!bot || !bg)
-        return false;
+    if (!bot || !bg || bg->GetBgTypeID() != BATTLEGROUND_EY)
+        return;
 
-    Position landing = RTG_EotsLandingPosition(bot->GetTeamId());
-    float const x = landing.GetPositionX() + frand(-3.0f, 3.0f);
-    float const y = landing.GetPositionY() + frand(-3.0f, 3.0f);
-    float const z = landing.GetPositionZ();
+    struct Watch
+    {
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        uint32 ms = 0;
+    };
 
-    RTG_EotsDebugRaw(bot, bg, "rock_exit", reason ? reason : "upper_slope_rescue");
+    static std::unordered_map<uint32, Watch> watches;
+    uint32 const key = bot->GetGUID().GetCounter();
+    uint32 const now = getMSTime();
+    Watch& watch = watches[key];
+
+    if (!watch.ms)
+    {
+        watch = {bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), now};
+        return;
+    }
+
+    float const dx = bot->GetPositionX() - watch.x;
+    float const dy = bot->GetPositionY() - watch.y;
+    float const dz = bot->GetPositionZ() - watch.z;
+    float const moved = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (moved > 2.0f)
+    {
+        watch = {bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), now};
+        return;
+    }
+
+    if (getMSTimeDiff(watch.ms, now) < 6500)
+        return;
+
+    if (!bot->isMoving() && bot->IsStopped())
+        return;
+
+    RTG_EotsDebugRaw(bot, bg, "move_clear", "stale_ground_move");
     bot->StopMoving();
     bot->GetMotionMaster()->Clear();
-    bot->TeleportTo(bg->GetMapId(), x, y, z, bot->GetOrientation());
-    return true;
+    watch = {bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), now};
 }
+
+
 
 static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, BattlegroundEY* eyeBg, Battleground* bg)
 {
@@ -1804,31 +1816,27 @@ bool BGTactics::eyJumpDown()
     struct EotsExitStep
     {
         Position pos;
-        bool preferJump;
         float reach;
     };
 
-    // Include the lower crossroad endpoint. The old helper stopped on the side shelf
-    // (~1218-1223 Z), after which normal objective movement could send bots across
-    // the void. These steps carry them all the way down to the playable field.
+    // Grounded exit only: no JumpTo and no teleport-style rescue. These points
+    // simply walk bots off the upper start shelf. After the side shelf/road point,
+    // RTG_EotsNeedsStartExit() becomes false and normal tower/flag objective
+    // movement takes over.
     static EotsExitStep const hordeExit[] = {
-        {EY_WAITING_POS_HORDE, false, 22.0f},
-        {{1838.007f, 1539.856f, 1253.383f, 0.0f}, false, 11.0f},
-        {{1846.264f, 1535.062f, 1240.796f, 0.0f}, true, 11.0f},
-        {{1849.813f, 1527.303f, 1237.262f, 0.0f}, false, 12.0f},
-        {{1849.041f, 1518.884f, 1223.624f, 0.0f}, true, 14.0f},
-        {{1883.154f, 1532.143f, 1202.143f, 0.0f}, true, 18.0f},
-        {{1941.452f, 1549.086f, 1176.700f, 0.0f}, false, 0.0f},
+        {EY_WAITING_POS_HORDE, 22.0f},
+        {{1838.007f, 1539.856f, 1253.383f, 0.0f}, 12.0f},
+        {{1846.264f, 1535.062f, 1240.796f, 0.0f}, 12.0f},
+        {{1849.813f, 1527.303f, 1237.262f, 0.0f}, 13.0f},
+        {{1849.041f, 1518.884f, 1223.624f, 0.0f}, 0.0f},
     };
 
     static EotsExitStep const allianceExit[] = {
-        {EY_WAITING_POS_ALLIANCE, false, 22.0f},
-        {{2492.955f, 1597.769f, 1254.828f, 0.0f}, false, 11.0f},
-        {{2484.601f, 1598.209f, 1244.344f, 0.0f}, true, 11.0f},
-        {{2478.424f, 1609.539f, 1238.651f, 0.0f}, false, 12.0f},
-        {{2475.926f, 1619.658f, 1218.706f, 0.0f}, true, 14.0f},
-        {{2449.150f, 1601.792f, 1201.552f, 0.0f}, true, 18.0f},
-        {{2395.737f, 1588.287f, 1176.570f, 0.0f}, false, 0.0f},
+        {EY_WAITING_POS_ALLIANCE, 22.0f},
+        {{2492.955f, 1597.769f, 1254.828f, 0.0f}, 12.0f},
+        {{2484.601f, 1598.209f, 1244.344f, 0.0f}, 12.0f},
+        {{2478.424f, 1609.539f, 1238.651f, 0.0f}, 13.0f},
+        {{2475.926f, 1619.658f, 1218.706f, 0.0f}, 0.0f},
     };
 
     EotsExitStep const* steps = bot->GetTeamId() == TEAM_HORDE ? hordeExit : allianceExit;
@@ -1836,15 +1844,8 @@ bool BGTactics::eyJumpDown()
                                ? uint32(sizeof(hordeExit) / sizeof(hordeExit[0]))
                                : uint32(sizeof(allianceExit) / sizeof(allianceExit[0]));
 
-    bool const mustExit = RTG_EotsNeedsStartExit(bot);
-    if (!mustExit)
+    if (!RTG_EotsNeedsStartExit(bot))
         return false;
-
-    // Once a bot has left the waiting rock but is still on the high upper slope,
-    // do not let generic EotS movement/pathing try to glide down the hillside.
-    // Snap only this bad transition band to the lower playable landing.
-    if (RTG_EotsNeedsUpperSlopeRescue(bot))
-        return RTG_EotsRescueToLanding(bot, bg, "upper_slope_snap_to_landing");
 
     uint32 closest = 0;
     float closestDist = FLT_MAX;
@@ -1858,33 +1859,24 @@ bool BGTactics::eyJumpDown()
         }
     }
 
-    // If movement landed closer to the next marker than the previous one, advance.
-    while (closest + 1 < stepCount && bot->GetDistance(steps[closest + 1].pos) + 1.5f < bot->GetDistance(steps[closest].pos))
-        ++closest;
+    // If we are not near the start route anymore, let normal objective movement
+    // take over instead of freezing or forcing another artificial correction.
+    if (closestDist > 45.0f)
+        return false;
 
     if (closest + 1 >= stepCount)
-        return RTG_EotsRescueToLanding(bot, bg, "exit_path_end_high_rescue");
+        return false;
 
     EotsExitStep const& current = steps[closest];
     EotsExitStep const& next = steps[closest + 1];
 
-    // If we are not close to any marker but still above/near the rock, recover by moving
-    // toward the first lower field marker instead of allowing objective movement to spline.
-    if (current.reach > 0.0f && closestDist > std::max(38.0f, current.reach * 2.5f))
-        return RTG_EotsRescueToLanding(bot, bg, "lost_on_upper_slope_rescue");
+    if (current.reach > 0.0f && closestDist > std::max(35.0f, current.reach * 2.8f))
+        return false;
 
-    bool const shouldJump = current.preferJump || RTG_EotsShouldJumpStep(current.pos, next.pos);
-    RTG_EotsDebugRaw(bot, bg, "rock_exit", shouldJump ? "jump_step" : "move_step");
-
-    if (shouldJump)
-        JumpTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
-    else
-        MoveTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
-
-    // Return true even if the movement call was suppressed as a duplicate. While the bot
-    // is still on the rock/shelf, this helper owns movement and blocks normal objective moves.
-    return true;
+    RTG_EotsDebugRaw(bot, bg, "rock_exit", "grounded_move_step");
+    return MoveTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
 }
+
 
 //
 // actual bg tactics below
@@ -1991,8 +1983,8 @@ bool BGTactics::Execute(Event /*event*/)
         // explicit exit lane before any generic objective movement/path search.
         if (bgType == BATTLEGROUND_EY && RTG_EotsNeedsStartExit(bot))
         {
-            eyJumpDown();
-            return true;
+            if (eyJumpDown())
+                return true;
         }
 
         // Carriers sometimes pass through an owned tower while still moving, and the normal
@@ -2009,6 +2001,9 @@ bool BGTactics::Execute(Event /*event*/)
                 }
             }
         }
+
+        if (bgType == BATTLEGROUND_EY)
+            RTG_EotsClearStaleMove(bot, bg);
 
         if (bot->isMoving())
             return false;
@@ -2039,6 +2034,13 @@ bool BGTactics::Execute(Event /*event*/)
         {
             // bot->GetMotionMaster()->MovementExpired();
             return false;
+        }
+
+        if (bgType == BATTLEGROUND_EY)
+        {
+            if (!moveToObjective(true))
+                return selectObjective();
+            return true;
         }
 
         if (!moveToObjective(false))
@@ -3458,8 +3460,8 @@ bool BGTactics::moveToObjective(bool ignoreDist)
 
         if (bgType == BATTLEGROUND_EY && RTG_EotsNeedsStartExit(bot))
         {
-            eyJumpDown();
-            return true;
+            if (eyJumpDown())
+                return true;
         }
 
         if (!ignoreDist && ServerFacade::instance().IsDistanceGreaterThan(ServerFacade::instance().GetDistance2d(bot, pos.x, pos.y), 100.0f))
@@ -3726,15 +3728,7 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
     // ServerFacade::instance().GetDistance2d(bot, nextPoint.x, nextPoint.y); bot->Say(out.str(), LANG_UNIVERSAL);
 
     if (isEyStartPath)
-    {
-        BattleBotWaypoint& fromPoint = currentPath->at(currentPoint);
-        Position from(fromPoint.x, fromPoint.y, fromPoint.z, 0.0f);
-        Position to(nextPoint.x, nextPoint.y, nextPoint.z, 0.0f);
-        if (RTG_EotsShouldJumpStep(from, to))
-            return JumpTo(bot->GetMapId(), nextPoint.x, nextPoint.y, nextPoint.z);
-
         return MoveTo(bot->GetMapId(), nextPoint.x, nextPoint.y, nextPoint.z);
-    }
 
     return MoveTo(bot->GetMapId(), nextPoint.x + frand(-2, 2), nextPoint.y + frand(-2, 2), nextPoint.z);
 }
