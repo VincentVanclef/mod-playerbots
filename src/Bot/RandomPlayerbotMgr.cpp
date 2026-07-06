@@ -2053,37 +2053,45 @@ void RandomPlayerbotMgr::EnsureQueueDemandBots()
             BattlegroundBracketId bracketId = BattlegroundBracketId(bracketPair.first);
             PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bg->GetMapId(), bracketId);
 
-            // RTG: only prepare enough queue-demand bots to start/maintain the BG,
-            // not enough to hard-fill it to MaxPlayersPerTeam.  This removes the
-            // big queue/login burst while keeping room for late real players.
-            uint32 teamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+            // RTG: start a new BG at the configured min/start threshold, then optionally
+            // keep filling already-started BG instances toward MaxPlayersPerTeam over time.
+            // AiPlayerbot.RandomBotQueueDemandMaxPerCheck controls how quickly the extra
+            // seats are prepared so this grows gradually instead of bursting all at once.
+            uint32 startTeamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+            uint32 activeTeamSize = sPlayerbotAIConfig.randomBotQueueDemandPvpFillActiveBgToMax
+                                        ? bg->GetMaxPlayersPerTeam()
+                                        : startTeamSize;
 
-            // RTG: if a real player is waiting and an existing BG has a replaceable same-team bot,
-            // do not spin up extra queue-demand bots for a new BG.  The displacement pass frees
-            // that occupied bot seat so the real player can join the active match instead.
+            // RTG: if a real player is waiting and an existing BG has room, or has a replaceable
+            // same-team bot, do not spin up queue-demand bots for a second BG.  Fill/replace
+            // inside the active match first so real players are kept together.
+            uint32 activeMaxPerTeam = bg->GetMaxPlayersPerTeam() * info.bgInstanceCount;
+            uint32 allianceCurrent = info.bgAlliancePlayerCount + info.bgAllianceBotCount;
+            uint32 hordeCurrent = info.bgHordePlayerCount + info.bgHordeBotCount;
             bool canSeatQueuedPlayerInExistingBg =
                 (!info.bgAllianceDemandLevels.empty() &&
-                 HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE)) ||
+                 (allianceCurrent < activeMaxPerTeam ||
+                  HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE))) ||
                 (!info.bgHordeDemandLevels.empty() &&
-                 HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE));
+                 (hordeCurrent < activeMaxPerTeam ||
+                  HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE)));
 
-            uint32 targetInstances = info.bgInstanceCount +
-                                     ((info.activeBgQueue && !canSeatQueuedPlayerInExistingBg) ? 1 : 0);
-            uint32 targetPerTeam = teamSize * targetInstances;
+            bool anyRealBgDemand = !info.bgAllianceDemandLevels.empty() || !info.bgHordeDemandLevels.empty();
+            uint32 queuedNewInstances =
+                (info.activeBgQueue && !canSeatQueuedPlayerInExistingBg && (!info.bgInstanceCount || anyRealBgDemand)) ? 1 : 0;
+            uint32 targetPerTeam = (activeTeamSize * info.bgInstanceCount) + (startTeamSize * queuedNewInstances);
 
             // RTG: use the average level of every real player queued for this BG/bracket,
             // not one faction's floor/ceiling. Both teams should fill the same reward band.
             std::vector<uint8> bgDemandLevels = info.bgAllianceDemandLevels;
             bgDemandLevels.insert(bgDemandLevels.end(), info.bgHordeDemandLevels.begin(), info.bgHordeDemandLevels.end());
 
-            uint32 allianceCurrent = info.bgAlliancePlayerCount + info.bgAllianceBotCount;
             if (targetPerTeam > allianceCurrent)
             {
                 requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_ALLIANCE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - allianceCurrent,
                             bgDemandLevels, info.minLevel, info.maxLevel, true);
             }
 
-            uint32 hordeCurrent = info.bgHordePlayerCount + info.bgHordeBotCount;
             if (targetPerTeam > hordeCurrent)
             {
                 requestMany(RTG_QUEUE_DEMAND_PVP, TEAM_HORDE, lfg::PLAYER_ROLE_DAMAGE, targetPerTeam - hordeCurrent,

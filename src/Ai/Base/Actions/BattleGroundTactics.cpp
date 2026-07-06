@@ -45,7 +45,7 @@ Position const WS_WAITING_POS_ALLIANCE_3 = {1521.235f, 1480.951f, 352.007f, 3.2f
 Position const WS_FLAG_POS_HORDE = {915.958f, 1433.925f, 346.193f, 0.0f};
 Position const WS_FLAG_POS_ALLIANCE = {1539.219f, 1481.747f, 352.458f, 0.0f};
 Position const WS_FLAG_HIDE_HORDE_1 = {926.142f, 1460.641f, 346.116f, 4.84f};
-Position const WS_FLAG_HIDE_HORDE_2 = {925.166f, 1458.084f, 355.966f, 0.00f};
+Position const WS_FLAG_HIDE_HORDE_2 = {925.166f, 1458.084f, 345.966f, 0.00f};
 Position const WS_FLAG_HIDE_HORDE_3 = {924.922f, 1423.672f, 345.524f, 0.82f};
 Position const WS_FLAG_HIDE_ALLIANCE_1 = {1529.249f, 1456.470f, 353.04f, 1.25f};
 Position const WS_FLAG_HIDE_ALLIANCE_2 = {1540.286f, 1476.026f, 352.692f, 2.91f};
@@ -1097,8 +1097,8 @@ std::vector<BattleBotPath*> const vPaths_WS = {
     &vPath_WSG_AllianceFlagRoom_to_AllianceGraveyard,
     &vPath_WSG_AllianceGraveyard_to_AllianceTunnel,
     &vPath_WSG_AllianceTunnel_to_AllianceFlagRoom,
-    &vPath_WSG_HordeTunnel_to_HordeBaseRoof,
-    &vPath_WSG_AllianceTunnel_to_AllianceBaseRoof,
+    // RTG: do not route WSG bots onto base roofs/upper wall paths. On RTG's 1-19 setup
+    // those led bots up inaccessible geometry at the start of WSG instead of playing.
     &vPath_WSG_AllianceTunnel_to_HordeTunnel,
     &vPath_WSG_AllianceGraveyardLower_to_HordeFlagRoom,
     &vPath_WSG_HordeGraveyardLower_to_AllianceFlagRoom,
@@ -1513,6 +1513,27 @@ static Position const& RTG_WsgStableHideSpot(TeamId team, uint32 stableRole, uin
 {
     std::vector<Position> const& spots = team == TEAM_ALLIANCE ? WS_FLAG_HIDE_ALLIANCE : WS_FLAG_HIDE_HORDE;
     return spots[(stableRole + botSeed) % spots.size()];
+}
+
+static void RTG_WsgClampInvalidUpperBaseTarget(Position& target)
+{
+    if (!target.IsPositionValid())
+        return;
+
+    float const x = target.GetPositionX();
+    float const y = target.GetPositionY();
+    float const z = target.GetPositionZ();
+
+    // RTG WSG has had bots walk up base walls/upper floors that should be inaccessible.
+    // Keep objectives inside the playable lower flag room/tunnel layer instead of letting
+    // MoveNear/MoveTo try to solve a high-Z wall target.
+    bool const hordeBaseUpperWall = x < 1040.0f && y > 1390.0f && y < 1535.0f && z > 351.0f;
+    bool const allianceBaseUpperWall = x > 1450.0f && y > 1380.0f && y < 1510.0f && z > 360.0f;
+
+    if (hordeBaseUpperWall)
+        target.Relocate(WS_FLAG_POS_HORDE);
+    else if (allianceBaseUpperWall)
+        target.Relocate(WS_FLAG_POS_ALLIANCE);
 }
 
 static bool RTG_BgIsCaptureSpellActive(Player* bot)
@@ -2874,6 +2895,7 @@ bool BGTactics::selectObjective(bool reset)
 
             if (target.IsPositionValid())
             {
+                RTG_WsgClampInvalidUpperBaseTarget(target);
                 pos.Set(target.GetPositionX(), target.GetPositionY(), target.GetPositionZ(), bot->GetMapId());
                 posMap["bg objective"] = pos;
                 return true;

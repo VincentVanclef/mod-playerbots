@@ -157,6 +157,7 @@ public:
     bool randomBotJoinLfg;
     bool randomBotQueueDemandSwap;
     bool randomBotQueueDemandPvpAverageQueuedPlayerLevel;
+    bool randomBotQueueDemandPvpFillActiveBgToMax;
     uint32 randomBotQueueDemandMaxPerCheck;
     uint32 randomBotQueueDemandRetireCooldown;
 

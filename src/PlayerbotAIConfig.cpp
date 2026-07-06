@@ -254,6 +254,8 @@ bool PlayerbotAIConfig::Initialize()
     randomBotQueueDemandSwap = sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotQueueDemandSwap", true);
     randomBotQueueDemandPvpAverageQueuedPlayerLevel =
         sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotQueueDemandPvPAverageQueuedPlayerLevel", true);
+    randomBotQueueDemandPvpFillActiveBgToMax =
+        sConfigMgr->GetOption<bool>("AiPlayerbot.RandomBotQueueDemandPvPFillActiveBgToMax", true);
     randomBotQueueDemandMaxPerCheck = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotQueueDemandMaxPerCheck", 4);
     randomBotQueueDemandRetireCooldown = sConfigMgr->GetOption<int32>("AiPlayerbot.RandomBotQueueDemandRetireCooldown", 90);
 

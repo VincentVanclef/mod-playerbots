@@ -713,9 +713,15 @@ AiPlayerbot.RandomBotQueueDemandSwap = 1
 # The result is clamped inside the active BG bracket, so 10-19 stays within 10-19.
 AiPlayerbot.RandomBotQueueDemandPvPAverageQueuedPlayerLevel = 1
 
+# RTG BG fill behavior.
+# 0 = only fill active BGs to the configured start threshold/min players per team.
+# 1 = after a BG has started, slowly continue filling the active match toward MaxPlayersPerTeam.
+# Real players can still take bot seats through the replacement logic.
+AiPlayerbot.RandomBotQueueDemandPvPFillActiveBgToMax = 1
+
 # RTG performance: offline queue-demand candidates are cached in code for 60s,
 # and empty candidate buckets back off for 30s to avoid repeated DB scans.
-# Keep this modest so BG queue fills do not login/queue too many bots in one burst.
+# This also controls how fast already-started BGs fill beyond minimum.
 AiPlayerbot.RandomBotQueueDemandMaxPerCheck = 2
 AiPlayerbot.RandomBotQueueDemandRetireCooldown = 90
 

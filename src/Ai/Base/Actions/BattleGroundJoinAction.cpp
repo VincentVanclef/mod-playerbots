@@ -229,11 +229,16 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
         return false;
 
     TeamId teamId = bot->GetTeamId();
-    // RTG: demand-fill bots should only fill a BG to the configured start threshold.
-    // Filling to MaxPlayersPerTeam logs in/queues many extra bots, causes queue bursts,
-    // and leaves less room for late real players.
+    // RTG: use the configured start threshold to launch a new BG, then optionally
+    // keep filling already-started BGs toward MaxPlayersPerTeam over time.  The
+    // queue-demand max-per-check setting controls the pace, so this does not log
+    // in a full extra wave all at once.
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bg->GetMapId(), bracketId);
-    uint32 TeamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+    uint32 bgStartTeamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+    uint32 bgActiveTeamSize = sPlayerbotAIConfig.randomBotQueueDemandPvpFillActiveBgToMax
+                                  ? bg->GetMaxPlayersPerTeam()
+                                  : bgStartTeamSize;
+    uint32 TeamSize = bgStartTeamSize;
     uint32 BracketSize = TeamSize * 2;
 
     // If the bot is in a group, only the leader can queue
@@ -312,14 +317,18 @@ bool BGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battlegroun
             return false;
     }
 
+    uint32 activeMaxPerTeam = bg->GetMaxPlayersPerTeam() * bgInstanceCount;
     bool canSeatQueuedPlayerInExistingBg =
         (!bgInfo.bgAllianceDemandLevels.empty() &&
-         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE)) ||
+         (bgAllianceBotCount + bgAlliancePlayerCount < activeMaxPerTeam ||
+          sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE))) ||
         (!bgInfo.bgHordeDemandLevels.empty() &&
-         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE));
+         (bgHordeBotCount + bgHordePlayerCount < activeMaxPerTeam ||
+          sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE)));
 
-    uint32 targetInstances = bgInstanceCount + ((activeBgQueue && !canSeatQueuedPlayerInExistingBg) ? 1 : 0);
-    uint32 targetPerTeam = TeamSize * targetInstances;
+    bool anyRealBgDemand = !bgInfo.bgAllianceDemandLevels.empty() || !bgInfo.bgHordeDemandLevels.empty();
+    uint32 queuedNewInstances = (activeBgQueue && !canSeatQueuedPlayerInExistingBg && (!bgInstanceCount || anyRealBgDemand)) ? 1 : 0;
+    uint32 targetPerTeam = (bgActiveTeamSize * bgInstanceCount) + (bgStartTeamSize * queuedNewInstances);
 
     if (teamId == TEAM_ALLIANCE)
     {
@@ -585,11 +594,16 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
 
     TeamId teamId = bot->GetTeamId();
 
-    // RTG: demand-fill bots should only fill a BG to the configured start threshold.
-    // Filling to MaxPlayersPerTeam logs in/queues many extra bots, causes queue bursts,
-    // and leaves less room for late real players.
+    // RTG: use the configured start threshold to launch a new BG, then optionally
+    // keep filling already-started BGs toward MaxPlayersPerTeam over time.  The
+    // queue-demand max-per-check setting controls the pace, so this does not log
+    // in a full extra wave all at once.
     PvPDifficultyEntry const* bracketEntry = GetBattlegroundBracketById(bg->GetMapId(), bracketId);
-    uint32 TeamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+    uint32 bgStartTeamSize = bracketEntry ? GetMinPlayersPerTeam(bg, bracketEntry) : bg->GetMaxPlayersPerTeam();
+    uint32 bgActiveTeamSize = sPlayerbotAIConfig.randomBotQueueDemandPvpFillActiveBgToMax
+                                  ? bg->GetMaxPlayersPerTeam()
+                                  : bgStartTeamSize;
+    uint32 TeamSize = bgStartTeamSize;
     uint32 BracketSize = TeamSize * 2;
 
     // If the bot is in a group, only the leader can queue
@@ -668,14 +682,18 @@ bool FreeBGJoinAction::shouldJoinBg(BattlegroundQueueTypeId queueTypeId, Battleg
             return false;
     }
 
+    uint32 activeMaxPerTeam = bg->GetMaxPlayersPerTeam() * bgInstanceCount;
     bool canSeatQueuedPlayerInExistingBg =
         (!bgInfo.bgAllianceDemandLevels.empty() &&
-         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE)) ||
+         (bgAllianceBotCount + bgAlliancePlayerCount < activeMaxPerTeam ||
+          sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_ALLIANCE))) ||
         (!bgInfo.bgHordeDemandLevels.empty() &&
-         sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE));
+         (bgHordeBotCount + bgHordePlayerCount < activeMaxPerTeam ||
+          sRandomPlayerbotMgr.HasReplaceableBattlegroundBotForRealPlayer(queueTypeId, bracketId, TEAM_HORDE)));
 
-    uint32 targetInstances = bgInstanceCount + ((activeBgQueue && !canSeatQueuedPlayerInExistingBg) ? 1 : 0);
-    uint32 targetPerTeam = TeamSize * targetInstances;
+    bool anyRealBgDemand = !bgInfo.bgAllianceDemandLevels.empty() || !bgInfo.bgHordeDemandLevels.empty();
+    uint32 queuedNewInstances = (activeBgQueue && !canSeatQueuedPlayerInExistingBg && (!bgInstanceCount || anyRealBgDemand)) ? 1 : 0;
+    uint32 targetPerTeam = (bgActiveTeamSize * bgInstanceCount) + (bgStartTeamSize * queuedNewInstances);
 
     if (teamId == TEAM_ALLIANCE)
     {
