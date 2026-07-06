@@ -185,9 +185,17 @@ bool MovementAction::MoveTo(uint32 mapId, float x, float y, float z, bool idle, 
     }
 
     bool generatePath = !bot->IsFlying() && !bot->isSwimming();
+
+    // RTG: WSG/EotS have cliffs, ramps, and floating islands. Letting the BG-wide
+    // DisableMoveSplinePath setting force straight MovePoint splines here makes bots
+    // appear to fly/glide across gaps or off the EotS start rock. Keep real ground
+    // path generation for these two small BG maps while leaving the config behavior
+    // unchanged everywhere else.
+    bool const rtgForceSmallBgGroundPath = bot->InBattleground() && (bot->GetMapId() == 489 || bot->GetMapId() == 566);
     bool disableMoveSplinePath =
-        sPlayerbotAIConfig.disableMoveSplinePath >= 2 ||
-        (sPlayerbotAIConfig.disableMoveSplinePath == 1 && bot->InBattleground());
+        !rtgForceSmallBgGroundPath &&
+        (sPlayerbotAIConfig.disableMoveSplinePath >= 2 ||
+         (sPlayerbotAIConfig.disableMoveSplinePath == 1 && bot->InBattleground()));
     if (Vehicle* vehicle = bot->GetVehicle())
     {
         VehicleSeatEntry const* seat = vehicle->GetSeatForPassenger(bot);

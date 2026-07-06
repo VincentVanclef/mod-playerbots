@@ -1303,8 +1303,8 @@ static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f}
 // RTG EotS start/rez rocks sit far above the playable field. Keep the custom
 // helper limited to the actual start shelf only. Once a bot is on the lower
 // playable slope/road, normal EotS objective movement should take over.
-static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 125.0f;
-static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1216.0f;
+static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 190.0f;
+static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1170.0f;
 
 static Position RTG_EotsStartPosition(TeamId team)
 {
@@ -1875,23 +1875,26 @@ bool BGTactics::eyJumpDown()
     };
 
     // Grounded exit only: no JumpTo and no teleport-style rescue. These points
-    // simply walk bots off the upper start shelf. After the side shelf/road point,
-    // RTG_EotsNeedsStartExit() becomes false and normal tower/flag objective
-    // movement takes over.
+    // walk bots off the upper start shelf and all the way to the real field crossroad.
+    // Stopping at the lower lip leaves bots too far from the normal EotS path network,
+    // which is what produced the bottom-of-rock AFK pileups.
     static EotsExitStep const hordeExit[] = {
         {EY_WAITING_POS_HORDE, 22.0f},
-        {{1838.007f, 1539.856f, 1253.383f, 0.0f}, 12.0f},
-        {{1846.264f, 1535.062f, 1240.796f, 0.0f}, 12.0f},
-        {{1849.813f, 1527.303f, 1237.262f, 0.0f}, 13.0f},
-        {{1849.041f, 1518.884f, 1223.624f, 0.0f}, 0.0f},
+        {{1832.335f, 1539.495f, 1256.417f, 0.0f}, 14.0f},
+        {{1846.995f, 1539.792f, 1243.077f, 0.0f}, 14.0f},
+        {{1846.243f, 1530.716f, 1238.477f, 0.0f}, 16.0f},
+        {{1883.154f, 1532.143f, 1202.143f, 0.0f}, 22.0f},
+        {{1941.452f, 1549.086f, 1176.700f, 0.0f}, 0.0f},
     };
 
     static EotsExitStep const allianceExit[] = {
         {EY_WAITING_POS_ALLIANCE, 22.0f},
-        {{2492.955f, 1597.769f, 1254.828f, 0.0f}, 12.0f},
-        {{2484.601f, 1598.209f, 1244.344f, 0.0f}, 12.0f},
-        {{2478.424f, 1609.539f, 1238.651f, 0.0f}, 13.0f},
-        {{2475.926f, 1619.658f, 1218.706f, 0.0f}, 0.0f},
+        {{2502.110f, 1604.330f, 1260.750f, 0.0f}, 14.0f},
+        {{2497.077f, 1596.198f, 1257.302f, 0.0f}, 14.0f},
+        {{2483.930f, 1597.062f, 1244.660f, 0.0f}, 16.0f},
+        {{2486.549f, 1617.651f, 1225.837f, 0.0f}, 18.0f},
+        {{2449.150f, 1601.792f, 1201.552f, 0.0f}, 22.0f},
+        {{2395.737f, 1588.287f, 1176.570f, 0.0f}, 0.0f},
     };
 
     EotsExitStep const* steps = bot->GetTeamId() == TEAM_HORDE ? hordeExit : allianceExit;
@@ -1916,7 +1919,7 @@ bool BGTactics::eyJumpDown()
 
     // If we are not near the start route anymore, let normal objective movement
     // take over instead of freezing or forcing another artificial correction.
-    if (closestDist > 45.0f)
+    if (closestDist > 55.0f)
         return false;
 
     if (closest + 1 >= stepCount)
@@ -2394,7 +2397,7 @@ bool BGTactics::selectObjective(bool reset)
                         if (Map* map = bot->GetMap())
                         {
                             float groundZ = map->GetHeight(rx, ry, rz);
-                            if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                            if (groundZ != VMAP_INVALID_HEIGHT_VALUE && std::isfinite(groundZ))
                                 rz = groundZ;
                         }
 
@@ -2512,7 +2515,7 @@ bool BGTactics::selectObjective(bool reset)
                     if (Map* map = bot->GetMap())
                     {
                         float groundZ = map->GetHeight(rx, ry, rz);
-                        if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                        if (groundZ != VMAP_INVALID_HEIGHT_VALUE && std::isfinite(groundZ))
                             rz = groundZ;
                     }
 
@@ -2555,7 +2558,7 @@ bool BGTactics::selectObjective(bool reset)
                 if (Map* map = bot->GetMap())
                 {
                     float groundZ = map->GetHeight(rx, ry, rz);
-                    if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                    if (groundZ != VMAP_INVALID_HEIGHT_VALUE && std::isfinite(groundZ))
                         rz = groundZ;
                 }
 
@@ -2795,7 +2798,7 @@ bool BGTactics::selectObjective(bool reset)
                 if (Map* map = bot->GetMap())
                 {
                     float groundZ = map->GetHeight(rx, ry, rz);
-                    if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                    if (groundZ != VMAP_INVALID_HEIGHT_VALUE && std::isfinite(groundZ))
                         rz = groundZ;
                 }
                 pos.Set(rx, ry, rz, bot->GetMapId());
@@ -2886,7 +2889,7 @@ bool BGTactics::selectObjective(bool reset)
                 if (Map* map = bot->GetMap())
                 {
                     float groundZ = map->GetHeight(rx, ry, rz);
-                    if (groundZ == VMAP_INVALID_HEIGHT_VALUE)
+                    if (groundZ != VMAP_INVALID_HEIGHT_VALUE && std::isfinite(groundZ))
                         rz = groundZ;
                 }
 
@@ -3091,14 +3094,15 @@ bool BGTactics::selectObjective(bool reset)
                 if (!foundObjective && homeOwnedCount < 2)
                     SetAssignedHomeObjective("opening_split_home_tower");
 
-                // 3) Enemy flag carrier: not everyone should chase. Use nearby bots plus stable intercept roles.
+                // 3) Enemy flag carrier: not everyone should chase, but make the map feel alive.
+                // Nearby bots and a deterministic interceptor group pressure the carrier instead of idling at towers.
                 if (!foundObjective)
                 {
                     Unit* enemyFC = AI_VALUE(Unit*, "enemy flag carrier");
                     if (RTG_EotsUnitValidForObjective(bot, enemyFC))
                     {
-                        bool const nearEnemyFC = bot->GetDistance(enemyFC) < 135.0f;
-                        bool const interceptor = (stableRole % 4) == 1;
+                        bool const nearEnemyFC = bot->GetDistance(enemyFC) < 155.0f;
+                        bool const interceptor = (stableRole % 3) == 1;
                         if (nearEnemyFC || interceptor)
                             SetUnitObjective(enemyFC, "enemy_flag_carrier_intercept");
                     }
@@ -3110,33 +3114,51 @@ bool BGTactics::selectObjective(bool reset)
                     Unit* friendlyFC = AI_VALUE(Unit*, "team flag carrier");
                     if (RTG_EotsUnitValidForObjective(bot, friendlyFC))
                     {
-                        bool const closeSupport = bot->GetDistance(friendlyFC) < 95.0f;
+                        bool const closeSupport = bot->GetDistance(friendlyFC) < 105.0f;
                         bool const assignedSupport = (stableRole % 5) == 0;
                         if (closeSupport || assignedSupport)
                             SetUnitObjective(friendlyFC, "support_friendly_carrier");
                     }
                 }
 
-                // 5) Center flag only after two towers exist, and only stable flag roles.
-                // This avoids early flag holders with nowhere reliable to cap and avoids whole-team center clumps.
-                if (!foundObjective && ownedCount >= 2 && centerFlagSpawned)
+                // 5) Opportunistic PvP pressure. This prevents tower campers from looking AFK when
+                // enemies are already in the area, without pulling the whole team off objectives.
+                if (!foundObjective)
                 {
-                    uint32 const stableFlagPct = std::max<uint32>(10,
-                        std::min<uint32>(35, sPlayerbotAIConfig.rtgPlayerbotsBgEotsCenterFlagChance / 3));
-                    bool const flagRole = strategy == EY_STRATEGY_FLAG_FOCUS || (botSeed % 100u) < stableFlagPct;
-                    if (flagRole)
-                        SetObjective(centerPos, "center_flag_stable_role");
+                    Unit* enemy = AI_VALUE(Unit*, "enemy player target");
+                    if (RTG_EotsUnitValidForObjective(bot, enemy) && bot->GetDistance(enemy) < 145.0f && (stableRole % 4) != 0)
+                        SetUnitObjective(enemy, "nearby_enemy_pressure");
                 }
 
-                // 6) Pressure enemy-side towers using stable assignments, not nearest clockwise hopping.
+                // 6) Center flag once at least one tower exists. EotS feels dead when bots wait for
+                // perfect two-tower control before anyone touches mid, so send a controlled runner group.
+                if (!foundObjective && ownedCount >= 1 && (centerFlagSpawned || ownedCount >= 2))
+                {
+                    uint32 stableFlagPct = sPlayerbotAIConfig.rtgPlayerbotsBgEotsCenterFlagChance;
+                    stableFlagPct = ownedCount >= 2 ? std::max<uint32>(35, std::min<uint32>(70, stableFlagPct))
+                                                    : std::max<uint32>(18, std::min<uint32>(35, stableFlagPct / 2));
+                    bool const flagRole = strategy == EY_STRATEGY_FLAG_FOCUS || (botSeed % 100u) < stableFlagPct || (stableRole % 5) == 2;
+                    if (flagRole)
+                        SetObjective(centerPos, "center_flag_runner");
+                }
+
+                // 7) Pressure enemy-side towers using stable assignments, not nearest clockwise hopping.
                 if (!foundObjective)
                     SetAssignedEnemySideObjective("assigned_enemy_side_tower");
 
-                // 7) If no enemy-side tower is attackable, defend a stable owned tower.
-                if (!foundObjective)
+                // 8) Only a small guard group should sit on owned towers. Everyone else should keep
+                // creating pressure at mid or on the enemy side instead of camping a captured base.
+                bool const towerGuard = (stableRole % 4) == 0;
+                if (!foundObjective && towerGuard)
                     SetAssignedOwnedDefenseObjective("assigned_owned_tower_defense");
 
-                // 8) Last resort: center anchor. Never choose the EotS start/retreat positions here.
+                if (!foundObjective && ownedCount > 0)
+                    SetObjective(centerPos, centerFlagSpawned ? "active_mid_pressure" : "active_mid_control");
+
+                if (!foundObjective)
+                    SetAssignedOwnedDefenseObjective("fallback_owned_tower_defense");
+
+                // 9) Last resort: center anchor. Never choose the EotS start/retreat positions here.
                 if (!foundObjective)
                     SetObjective(centerPos, "fallback_hold_center");
             }
@@ -3905,7 +3927,7 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
         currPoint++;
 
     uint32 nPoint = currPoint;
-    if (!isEyStartPath)
+    if (!isEyStartPath && bgType != BATTLEGROUND_EY)
     {
         nPoint = reverse ? std::max((int)(currPoint - urand(1, 5)), 0)
                          : std::min((uint32)(currPoint + urand(1, 5)), lastPointInPath);
