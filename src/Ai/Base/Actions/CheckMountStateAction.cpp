@@ -191,6 +191,21 @@ bool CheckMountStateAction::isUseful()
     // BG Logic
     if (bot->InBattleground())
     {
+        BattlegroundTypeId bgType = bot->GetBattlegroundTypeId();
+        if (bgType == BATTLEGROUND_RB)
+            if (Battleground* bg = bot->GetBattleground())
+                bgType = bg->GetBgTypeID(true);
+
+        // RTG: WSG is intentionally no-mount.  Leaving the generic mount strategy active
+        // there makes bots stop movement over and over while the mount cast fails.
+        if (bgType == BATTLEGROUND_WS)
+            return false;
+
+        // RTG: EotS mounts are allowed after bots leave the high start/rez rock.
+        // Do not let the mount action interrupt the required start-rock exit path.
+        if (bgType == BATTLEGROUND_EY && bot->GetMapId() == 566 && bot->GetPositionZ() > 1216.0f)
+            return false;
+
         // Do not use when carrying BG Flags
         if (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
             return false;
