@@ -1607,7 +1607,12 @@ static Position RTG_EotsObjectiveAnchor(uint32 nodeId, uint32 seed, bool exact =
 // would reset, pick another nearby lane, and bounce back to the fork.  Keep a
 // small durable mission beside that position so reset/check pulses rebuild the
 // same assignment instead of changing the bot's mind every few seconds.
-static float constexpr RTG_EOTS_TOWER_HOLD_RADIUS = 58.0f;
+// RTG: do not treat the outer tower approach/perimeter as "arrived".
+// EotS capture credit requires bots to keep walking into the actual tower
+// capture area.  A larger value here caused bots to stop 20-40 yards short,
+// look like they were defending, and never apply capture pressure.
+static float constexpr RTG_EOTS_TOWER_ARRIVE_RADIUS_2D = 7.5f;
+static float constexpr RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF = 8.0f;
 static uint32 constexpr RTG_EOTS_CAPTURE_MISSION_MS = 70000;
 static uint32 constexpr RTG_EOTS_CAPTURE_HOLD_MS = 52000;
 static uint32 constexpr RTG_EOTS_HOLD_MISSION_MS = 42000;
@@ -1820,9 +1825,17 @@ static bool RTG_EotsShouldHoldTowerMission(Player* bot, Battleground* bg, Positi
     if (!nodeId || !RTG_EotsGetNodePosition(nodeId, nodePos))
         return false;
 
-    float const distToNode = bot->GetExactDist(nodePos.GetPositionX(), nodePos.GetPositionY(), nodePos.GetPositionZ());
-    if (distToNode > RTG_EOTS_TOWER_HOLD_RADIUS)
+    // Hold only after the bot reaches its mission anchor, not merely the
+    // broad tower perimeter.  The first mission patch used the node center
+    // with a very large radius, which made bots stop on the approach road
+    // before they were actually inside the capture area.
+    float const distToTarget2d = bot->GetExactDist2d(mission->targetX, mission->targetY);
+    float const zDiff = std::fabs(bot->GetPositionZ() - mission->targetZ);
+    if (distToTarget2d > RTG_EOTS_TOWER_ARRIVE_RADIUS_2D || zDiff > RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
+    {
+        RTG_EotsDebugRaw(bot, bg, "mission_approach", RTG_EotsMissionName(mission->type), nodeId);
         return false;
+    }
 
     if (bot->isMoving())
         bot->StopMoving();
@@ -4087,12 +4100,14 @@ bool BGTactics::moveToObjective(bool ignoreDist)
         if (bgType == BATTLEGROUND_EY && RTG_EotsShouldHoldTowerMission(bot, bg, pos))
             return true;
 
-        if (bgType == BATTLEGROUND_EY && RTG_EotsIsTowerObjective(pos) && distToObjective < RTG_EOTS_TOWER_HOLD_RADIUS)
+        if (bgType == BATTLEGROUND_EY && RTG_EotsIsTowerObjective(pos) &&
+            bot->GetExactDist2d(pos.x, pos.y) < RTG_EOTS_TOWER_ARRIVE_RADIUS_2D &&
+            std::fabs(bot->GetPositionZ() - pos.z) <= RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
         {
             if (bot->isMoving())
                 bot->StopMoving();
 
-            RTG_EotsDebugRaw(bot, bg, "tower_hold", "near_capture_objective");
+            RTG_EotsDebugRaw(bot, bg, "tower_hold", "inside_capture_objective");
             return true;
         }
 
@@ -4466,12 +4481,14 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
             if (RTG_EotsShouldHoldTowerMission(bot, bg, pos))
                 return true;
 
-            if (RTG_EotsIsTowerObjective(pos) && bot->GetDistance(pos.x, pos.y, pos.z) < RTG_EOTS_TOWER_HOLD_RADIUS)
+            if (RTG_EotsIsTowerObjective(pos) &&
+                bot->GetExactDist2d(pos.x, pos.y) < RTG_EOTS_TOWER_ARRIVE_RADIUS_2D &&
+                std::fabs(bot->GetPositionZ() - pos.z) <= RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
             {
                 if (bot->isMoving())
                     bot->StopMoving();
 
-                RTG_EotsDebugRaw(bot, bg, "tower_hold", "path_end_capture_objective");
+                RTG_EotsDebugRaw(bot, bg, "tower_hold", "path_end_inside_capture_objective");
                 return true;
             }
         }
