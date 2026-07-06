@@ -1139,14 +1139,15 @@ std::vector<BattleBotPath*> const vPaths_AV = {
 };
 
 std::vector<BattleBotPath*> const vPaths_EY = {
-    &vPath_EY_Horde_Spawn_to_Crossroad1Horde,
+    // RTG: normal EotS field graph only. Spawn/rez rock exits are handled
+    // exclusively by eyJumpDown() so ordinary objective routing can never
+    // choose a start-rock lane as a valid battlefield route.
     &vPath_EY_Horde_Crossroad1Horde_to_Crossroad2Horde,
     &vPath_EY_Crossroad1Horde_to_Blood_Elf_Tower,
     &vPath_EY_Crossroad1Horde_to_Fel_Reaver_Ruins,
     &vPath_EY_Crossroad2Horde_to_Blood_Elf_Tower,
     &vPath_EY_Crossroad2Horde_to_Fel_Reaver_Ruins,
     &vPath_EY_Crossroad2Horde_to_Flag,
-    &vPath_EY_Alliance_Spawn_to_Crossroad1Alliance,
     &vPath_EY_Alliance_Crossroad1Alliance_to_Crossroad2Alliance,
     &vPath_EY_Crossroad1Alliance_to_Mage_Tower,
     &vPath_EY_Crossroad1Alliance_to_Draenei_Ruins,
@@ -1362,6 +1363,26 @@ static bool RTG_EotsGetNodePosition(uint32 nodeId, Position& out)
     return true;
 }
 
+static bool RTG_EotsIsTowerObjective(PositionInfo const& pos, uint32* outNodeId = nullptr)
+{
+    if (!pos.valueSet)
+        return false;
+
+    Position const objectivePos(pos.x, pos.y, pos.z, 0.0f);
+    for (auto const& node : EY_NodePositions)
+    {
+        Position const& nodePos = node.second;
+        if (objectivePos.GetExactDist(nodePos.GetPositionX(), nodePos.GetPositionY(), nodePos.GetPositionZ()) <= 22.0f)
+        {
+            if (outNodeId)
+                *outNodeId = node.first;
+            return true;
+        }
+    }
+
+    return false;
+}
+
 static bool RTG_EotsIsHomeNode(TeamId team, uint32 nodeId)
 {
     if (team == TEAM_HORDE)
@@ -1468,7 +1489,7 @@ static bool RTG_EotsAllowObjectivePulse(Player* bot, Battleground* bg)
     static std::unordered_map<uint32, uint32> lastPulseMsByBot;
     uint32 const botGuid = bot->GetGUID().GetCounter();
     uint32 const now = getMSTime();
-    uint32 const minPulseMs = bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) ? 2500u : 12000u;
+    uint32 const minPulseMs = bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) ? 2500u : 18000u;
 
     auto itr = lastPulseMsByBot.find(botGuid);
     if (itr != lastPulseMsByBot.end() && getMSTimeDiff(itr->second, now) < minPulseMs)
@@ -2179,6 +2200,9 @@ bool BGTactics::Execute(Event /*event*/)
 
         if (!isCarryingFlag)
         {
+            if (bgType == BATTLEGROUND_EY && bot->IsAlive() && !RTG_EotsAllowObjectivePulse(bot, bg))
+                return false;
+
             if (bgType == BATTLEGROUND_WS && bot->IsAlive() && !RTG_WsgAllowObjectivePulse(bot, bg))
                 return false;
 
@@ -3739,8 +3763,23 @@ bool BGTactics::moveToObjective(bool ignoreDist)
             return false;
         }
 
+        float const distToObjective = bot->GetDistance(pos.x, pos.y, pos.z);
+
+        // EotS towers are capture areas, not normal click-and-reset objectives.
+        // When a bot reaches a tower assignment, hold the circle long enough for
+        // natural capture pressure instead of instantly clearing the objective and
+        // bouncing back to a road fork.
+        if (bgType == BATTLEGROUND_EY && RTG_EotsIsTowerObjective(pos) && distToObjective < 8.0f)
+        {
+            if (bot->isMoving())
+                bot->StopMoving();
+
+            RTG_EotsDebugRaw(bot, bg, "tower_hold", "near_capture_objective");
+            return true;
+        }
+
         // don't try to move if already close
-        if (bot->GetDistance(pos.x, pos.y, pos.z) < 4.0f)
+        if (distToObjective < 4.0f)
         {
             resetObjective();
             return true;
@@ -4097,6 +4136,19 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
         // std::ostringstream out;
         // out << "Reached path end!";
         // bot->Say(out.str(), LANG_UNIVERSAL);
+        if (bgType == BATTLEGROUND_EY && bot->IsAlive() && !inCombat)
+        {
+            PositionInfo pos = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
+            if (RTG_EotsIsTowerObjective(pos) && bot->GetDistance(pos.x, pos.y, pos.z) < 28.0f)
+            {
+                if (bot->isMoving())
+                    bot->StopMoving();
+
+                RTG_EotsDebugRaw(bot, bg, "tower_hold", "path_end_capture_objective");
+                return true;
+            }
+        }
+
         resetObjective();
         return false;
     }
