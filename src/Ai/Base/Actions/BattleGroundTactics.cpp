@@ -2241,9 +2241,28 @@ bool BGTactics::Execute(Event /*event*/)
 
         if (bgType == BATTLEGROUND_EY)
         {
-            if (!moveToObjective(true))
-                return resetObjective();
-            return true;
+            // RTG EotS: do not direct-path everything with MoveNear(true).
+            // That made bots leave a tower, run back to the first road fork/crossroad,
+            // then fail to chain into the next lane.  EotS needs its manual waypoint
+            // graph: tower -> crossroad -> mid/enemy tower.
+            if (moveToObjective(false))
+                return true;
+
+            if (selectObjectiveWp(*vPaths))
+                return true;
+
+            if (startNewPathBegin(*vPaths))
+                return true;
+
+            if (startNewPathFree(*vPaths))
+                return true;
+
+            // Last resort only.  If the waypoint graph cannot help, try a direct
+            // ground path once before forcing a fresh objective.
+            if (moveToObjective(true))
+                return true;
+
+            return resetObjective();
         }
 
         if (!moveToObjective(false))
