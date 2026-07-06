@@ -13,6 +13,7 @@ class ChatHandler;
 class Battleground;
 class PlayerbotAI;
 struct Position;
+class PositionInfo;
 
 #define SPELL_CAPTURE_BANNER 21651
 
@@ -117,6 +118,7 @@ private:
     bool moveToStart(bool force = false);
     bool selectObjective(bool reset = false);
     bool moveToObjective(bool ignoreDist);
+    bool recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo const& pos);
     bool selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths);
     bool moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 currentPoint, bool reverse = false);
     bool startNewPathBegin(std::vector<BattleBotPath*> const& vPaths);
