@@ -1300,26 +1300,54 @@ static bool RTG_EotsUnitValidForObjective(Player* bot, Unit* unit)
 // or cannot be resolved. This avoids falling back to the EotS start rock / retreat positions.
 static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f};
 
-// RTG EotS start/rez rocks sit far above the playable field. Keep the custom
-// helper limited to the actual start shelf only. Once a bot is on the lower
-// playable slope/road, normal EotS objective movement should take over.
-static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 190.0f;
-static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1170.0f;
+// RTG EotS start/rez rocks sit far above the playable field. The stock
+// pathfinder can stall on the shelf/lip, so keep bots in an explicit exit-only
+// state until they have reached the lower field crossroad. Do not let normal
+// objective/chase/mount logic take over while they are still on the start rock.
+static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 305.0f;
+static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1168.0f;
+static float constexpr RTG_EOTS_START_EXIT_FIELD_Z = 1186.0f;
 
 static Position RTG_EotsStartPosition(TeamId team)
 {
     return team == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
 }
 
-
-static bool RTG_EotsNeedsStartExit(Player* bot)
+static bool RTG_EotsReachedStartExitField(Player* bot)
 {
     if (!bot)
         return false;
 
+    // Horde exits east/southeast from x~1809 to the road at x~1941. Alliance
+    // exits west/southwest from x~2524 to the road at x~2396. Once a bot is at
+    // these lower-road thresholds, normal EotS pathing is safe again.
+    if (bot->GetTeamId() == TEAM_HORDE)
+        return bot->GetPositionX() >= 1932.0f && bot->GetPositionZ() <= RTG_EOTS_START_EXIT_FIELD_Z;
+
+    return bot->GetPositionX() <= 2408.0f && bot->GetPositionZ() <= RTG_EOTS_START_EXIT_FIELD_Z;
+}
+
+static bool RTG_EotsNeedsStartExit(Player* bot)
+{
+    if (!bot || bot->GetMapId() != 566)
+        return false;
+
+    if (RTG_EotsReachedStartExitField(bot))
+        return false;
+
     Position const start = RTG_EotsStartPosition(bot->GetTeamId());
-    return bot->GetPositionZ() > RTG_EOTS_START_EXIT_MIN_Z &&
-           bot->GetDistance(start) < RTG_EOTS_START_EXIT_MAX_DIST;
+    if (bot->GetDistance(start) > RTG_EOTS_START_EXIT_MAX_DIST)
+        return false;
+
+    if (bot->GetPositionZ() > RTG_EOTS_START_EXIT_MIN_Z)
+        return true;
+
+    // Recovery for bots that slid or path-steered onto a side/lower rock but
+    // are still on the start-island side of the real field crossroad.
+    if (bot->GetTeamId() == TEAM_HORDE)
+        return bot->GetPositionX() < 1932.0f;
+
+    return bot->GetPositionX() > 2408.0f;
 }
 
 
@@ -1874,65 +1902,166 @@ bool BGTactics::eyJumpDown()
         float reach;
     };
 
-    // Grounded exit only: no JumpTo and no teleport-style rescue. These points
-    // walk bots off the upper start shelf and all the way to the real field crossroad.
-    // Stopping at the lower lip leaves bots too far from the normal EotS path network,
-    // which is what produced the bottom-of-rock AFK pileups.
+    struct EotsExitProgress
+    {
+        uint32 nextStep = 0;
+        float lastX = 0.0f;
+        float lastY = 0.0f;
+        float lastZ = 0.0f;
+        uint32 lastCheckMs = 0;
+        uint32 stuckSinceMs = 0;
+        TeamId team = TEAM_NEUTRAL;
+        bool initialized = false;
+    };
+
+    // Exit-only lane.  Use short, explicit steps and keep per-bot progress so a
+    // bot on the lip does not re-evaluate the closest waypoint every pulse and
+    // start crab-walking around the rock for minutes.
     static EotsExitStep const hordeExit[] = {
         {EY_WAITING_POS_HORDE, 22.0f},
-        {{1832.335f, 1539.495f, 1256.417f, 0.0f}, 14.0f},
-        {{1846.995f, 1539.792f, 1243.077f, 0.0f}, 14.0f},
-        {{1846.243f, 1530.716f, 1238.477f, 0.0f}, 16.0f},
-        {{1883.154f, 1532.143f, 1202.143f, 0.0f}, 22.0f},
-        {{1941.452f, 1549.086f, 1176.700f, 0.0f}, 0.0f},
+        {{1832.335f, 1539.495f, 1256.417f, 0.0f}, 11.0f},
+        {{1846.995f, 1539.792f, 1243.077f, 0.0f}, 11.0f},
+        {{1846.243f, 1530.716f, 1238.477f, 0.0f}, 12.0f},
+        {{1883.154f, 1532.143f, 1202.143f, 0.0f}, 15.0f},
+        {{1941.452f, 1549.086f, 1176.700f, 0.0f}, 18.0f},
     };
 
     static EotsExitStep const allianceExit[] = {
         {EY_WAITING_POS_ALLIANCE, 22.0f},
-        {{2502.110f, 1604.330f, 1260.750f, 0.0f}, 14.0f},
-        {{2497.077f, 1596.198f, 1257.302f, 0.0f}, 14.0f},
-        {{2483.930f, 1597.062f, 1244.660f, 0.0f}, 16.0f},
-        {{2486.549f, 1617.651f, 1225.837f, 0.0f}, 18.0f},
-        {{2449.150f, 1601.792f, 1201.552f, 0.0f}, 22.0f},
-        {{2395.737f, 1588.287f, 1176.570f, 0.0f}, 0.0f},
+        {{2502.110f, 1604.330f, 1260.750f, 0.0f}, 11.0f},
+        {{2497.077f, 1596.198f, 1257.302f, 0.0f}, 11.0f},
+        {{2483.930f, 1597.062f, 1244.660f, 0.0f}, 12.0f},
+        {{2486.549f, 1617.651f, 1225.837f, 0.0f}, 13.0f},
+        {{2449.150f, 1601.792f, 1201.552f, 0.0f}, 15.0f},
+        {{2395.737f, 1588.287f, 1176.570f, 0.0f}, 18.0f},
     };
+
+    uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
+    static std::unordered_map<uint64, EotsExitProgress> progressByBot;
+
+    auto clearProgress = [&]()
+    {
+        progressByBot.erase(key);
+    };
+
+    if (!RTG_EotsNeedsStartExit(bot))
+    {
+        clearProgress();
+        return false;
+    }
 
     EotsExitStep const* steps = bot->GetTeamId() == TEAM_HORDE ? hordeExit : allianceExit;
     uint32 const stepCount = bot->GetTeamId() == TEAM_HORDE
                                ? uint32(sizeof(hordeExit) / sizeof(hordeExit[0]))
                                : uint32(sizeof(allianceExit) / sizeof(allianceExit[0]));
 
-    if (!RTG_EotsNeedsStartExit(bot))
-        return false;
-
-    uint32 closest = 0;
-    float closestDist = FLT_MAX;
-    for (uint32 i = 0; i < stepCount; ++i)
+    auto chooseInitialStep = [&]() -> uint32
     {
-        float const dist = bot->GetDistance(steps[i].pos);
-        if (dist < closestDist)
+        uint32 closest = 0;
+        float closestDist = FLT_MAX;
+        for (uint32 i = 0; i < stepCount; ++i)
         {
-            closest = i;
-            closestDist = dist;
+            float const dist = bot->GetDistance(steps[i].pos);
+            if (dist < closestDist)
+            {
+                closest = i;
+                closestDist = dist;
+            }
+        }
+
+        // If close enough to the closest breadcrumb, advance to the next one.
+        // Otherwise move back onto that breadcrumb first. This handles bots that
+        // spawned normally and bots that wandered onto the side/lower lip.
+        float const reach = steps[closest].reach > 0.0f ? steps[closest].reach : 12.0f;
+        if (closest + 1 < stepCount && closestDist <= std::max(18.0f, reach * 1.8f))
+            return closest + 1;
+
+        return closest;
+    };
+
+    uint32 const now = getMSTime();
+    EotsExitProgress& progress = progressByBot[key];
+    if (!progress.initialized || progress.team != bot->GetTeamId() || progress.nextStep >= stepCount)
+    {
+        progress.nextStep = chooseInitialStep();
+        progress.lastX = bot->GetPositionX();
+        progress.lastY = bot->GetPositionY();
+        progress.lastZ = bot->GetPositionZ();
+        progress.lastCheckMs = now;
+        progress.stuckSinceMs = 0;
+        progress.team = bot->GetTeamId();
+        progress.initialized = true;
+    }
+
+    if (progress.nextStep >= stepCount)
+    {
+        clearProgress();
+        return false;
+    }
+
+    float distToStep = bot->GetDistance(steps[progress.nextStep].pos);
+    while (progress.nextStep + 1 < stepCount && distToStep <= steps[progress.nextStep].reach)
+    {
+        ++progress.nextStep;
+        distToStep = bot->GetDistance(steps[progress.nextStep].pos);
+        progress.stuckSinceMs = 0;
+        progress.lastX = bot->GetPositionX();
+        progress.lastY = bot->GetPositionY();
+        progress.lastZ = bot->GetPositionZ();
+        progress.lastCheckMs = now;
+    }
+
+    bool forceReissue = false;
+    if (getMSTimeDiff(progress.lastCheckMs, now) >= 2000)
+    {
+        float const moved = bot->GetExactDist(progress.lastX, progress.lastY, progress.lastZ);
+        progress.lastCheckMs = now;
+
+        if (moved > 1.75f)
+        {
+            progress.lastX = bot->GetPositionX();
+            progress.lastY = bot->GetPositionY();
+            progress.lastZ = bot->GetPositionZ();
+            progress.stuckSinceMs = 0;
+        }
+        else
+        {
+            if (!progress.stuckSinceMs)
+                progress.stuckSinceMs = now;
+
+            // Start-rock pathing can fail silently and leave the old move delay
+            // blocking new orders. After a short pause, force the next breadcrumb;
+            // after a longer pause, skip one breadcrumb so the bot stops circling
+            // the same lip point forever.
+            uint32 const stuckMs = getMSTimeDiff(progress.stuckSinceMs, now);
+            if (stuckMs >= 3500)
+                forceReissue = true;
+
+            if (stuckMs >= 8500 && progress.nextStep + 1 < stepCount)
+            {
+                ++progress.nextStep;
+                progress.stuckSinceMs = now;
+                forceReissue = true;
+            }
         }
     }
 
-    // If we are not near the start route anymore, let normal objective movement
-    // take over instead of freezing or forcing another artificial correction.
-    if (closestDist > 55.0f)
-        return false;
+    EotsExitStep const& next = steps[progress.nextStep];
 
-    if (closest + 1 >= stepCount)
-        return false;
+    if (forceReissue || !bot->isMoving())
+    {
+        bot->StopMoving();
+        bot->GetMotionMaster()->Clear();
+        AI_VALUE(LastMovement&, "last movement").clear();
+    }
 
-    EotsExitStep const& current = steps[closest];
-    EotsExitStep const& next = steps[closest + 1];
+    RTG_EotsDebugRaw(bot, bg, "rock_exit", forceReissue ? "forced_breadcrumb" : "breadcrumb");
 
-    if (current.reach > 0.0f && closestDist > std::max(35.0f, current.reach * 2.8f))
-        return false;
-
-    RTG_EotsDebugRaw(bot, bg, "rock_exit", "grounded_move_step");
-    return MoveTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ());
+    // Use exact short breadcrumbs only while on the start rock.  The points hug
+    // the exit ramp closely and avoid the slow/failed mmap search that makes
+    // bots look like they are taking evasive action on the shelf.
+    return MoveTo(bg->GetMapId(), next.pos.GetPositionX(), next.pos.GetPositionY(), next.pos.GetPositionZ(),
+                  false, false, false, true, MovementPriority::MOVEMENT_FORCED, true);
 }
 
 
@@ -2007,6 +2136,18 @@ bool BGTactics::Execute(Event /*event*/)
 
     if (getName() == "move to start")
         return moveToStart();
+
+    // RTG EotS: while a bot is still on the start/rez rock, every BG tactics
+    // pulse should be treated as an exit pulse.  This prevents select/check/
+    // protect logic from sending bots into chase/evasive behavior on the shelf
+    // before they have reached the actual field path network.
+    if (bgType == BATTLEGROUND_EY && bg->GetStatus() == STATUS_IN_PROGRESS && RTG_EotsNeedsStartExit(bot))
+    {
+        if (getName() == "move to objective" || getName() == "select objective" ||
+            getName() == "check objective" || getName() == "check flag" ||
+            getName() == "protect fc" || getName() == "reset objective force")
+            return eyJumpDown();
+    }
 
     if (getName() == "reset objective force")
     {

@@ -20,6 +20,35 @@
 static constexpr uint32 SPELL_COLD_WEATHER_FLYING = 54197;
 static constexpr float PARACHUTE_LAND_THRESHOLD = 15.0f;
 
+static bool RTG_EotsShouldBlockMountOnStartRock(Player* bot)
+{
+    if (!bot || bot->GetMapId() != 566)
+        return false;
+
+    float const startX = bot->GetTeamId() == TEAM_HORDE ? 1809.102f : 2523.827f;
+    float const startY = bot->GetTeamId() == TEAM_HORDE ? 1540.854f : 1596.915f;
+    float const startZ = bot->GetTeamId() == TEAM_HORDE ? 1267.142f : 1270.204f;
+
+    if (bot->GetDistance(startX, startY, startZ) > 305.0f)
+        return false;
+
+    // Same thresholds as the EotS rock-exit helper in BattleGroundTactics.cpp.
+    // Do not let mount casting StopMoving() while bots are still on the shelf,
+    // lower lip, or the side rock. Mounts are fine after the field crossroad.
+    if (bot->GetTeamId() == TEAM_HORDE)
+    {
+        if (bot->GetPositionX() >= 1932.0f && bot->GetPositionZ() <= 1186.0f)
+            return false;
+
+        return bot->GetPositionZ() > 1168.0f || bot->GetPositionX() < 1932.0f;
+    }
+
+    if (bot->GetPositionX() <= 2408.0f && bot->GetPositionZ() <= 1186.0f)
+        return false;
+
+    return bot->GetPositionZ() > 1168.0f || bot->GetPositionX() > 2408.0f;
+}
+
 // Define the static map / init bool for caching bot preferred mount data globally
 std::unordered_map<uint32, PreferredMountCache> CheckMountStateAction::mountCache;
 bool CheckMountStateAction::preferredMountTableChecked = false;
@@ -63,6 +92,10 @@ MountData CollectMountData(const Player* bot)
 
 bool CheckMountStateAction::Execute(Event /*event*/)
 {
+    master = GetMaster();
+    botInShapeshiftForm = bot->GetShapeshiftForm();
+    masterInShapeshiftForm = master ? master->GetShapeshiftForm() : FORM_NONE;
+
     // Forced flight dismount:
     // Bots get stale flight movement flags after a forced dismount (e.g: Dalaran) because the post landing dismount cleanup
     // needs MSG_MOVE_FALL_LAND (a client opcode) and client movement packets. The stale flags cause the bot to be stuck with
@@ -77,6 +110,18 @@ bool CheckMountStateAction::Execute(Event /*event*/)
             bot->RemoveAurasByType(SPELL_AURA_FEATHER_FALL);
     }
     ClearStaleFlightFlags();
+
+    // BGs should never keep bot-side flight state. If a bot arrived with a
+    // flight mount/form aura from a master-follow decision, cancel it before
+    // movement code tries to path while flying.
+    if (bot->InBattleground() &&
+        (bot->HasIncreaseMountedFlightSpeedAura() || bot->HasFlyAura() ||
+         bot->GetShapeshiftForm() == FORM_FLIGHT || bot->GetShapeshiftForm() == FORM_FLIGHT_EPIC))
+    {
+        Dismount();
+        botAI->RemoveShapeshift();
+        return true;
+    }
 
     // Determine if there are no attackers
     bool noAttackers = !AI_VALUE2(bool, "combat", "self target") || !AI_VALUE(uint8, "attacker count");
@@ -156,12 +201,8 @@ bool CheckMountStateAction::isUseful()
 
     master = GetMaster();
 
-    // Get shapeshift states, only applicable when there's a master
-    if (master)
-    {
-        botInShapeshiftForm = bot->GetShapeshiftForm();
-        masterInShapeshiftForm = master->GetShapeshiftForm();
-    }
+    botInShapeshiftForm = bot->GetShapeshiftForm();
+    masterInShapeshiftForm = master ? master->GetShapeshiftForm() : FORM_NONE;
 
     // Not useful when in combat and not currently mounted / travel formed
     if ((bot->IsInCombat() || botAI->GetState() == BOT_STATE_COMBAT) &&
@@ -201,9 +242,12 @@ bool CheckMountStateAction::isUseful()
         if (bgType == BATTLEGROUND_WS)
             return false;
 
-        // RTG: EotS mounts are allowed after bots leave the high start/rez rock.
-        // Do not let the mount action interrupt the required start-rock exit path.
-        if (bgType == BATTLEGROUND_EY && bot->GetMapId() == 566 && bot->GetPositionZ() > 1216.0f)
+        // RTG: EotS mounts are allowed, but only after bots have fully left the
+        // start/rez rock. The mount action StopMoving() call was interrupting
+        // the exit path and making bots circle on the shelf/lower lip.
+        if (bgType == BATTLEGROUND_EY && RTG_EotsShouldBlockMountOnStartRock(bot) &&
+            !bot->IsMounted() && botInShapeshiftForm != FORM_TRAVEL &&
+            botInShapeshiftForm != FORM_FLIGHT && botInShapeshiftForm != FORM_FLIGHT_EPIC)
             return false;
 
         // Do not use when carrying BG Flags
@@ -566,6 +610,12 @@ int32 CheckMountStateAction::CalculateMasterMountSpeed(Player* master) const
 
 uint32 CheckMountStateAction::GetMountType(Player* master) const
 {
+    // Never select flying-mount spell buckets in battlegrounds. Some flying
+    // mounts can be cast as ground mounts by clients, but bot-side aura/type
+    // handling may still leave stale flight flags and make EotS bots glide.
+    if (bot->InBattleground())
+        return 0;
+
     bool const noRealMaster = (!master || master == bot);
 
     if (noRealMaster)
