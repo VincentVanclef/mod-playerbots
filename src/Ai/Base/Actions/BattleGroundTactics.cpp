@@ -1101,9 +1101,7 @@ std::vector<BattleBotPath*> const vPaths_WS = {
     // those led bots up inaccessible geometry at the start of WSG instead of playing.
     &vPath_WSG_AllianceTunnel_to_HordeTunnel,
     &vPath_WSG_AllianceGraveyardLower_to_HordeFlagRoom,
-    &vPath_WSG_HordeGraveyardLower_to_AllianceFlagRoom,
-    &vPath_WSG_AllianceGraveyardJump,
-    &vPath_WSG_HordeGraveyardJump
+    &vPath_WSG_HordeGraveyardLower_to_AllianceFlagRoom
 };
 
 std::vector<BattleBotPath*> const vPaths_AB = {
@@ -1533,6 +1531,17 @@ static Position const& RTG_WsgStableHideSpot(TeamId team, uint32 stableRole, uin
 {
     std::vector<Position> const& spots = team == TEAM_ALLIANCE ? WS_FLAG_HIDE_ALLIANCE : WS_FLAG_HIDE_HORDE;
     return spots[(stableRole + botSeed) % spots.size()];
+}
+
+static bool RTG_WsgHasFlag(Player* bot)
+{
+    return bot &&
+           (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG));
+}
+
+static bool RTG_WsgIsNear(Position const& a, Position const& b, float range2d, float maxZDiff = 12.0f)
+{
+    return a.GetExactDist2d(b) <= range2d && std::fabs(a.GetPositionZ() - b.GetPositionZ()) <= maxZDiff;
 }
 
 static void RTG_WsgClampInvalidUpperBaseTarget(Position& target)
@@ -2509,6 +2518,12 @@ bool BGTactics::Execute(Event /*event*/)
                     return true;
                 }
             }
+        }
+
+        if (bgType == BATTLEGROUND_WS && RTG_WsgHasFlag(bot))
+        {
+            if (rtgWsgMoveFlagCarrier())
+                return true;
         }
 
         PositionInfo currentObjective = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
@@ -4127,6 +4142,93 @@ bool BGTactics::moveToObjective(bool ignoreDist)
 }
 
 
+bool BGTactics::rtgWsgMoveFlagCarrier()
+{
+    Battleground* bg = bot->GetBattleground();
+    if (!bg)
+        return false;
+
+    BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
+
+    if (bgType != BATTLEGROUND_WS || !RTG_WsgHasFlag(bot) || !bot->IsAlive())
+        return false;
+
+    BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
+    TeamId const team = bot->GetTeamId();
+    bool const ownFlagTaken = !wsBg->GetFlagPickerGUID(team).IsEmpty();
+
+    uint32 const role = context->GetValue<uint32>("bg role")->Get();
+    uint32 const stableRole = RTG_WsgStableRole(bot, role);
+    uint32 const botSeed = bot->GetGUID().GetCounter();
+
+    Position const& ownFlagRoom = team == TEAM_ALLIANCE ? WS_FLAG_POS_ALLIANCE : WS_FLAG_POS_HORDE;
+    Position const& hideSpot = RTG_WsgStableHideSpot(team, stableRole, botSeed);
+    Position const& destination = ownFlagTaken ? hideSpot : ownFlagRoom;
+
+    Position botPos(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation());
+
+    // If our flag is home, make the cap attempt directly.  The generic close-object
+    // scan can miss this when the FC is moving or stuck in combat, which leaves the
+    // carrier standing still even though the capture trigger is right there.
+    if (!ownFlagTaken && RTG_WsgIsNear(botPos, ownFlagRoom, 12.0f, 12.0f))
+    {
+        WorldPacket data(CMSG_AREATRIGGER);
+        data << uint32(team == TEAM_HORDE ? BG_WS_TRIGGER_HORDE_FLAG_SPAWN : BG_WS_TRIGGER_ALLIANCE_FLAG_SPAWN);
+        bot->GetSession()->HandleAreaTriggerOpcode(data);
+        return true;
+    }
+
+    PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
+    PositionInfo pos = posMap["bg objective"];
+    bool const needObjective = !pos.isSet() ||
+        Position(pos.x, pos.y, pos.z, 0.0f).GetExactDist(destination.GetPositionX(), destination.GetPositionY(),
+                                                        destination.GetPositionZ()) > 6.0f;
+
+    if (needObjective)
+    {
+        pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
+        posMap["bg objective"] = pos;
+    }
+
+    float const dist2d = bot->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
+
+    // A flag carrier should not be rooted forever by a stale/invalid combat target.
+    // Let nearby melee happen naturally, but clear distant/bad targets so movement
+    // keeps winning over the generic combat loop.
+    if (Unit* currentTarget = context->GetValue<Unit*>("current target")->Get())
+    {
+        if (!currentTarget->IsAlive() || currentTarget->GetDistance(bot) > 35.0f ||
+            !bot->IsWithinLOSInMap(currentTarget))
+            context->GetValue<Unit*>("current target")->Set(nullptr);
+    }
+
+    // If the enemy has our flag, the FC should wait at a deliberate safe spot, not
+    // get dragged to the graveyard/tree jump lane.  Staying near the hide spot is okay.
+    if (ownFlagTaken && dist2d <= 7.0f && std::fabs(bot->GetPositionZ() - destination.GetPositionZ()) <= 10.0f)
+    {
+        if (bot->isMoving())
+            bot->StopMoving();
+        return true;
+    }
+
+    // Keep the FC moving even while technically in combat.  This is the opposite of
+    // the normal BG behavior on purpose: a WSG FC that stops to fight becomes a stuck
+    // pile-up and never scores.
+    if (bot->isMoving())
+        return true;
+
+    bot->StopMoving();
+    bot->GetMotionMaster()->Clear();
+
+    float const approach = ownFlagTaken ? 3.5f : 1.5f;
+    if (MoveNear(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), approach))
+        return true;
+
+    return MoveTo(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+}
+
 bool BGTactics::recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo const& pos)
 {
     Battleground* bg = bot->GetBattleground();
@@ -4276,8 +4378,9 @@ bool BGTactics::selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths)
 
     if (bgType == BATTLEGROUND_WS)
     {
-        if (wsJumpDown())
-            return true;
+        // RTG WSG: do not force the graveyard jump lane during normal objective routing.
+        // It was pulling flag carriers and escorts down to the tree/ledge area and
+        // leaving them clumped while the carrier failed to continue home.
     }
     else if (bgType == BATTLEGROUND_AV)
     {
