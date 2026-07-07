@@ -1306,8 +1306,6 @@ static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f}
 // state until they have reached the lower field crossroad. Do not let normal
 // objective/chase/mount logic take over while they are still on the start rock.
 static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 305.0f;
-static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1168.0f;
-static float constexpr RTG_EOTS_START_EXIT_FIELD_Z = 1186.0f;
 
 static Position RTG_EotsStartPosition(TeamId team)
 {
@@ -1319,13 +1317,16 @@ static bool RTG_EotsReachedStartExitField(Player* bot)
     if (!bot)
         return false;
 
-    // Horde exits east/southeast from x~1809 to the road at x~1941. Alliance
-    // exits west/southwest from x~2524 to the road at x~2396. Once a bot is at
-    // these lower-road thresholds, normal EotS pathing is safe again.
+    // RTG: this must be side-of-map based, not z based.  The home towers sit
+    // above the old start-exit field-z cutoff, so the old x+z test misclassified
+    // BE/FR/MT/DR as still needing spawn-rock exit.  That made bots reach a
+    // tower, call eyJumpDown(), and run straight back to the start fork below
+    // the rock. Once the bot crosses the exit-road threshold, it is on the
+    // playable field for routing purposes even if the tower terrain rises.
     if (bot->GetTeamId() == TEAM_HORDE)
-        return bot->GetPositionX() >= 1932.0f && bot->GetPositionZ() <= RTG_EOTS_START_EXIT_FIELD_Z;
+        return bot->GetPositionX() >= 1932.0f;
 
-    return bot->GetPositionX() <= 2408.0f && bot->GetPositionZ() <= RTG_EOTS_START_EXIT_FIELD_Z;
+    return bot->GetPositionX() <= 2408.0f;
 }
 
 static bool RTG_EotsNeedsStartExit(Player* bot)
@@ -1333,6 +1334,9 @@ static bool RTG_EotsNeedsStartExit(Player* bot)
     if (!bot || bot->GetMapId() != 566)
         return false;
 
+    // Only bots still on the spawn side of the exit threshold should ever use
+    // the forced breadcrumb lane.  Do this before the distance/z checks so home
+    // towers and center routes cannot be pulled back to the starting fork.
     if (RTG_EotsReachedStartExitField(bot))
         return false;
 
@@ -1340,15 +1344,10 @@ static bool RTG_EotsNeedsStartExit(Player* bot)
     if (bot->GetDistance(start) > RTG_EOTS_START_EXIT_MAX_DIST)
         return false;
 
-    if (bot->GetPositionZ() > RTG_EOTS_START_EXIT_MIN_Z)
-        return true;
-
-    // Recovery for bots that slid or path-steered onto a side/lower rock but
-    // are still on the start-island side of the real field crossroad.
-    if (bot->GetTeamId() == TEAM_HORDE)
-        return bot->GetPositionX() < 1932.0f;
-
-    return bot->GetPositionX() > 2408.0f;
+    // If the bot is still on the start side, force the exit whether it is on
+    // the upper rock, lip, or lower side shelf.  This keeps the useful spawn
+    // recovery behavior without affecting normal tower play.
+    return true;
 }
 
 
