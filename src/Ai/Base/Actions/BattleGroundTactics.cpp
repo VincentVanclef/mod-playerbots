@@ -53,6 +53,28 @@ Position const WS_FLAG_HIDE_ALLIANCE_3 = {1495.807f, 1466.774f, 352.350f, 1.50f}
 Position const WS_ROAM_POS = {1227.446f, 1476.235f, 307.484f, 1.50f};
 Position const WS_GY_CAMPING_HORDE = {1039.819, 1388.759f, 340.703f, 0.0f};
 Position const WS_GY_CAMPING_ALLIANCE = {1422.320f, 1551.978f, 342.834f, 0.0f};
+
+// RTG WSG: safe breadcrumbs from each team's graveyard/front-yard back into
+// the actual flag-room layer.  Bots were getting stuck by the graveyard huts
+// because direct MoveNear(pathfinder) targets kept resolving through the same
+// bad front-yard spot. These short staged hops follow the known VMangos WSG
+// lane from graveyard -> flag room and are used only as an escape/FC route.
+Position const WS_GY_ESCAPE_HORDE_1 = {1016.42f, 1402.33f, 341.352f, 0.0f};
+Position const WS_GY_ESCAPE_HORDE_2 = {997.806f, 1422.52f, 344.623f, 0.0f};
+Position const WS_GY_ESCAPE_HORDE_3 = {966.691f, 1422.53f, 345.223f, 0.0f};
+Position const WS_GY_ESCAPE_HORDE_4 = {944.859f, 1423.05f, 345.437f, 0.0f};
+Position const WS_GY_ESCAPE_ALLIANCE_1 = {1443.55f, 1533.40f, 343.148f, 0.0f};
+Position const WS_GY_ESCAPE_ALLIANCE_2 = {1443.51f, 1501.75f, 348.317f, 0.0f};
+Position const WS_GY_ESCAPE_ALLIANCE_3 = {1469.79f, 1494.13f, 351.774f, 0.0f};
+Position const WS_GY_ESCAPE_ALLIANCE_4 = {1508.27f, 1493.17f, 352.005f, 0.0f};
+
+std::vector<Position> const WS_GY_ESCAPE_TO_HORDE_ROOM = {WS_GY_ESCAPE_HORDE_1, WS_GY_ESCAPE_HORDE_2,
+                                                          WS_GY_ESCAPE_HORDE_3, WS_GY_ESCAPE_HORDE_4,
+                                                          WS_FLAG_POS_HORDE};
+std::vector<Position> const WS_GY_ESCAPE_TO_ALLIANCE_ROOM = {WS_GY_ESCAPE_ALLIANCE_1, WS_GY_ESCAPE_ALLIANCE_2,
+                                                             WS_GY_ESCAPE_ALLIANCE_3, WS_GY_ESCAPE_ALLIANCE_4,
+                                                             WS_FLAG_POS_ALLIANCE};
+
 std::vector<Position> const WS_FLAG_HIDE_HORDE = {WS_FLAG_HIDE_HORDE_1, WS_FLAG_HIDE_HORDE_2, WS_FLAG_HIDE_HORDE_3};
 std::vector<Position> const WS_FLAG_HIDE_ALLIANCE = {WS_FLAG_HIDE_ALLIANCE_1, WS_FLAG_HIDE_ALLIANCE_2,
                                                      WS_FLAG_HIDE_ALLIANCE_3};
@@ -1273,6 +1295,29 @@ static std::unordered_map<uint32, Position> EY_NodePositions = {
     {POINT_MAGE_TOWER, Position(2284.720f, 1728.457f, 1189.153f)}
 };
 
+
+static TeamId RTG_BgEffectiveTeamId(Player* bot)
+{
+    if (!bot)
+        return TEAM_NEUTRAL;
+
+    // CFBG can temporarily change visible race/faction/team state.  For BG
+    // tactics the authoritative side is the battleground team slot: start side,
+    // graveyard side, score side, and objective ownership all key off this.
+    if (bot->InBattleground())
+    {
+        TeamId const bgTeam = bot->GetBgTeamId();
+        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
+            return bgTeam;
+    }
+
+    TeamId const team = bot->GetTeamId();
+    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
+        return team;
+
+    return TEAM_NEUTRAL;
+}
+
 static char const* RTG_EotsStrategyName(EYBotStrategy strategy)
 {
     switch (strategy)
@@ -1321,10 +1366,13 @@ static bool RTG_EotsReachedStartExitField(Player* bot)
     // tower, call eyJumpDown(), and run straight back to the start fork below
     // the rock. Once the bot crosses the exit-road threshold, it is on the
     // playable field for routing purposes even if the tower terrain rises.
-    if (bot->GetTeamId() == TEAM_HORDE)
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
+    if (team == TEAM_HORDE)
         return bot->GetPositionX() >= 1932.0f;
+    if (team == TEAM_ALLIANCE)
+        return bot->GetPositionX() <= 2408.0f;
 
-    return bot->GetPositionX() <= 2408.0f;
+    return false;
 }
 
 static bool RTG_EotsNeedsStartExit(Player* bot)
@@ -1338,7 +1386,7 @@ static bool RTG_EotsNeedsStartExit(Player* bot)
     if (RTG_EotsReachedStartExitField(bot))
         return false;
 
-    Position const start = RTG_EotsStartPosition(bot->GetTeamId());
+    Position const start = RTG_EotsStartPosition(RTG_BgEffectiveTeamId(bot));
     if (bot->GetDistance(start) > RTG_EOTS_START_EXIT_MAX_DIST)
         return false;
 
@@ -1471,9 +1519,9 @@ static void RTG_EotsDebugRaw(Player* bot, Battleground* bg, char const* phase, c
     lastLogMs[key] = now;
 
     LOG_INFO("playerbots",
-             "RTG EOTS {} bot={} guid={} bgInstance={} team={} hasFlag={} reason={} node={} trigger={} pos={:.2f},{:.2f},{:.2f}",
+             "RTG EOTS {} bot={} guid={} bgInstance={} bgTeam={} rawTeam={} hasFlag={} reason={} node={} trigger={} pos={:.2f},{:.2f},{:.2f}",
              phase ? phase : "?", bot->GetName(), bot->GetGUID().GetCounter(), bg->GetInstanceID(),
-             uint32(bot->GetTeamId()), bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL), reason ? reason : "?",
+             uint32(RTG_BgEffectiveTeamId(bot)), uint32(bot->GetTeamId()), bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL), reason ? reason : "?",
              nodeId, triggerId, bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
 }
 
@@ -1558,7 +1606,8 @@ static bool RTG_WsgHasFlag(Player* bot)
         return false;
 
     BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
-    TeamId const enemyTeam = bot->GetTeamId() == TEAM_HORDE ? TEAM_ALLIANCE : TEAM_HORDE;
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
+    TeamId const enemyTeam = team == TEAM_HORDE ? TEAM_ALLIANCE : TEAM_HORDE;
     return wsBg && wsBg->GetFlagPickerGUID(enemyTeam) == bot->GetGUID();
 }
 
@@ -1631,6 +1680,91 @@ static bool RTG_WsgIsNearGraveyard(Player* bot, float range = 42.0f)
            bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
 }
 
+static bool RTG_WsgIsNearTeamGraveyard(Player* bot, TeamId team, float range = 75.0f)
+{
+    if (!bot)
+        return false;
+
+    if (team == TEAM_HORDE)
+        return bot->GetDistance(WS_GY_CAMPING_HORDE) <= range;
+    if (team == TEAM_ALLIANCE)
+        return bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
+
+    return false;
+}
+
+static bool RTG_WsgIsNearEnemyGraveyard(Player* bot, TeamId team, float range = 75.0f)
+{
+    if (!bot)
+        return false;
+
+    if (team == TEAM_HORDE)
+        return bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
+    if (team == TEAM_ALLIANCE)
+        return bot->GetDistance(WS_GY_CAMPING_HORDE) <= range;
+
+    return false;
+}
+
+static bool RTG_WsgGetOwnGraveyardEscapeStep(Player* bot, TeamId team, Position& target)
+{
+    if (!bot)
+        return false;
+
+    std::vector<Position> const* steps = nullptr;
+    if (team == TEAM_HORDE)
+        steps = &WS_GY_ESCAPE_TO_HORDE_ROOM;
+    else if (team == TEAM_ALLIANCE)
+        steps = &WS_GY_ESCAPE_TO_ALLIANCE_ROOM;
+    else
+        return false;
+
+    for (Position const& step : *steps)
+    {
+        // Advance one breadcrumb at a time.  Use 2D plus Z so a bot standing
+        // under/above a ledge does not think it has reached the safe lane.
+        if (bot->GetExactDist2d(step.GetPositionX(), step.GetPositionY()) > 8.0f ||
+            std::fabs(bot->GetPositionZ() - step.GetPositionZ()) > 12.0f)
+        {
+            target.Relocate(step);
+            return true;
+        }
+    }
+
+    target.Relocate(RTG_WsgOwnFlagRoom(team));
+    return true;
+}
+
+static bool RTG_WsgChooseGraveyardEscapeTarget(Player* bot, TeamId team, Position const& desired, Position& target)
+{
+    if (!bot || team == TEAM_NEUTRAL)
+        return false;
+
+    if (!RTG_WsgIsNearGraveyard(bot, 85.0f) && !RTG_WsgIsUnsafeCarrierHoldSpot(bot, team))
+        return false;
+
+    Position const& ownRoom = RTG_WsgOwnFlagRoom(team);
+    bool const desiredIsOwnRoom = desired.GetExactDist(ownRoom.GetPositionX(), ownRoom.GetPositionY(), ownRoom.GetPositionZ()) <= 35.0f;
+
+    if (RTG_WsgIsNearTeamGraveyard(bot, team, 95.0f) && desiredIsOwnRoom)
+        return RTG_WsgGetOwnGraveyardEscapeStep(bot, team, target);
+
+    // If a carrier or regular bot is near the enemy graveyard / front yard, do
+    // not let it hold there. Pull it toward midfield first; the next strategy
+    // pulse can choose FC cap, EFC chase, or enemy-room pressure from a clean lane.
+    if (RTG_WsgIsNearEnemyGraveyard(bot, team, 95.0f))
+    {
+        target.Relocate(WS_ROAM_POS);
+        return true;
+    }
+
+    if (desiredIsOwnRoom)
+        return RTG_WsgGetOwnGraveyardEscapeStep(bot, team, target);
+
+    target.Relocate(WS_ROAM_POS);
+    return true;
+}
+
 static bool RTG_WsgEnemyThreatNearby(Player* bot, Unit* enemy, float range = 35.0f)
 {
     return RTG_EotsUnitValidForObjective(bot, enemy) && bot->GetDistance(enemy) <= range;
@@ -1638,7 +1772,7 @@ static bool RTG_WsgEnemyThreatNearby(Player* bot, Unit* enemy, float range = 35.
 
 static Position RTG_WsgStrategicFallback(Player* bot, BattlegroundWS* wsBg, uint32 stableRole, Unit* enemyFC, Unit* teamFC)
 {
-    TeamId const team = bot ? bot->GetTeamId() : TEAM_NEUTRAL;
+    TeamId const team = bot ? RTG_BgEffectiveTeamId(bot) : TEAM_NEUTRAL;
     Position const& ownFlagRoom = RTG_WsgOwnFlagRoom(team);
     Position const& enemyFlagRoom = RTG_WsgEnemyFlagRoom(team);
 
@@ -1854,7 +1988,7 @@ static RtgEotsMission& RTG_EotsSetMission(Player* bot, Battleground* bg, RtgEots
     RtgEotsMission& mission = RTG_EotsMissionByBot[key];
     mission.type = type;
     mission.bgInstance = bg ? bg->GetInstanceID() : 0;
-    mission.teamId = bot ? uint32(bot->GetTeamId()) : 0;
+    mission.teamId = bot ? uint32(RTG_BgEffectiveTeamId(bot)) : 0;
     mission.targetNode = targetNode;
     mission.targetX = target.GetPositionX();
     mission.targetY = target.GetPositionY();
@@ -1871,7 +2005,7 @@ static bool RTG_EotsMissionStillValid(Player* bot, Battleground* bg, Battlegroun
     if (!bot || !bg || !eyeBg || !mission.initialized || mission.type == RTG_EOTS_MISSION_NONE)
         return false;
 
-    if (mission.bgInstance != bg->GetInstanceID() || mission.teamId != uint32(bot->GetTeamId()))
+    if (mission.bgInstance != bg->GetInstanceID() || mission.teamId != uint32(RTG_BgEffectiveTeamId(bot)))
         return false;
 
     bool const carryingFlag = bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
@@ -1891,7 +2025,7 @@ static bool RTG_EotsMissionStillValid(Player* bot, Battleground* bg, Battlegroun
     if (!mission.targetNode)
         return true;
 
-    bool const owned = RTG_EotsNodeOwnedByTeam(eyeBg, mission.targetNode, bot->GetTeamId());
+    bool const owned = RTG_EotsNodeOwnedByTeam(eyeBg, mission.targetNode, RTG_BgEffectiveTeamId(bot));
 
     // A hold mission is only meaningful while the team owns the tower. If the
     // tower becomes neutral/enemy again, force a replanning pass.
@@ -2000,7 +2134,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
         return false;
     }
 
-    TeamId const team = bot->GetTeamId();
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
     uint32 bestNodeId = 0;
     uint32 bestTriggerId = 0;
     float bestDist = FLT_MAX;
@@ -2071,10 +2205,10 @@ static void RTG_EotsDebug(Player* bot, Battleground* bg, char const* phase, char
     lastLogMsByBot[botGuid] = now;
 
     LOG_INFO("playerbots",
-             "RTG EOTS {} bot={} guid={} bgInstance={} team={} role={} strategy={} owned={} hasFlag={} reason={} posSet={} pos={:.2f},{:.2f},{:.2f}",
-             phase ? phase : "?", bot->GetName(), botGuid, bg->GetInstanceID(), uint32(bot->GetTeamId()), role,
-             RTG_EotsStrategyName(strategy), ownedCount, bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL),
-             reason ? reason : "?", pos.valueSet, pos.x, pos.y, pos.z);
+             "RTG EOTS {} bot={} guid={} bgInstance={} bgTeam={} rawTeam={} role={} strategy={} owned={} hasFlag={} reason={} posSet={} pos={:.2f},{:.2f},{:.2f}",
+             phase ? phase : "?", bot->GetName(), botGuid, bg->GetInstanceID(), uint32(RTG_BgEffectiveTeamId(bot)),
+             uint32(bot->GetTeamId()), role, RTG_EotsStrategyName(strategy), ownedCount,
+             bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL), reason ? reason : "?", pos.valueSet, pos.x, pos.y, pos.z);
 }
 
 static std::pair<uint32, uint32> IC_AttackObjectives[] = {
@@ -2256,7 +2390,7 @@ bool BGTactics::wsJumpDown()
     if (!bg)
         return false;
 
-    TeamId team = bot->GetTeamId();
+    TeamId team = RTG_BgEffectiveTeamId(bot);
     uint32 mapId = bg->GetMapId();
 
     if (team == TEAM_HORDE)
@@ -2379,8 +2513,9 @@ bool BGTactics::eyJumpDown()
         return false;
     }
 
-    EotsExitStep const* steps = bot->GetTeamId() == TEAM_HORDE ? hordeExit : allianceExit;
-    uint32 const stepCount = bot->GetTeamId() == TEAM_HORDE
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
+    EotsExitStep const* steps = team == TEAM_HORDE ? hordeExit : allianceExit;
+    uint32 const stepCount = team == TEAM_HORDE
                                ? uint32(sizeof(hordeExit) / sizeof(hordeExit[0]))
                                : uint32(sizeof(allianceExit) / sizeof(allianceExit[0]));
 
@@ -2410,7 +2545,7 @@ bool BGTactics::eyJumpDown()
 
     uint32 const now = getMSTime();
     EotsExitProgress& progress = progressByBot[key];
-    if (!progress.initialized || progress.team != bot->GetTeamId() || progress.nextStep >= stepCount)
+    if (!progress.initialized || progress.team != team || progress.nextStep >= stepCount)
     {
         progress.nextStep = chooseInitialStep();
         progress.lastX = bot->GetPositionX();
@@ -2418,7 +2553,7 @@ bool BGTactics::eyJumpDown()
         progress.lastZ = bot->GetPositionZ();
         progress.lastCheckMs = now;
         progress.stuckSinceMs = 0;
-        progress.team = bot->GetTeamId();
+        progress.team = team;
         progress.initialized = true;
     }
 
@@ -2764,11 +2899,12 @@ bool BGTactics::moveToStart(bool force)
     if (bgType == BATTLEGROUND_WS)
     {
         uint32 role = context->GetValue<uint32>("bg role")->Get();
+        TeamId const team = RTG_BgEffectiveTeamId(bot);
 
         int startSpot = role < 4 ? BB_WSG_WAIT_SPOT_LEFT : role > 6 ? BB_WSG_WAIT_SPOT_RIGHT : BB_WSG_WAIT_SPOT_SPAWN;
         if (startSpot == BB_WSG_WAIT_SPOT_RIGHT)
         {
-            if (bot->GetTeamId() == TEAM_HORDE)
+            if (team == TEAM_HORDE)
                 MoveTo(bg->GetMapId(), WS_WAITING_POS_HORDE_1.GetPositionX() + frand(-4.0f, 4.0f),
                        WS_WAITING_POS_HORDE_1.GetPositionY() + frand(-4.0f, 4.0f),
                        WS_WAITING_POS_HORDE_1.GetPositionZ());
@@ -2779,7 +2915,7 @@ bool BGTactics::moveToStart(bool force)
         }
         else if (startSpot == BB_WSG_WAIT_SPOT_LEFT)
         {
-            if (bot->GetTeamId() == TEAM_HORDE)
+            if (team == TEAM_HORDE)
                 MoveTo(bg->GetMapId(), WS_WAITING_POS_HORDE_2.GetPositionX() + frand(-4.0f, 4.0f),
                        WS_WAITING_POS_HORDE_2.GetPositionY() + frand(-4.0f, 4.0f),
                        WS_WAITING_POS_HORDE_2.GetPositionZ());
@@ -2790,7 +2926,7 @@ bool BGTactics::moveToStart(bool force)
         }
         else  // BB_WSG_WAIT_SPOT_SPAWN
         {
-            if (bot->GetTeamId() == TEAM_HORDE)
+            if (team == TEAM_HORDE)
                 MoveTo(bg->GetMapId(), WS_WAITING_POS_HORDE_3.GetPositionX() + frand(-10.0f, 10.0f),
                        WS_WAITING_POS_HORDE_3.GetPositionY() + frand(-10.0f, 10.0f),
                        WS_WAITING_POS_HORDE_3.GetPositionZ());
@@ -3176,7 +3312,7 @@ bool BGTactics::selectObjective(bool reset)
         case BATTLEGROUND_WS:
         {
             Position target;
-            TeamId team = bot->GetTeamId();
+            TeamId team = RTG_BgEffectiveTeamId(bot);
             uint32 const botSeed = bot->GetGUID().GetCounter();
 
             auto SetSafePos = [&](Position const& origin, float radius = 0.0f) -> void
@@ -3359,12 +3495,17 @@ bool BGTactics::selectObjective(bool reset)
                 // still local/defensive, force a real flag-game destination. This catches
                 // the common WSG failure case where several bots idle by the tree/GY until
                 // an enemy walks into aggro range.
-                if (!hasFlag && RTG_WsgIsNearGraveyard(bot) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
+                if (!hasFlag && RTG_WsgIsNearGraveyard(bot, 85.0f) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
                 {
                     Position fallback = RTG_WsgStrategicFallback(bot, static_cast<BattlegroundWS*>(bg), stableRole, enemyFC, teamFC);
                     if (fallback.IsPositionValid() && bot->GetDistance(fallback) > 25.0f)
                         target.Relocate(fallback);
                 }
+
+                Position escapeTarget;
+                if (RTG_WsgChooseGraveyardEscapeTarget(bot, team, target, escapeTarget) &&
+                    !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
+                    target.Relocate(escapeTarget);
 
                 pos.Set(target.GetPositionX(), target.GetPositionY(), target.GetPositionZ(), bot->GetMapId());
                 posMap["bg objective"] = pos;
@@ -3557,7 +3698,7 @@ bool BGTactics::selectObjective(bool reset)
             if (!eyeOfTheStormBG)
                 return false;
 
-            TeamId team = bot->GetTeamId();
+            TeamId team = RTG_BgEffectiveTeamId(bot);
             uint32 role = context->GetValue<uint32>("bg role")->Get();
             uint32 stableRole = RTG_EotsStableRole(bot, role);
             uint32 const botSeed = bot->GetGUID().GetCounter();
@@ -4339,7 +4480,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         return false;
 
     BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
-    TeamId const team = bot->GetTeamId();
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
 
     // In BattlegroundWS, GetFlagPickerGUID(team) returns the carrier of that team's
     // own flag. If it is set, our FC cannot score yet and should hide. If it is empty,
@@ -4357,9 +4498,15 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     // Do not let FCs select/hold the graveyard hut/tree area. When our flag is
     // away, the carrier should first enter the own flag-room/roof layer, then use
     // one of the small flag-room hide points. When our flag is home, cap.
-    Position destination = ownFlagRoom;
+    Position finalDestination = ownFlagRoom;
     if (ownFlagTaken && RTG_WsgIsInsideOwnFlagRoom(bot, team))
-        destination.Relocate(hideSpot);
+        finalDestination.Relocate(hideSpot);
+
+    Position destination = finalDestination;
+    Position escapeTarget;
+    if (!RTG_WsgIsInsideOwnFlagRoom(bot, team) &&
+        RTG_WsgChooseGraveyardEscapeTarget(bot, team, finalDestination, escapeTarget))
+        destination.Relocate(escapeTarget);
 
     Position botPos(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation());
 
@@ -4433,7 +4580,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     bool const appearsStuck = dist2d > 10.0f && progress.initialized &&
         getMSTimeDiff(progress.lastProgressMs, now) > 3500;
 
-    bool const forceRedirectFromGraveyard = (RTG_WsgIsNearGraveyard(bot, 75.0f) ||
+    bool const forceRedirectFromGraveyard = (RTG_WsgIsNearGraveyard(bot, 95.0f) ||
         RTG_WsgIsUnsafeCarrierHoldSpot(bot, team)) && dist2d > 10.0f;
 
     // If our flag is away, the FC should wait at a deliberate safe spot. Do not let
@@ -4558,19 +4705,24 @@ bool BGTactics::recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo co
         return true;
     }
 
-    if (bgType == BATTLEGROUND_WS && RTG_WsgIsNearGraveyard(bot) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
+    if (bgType == BATTLEGROUND_WS && RTG_WsgIsNearGraveyard(bot, 85.0f) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
     {
         if (BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg))
         {
             uint32 const role = context->GetValue<uint32>("bg role")->Get();
             uint32 const stableRole = RTG_WsgStableRole(bot, role);
+            TeamId const team = RTG_BgEffectiveTeamId(bot);
             Position fallback = RTG_WsgStrategicFallback(bot, wsBg, stableRole, AI_VALUE(Unit*, "enemy flag carrier"), AI_VALUE(Unit*, "team flag carrier"));
-            if (fallback.IsPositionValid() && bot->GetDistance(fallback) > 25.0f)
+            Position escapeTarget;
+            if (RTG_WsgChooseGraveyardEscapeTarget(bot, team, fallback, escapeTarget))
+                fallback.Relocate(escapeTarget);
+
+            if (fallback.IsPositionValid() && bot->GetDistance(fallback) > 10.0f)
             {
                 bot->StopMoving();
                 bot->GetMotionMaster()->Clear();
                 clearProgress();
-                return MoveNear(bot->GetMapId(), fallback.GetPositionX(), fallback.GetPositionY(), fallback.GetPositionZ(), 4.0f, MovementPriority::MOVEMENT_NORMAL);
+                return MoveNear(bot->GetMapId(), fallback.GetPositionX(), fallback.GetPositionY(), fallback.GetPositionZ(), 3.0f, MovementPriority::MOVEMENT_NORMAL);
             }
         }
     }
@@ -5341,7 +5493,10 @@ bool BGTactics::atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<ui
             continue;
 
         // Special handling for WSG and EY base flags
-        bool isWsBaseFlag = bgType == BATTLEGROUND_WS && go->GetEntry() == vFlagsWS[bot->GetTeamId()];
+        TeamId const bgTeamForFlag = RTG_BgEffectiveTeamId(bot);
+        bool isWsBaseFlag = bgType == BATTLEGROUND_WS &&
+            (bgTeamForFlag == TEAM_ALLIANCE || bgTeamForFlag == TEAM_HORDE) &&
+            go->GetEntry() == vFlagsWS[bgTeamForFlag];
         bool isEyBaseFlag = bgType == BATTLEGROUND_EY && go->GetEntry() == vFlagsEY[0];
 
         // Ensure bots are inside the Eye of the Storm capture circle before casting
@@ -5421,7 +5576,7 @@ bool BGTactics::atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<ui
                     // Handle flag capture at base
                     if (isWsBaseFlag)
                     {
-                        if (bot->GetTeamId() == TEAM_HORDE)
+                        if (RTG_BgEffectiveTeamId(bot) == TEAM_HORDE)
                         {
                             WorldPacket data(CMSG_AREATRIGGER);
                             data << uint32(BG_WS_TRIGGER_HORDE_FLAG_SPAWN);
@@ -5534,7 +5689,8 @@ bool BGTactics::flagTaken()
     if (!bg)
         return false;
 
-    return !bg->GetFlagPickerGUID(bg->GetOtherTeamId(bot->GetTeamId())).IsEmpty();
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
+    return !bg->GetFlagPickerGUID(bg->GetOtherTeamId(team)).IsEmpty();
 }
 
 bool BGTactics::teamFlagTaken()
@@ -5543,7 +5699,8 @@ bool BGTactics::teamFlagTaken()
     if (!bg)
         return false;
 
-    return !bg->GetFlagPickerGUID(bot->GetTeamId()).IsEmpty();
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
+    return !bg->GetFlagPickerGUID(team).IsEmpty();
 }
 
 bool BGTactics::protectFC()
@@ -5581,7 +5738,7 @@ bool BGTactics::protectFC()
                                     enemyFC->GetPositionZ(), 5.0f, MovementPriority::MOVEMENT_NORMAL);
             }
 
-            Position const& fallback = RTG_WsgEnemyFlagRoom(bot->GetTeamId());
+            Position const& fallback = RTG_WsgEnemyFlagRoom(RTG_BgEffectiveTeamId(bot));
             if (bot->GetDistance(teamFC) < 18.0f)
                 return MoveNear(bot->GetMapId(), fallback.GetPositionX(), fallback.GetPositionY(), fallback.GetPositionZ(),
                                 5.0f, MovementPriority::MOVEMENT_NORMAL);

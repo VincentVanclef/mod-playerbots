@@ -14,6 +14,32 @@
 #include "BattlegroundAV.h"
 #include "BattlegroundEY.h"
 
+
+namespace
+{
+TeamId RTG_TriggerEffectiveBgTeamId(Player* bot)
+{
+    if (!bot)
+        return TEAM_NEUTRAL;
+
+    // CFBG / fake-faction modules can make GetTeamId() disagree with the
+    // battleground side. For flag state, FC, EFC, and own-base decisions, use
+    // the actual BG team slot first.
+    if (bot->InBattleground())
+    {
+        TeamId const bgTeam = bot->GetBgTeamId();
+        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
+            return bgTeam;
+    }
+
+    TeamId const team = bot->GetTeamId();
+    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
+        return team;
+
+    return TEAM_NEUTRAL;
+}
+}
+
 bool EnemyPlayerNear::IsActive() { return AI_VALUE(Unit*, "enemy player target"); }
 
 bool PlayerHasNoFlag::IsActive()
@@ -23,7 +49,11 @@ bool PlayerHasNoFlag::IsActive()
         if (botAI->GetBot()->GetBattlegroundTypeId() == BattlegroundTypeId::BATTLEGROUND_WS)
         {
             BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
-            if (!(bg->GetFlagState(bg->GetOtherTeamId(bot->GetTeamId())) == BG_WS_FLAG_STATE_ON_PLAYER))
+            TeamId const team = RTG_TriggerEffectiveBgTeamId(bot);
+            if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+                return true;
+
+            if (!(bg->GetFlagState(bg->GetOtherTeamId(team)) == BG_WS_FLAG_STATE_ON_PLAYER))
                 return true;
 
             if (bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_ALLIANCE) ||
@@ -103,7 +133,11 @@ bool PlayerIsInBattlegroundWithoutFlag::IsActive()
         if (botAI->GetBot()->GetBattlegroundTypeId() == BattlegroundTypeId::BATTLEGROUND_WS)
         {
             BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
-            if (!(bg->GetFlagState(bg->GetOtherTeamId(bot->GetTeamId())) == BG_WS_FLAG_STATE_ON_PLAYER))
+            TeamId const team = RTG_TriggerEffectiveBgTeamId(bot);
+            if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+                return true;
+
+            if (!(bg->GetFlagState(bg->GetOtherTeamId(team)) == BG_WS_FLAG_STATE_ON_PLAYER))
                 return true;
 
             if (bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_ALLIANCE) ||
@@ -173,7 +207,7 @@ bool PlayerHasFlag::IsCapturingFlag(Player* bot)
                 uint32 controlledBases = 0;
                 for (uint8 point = 0; point < EY_POINTS_MAX; ++point)
                 {
-                    if (bg->GetCapturePointInfo(point)._ownerTeamId == bot->GetTeamId())
+                    if (bg->GetCapturePointInfo(point)._ownerTeamId == RTG_TriggerEffectiveBgTeamId(bot))
                         controlledBases++;
                 }
 
@@ -203,7 +237,10 @@ bool TeamHasFlag::IsActive()
     BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
 
     ObjectGuid botGuid = bot->GetGUID();
-    TeamId teamId = bot->GetTeamId();
+    TeamId teamId = RTG_TriggerEffectiveBgTeamId(bot);
+    if (teamId != TEAM_ALLIANCE && teamId != TEAM_HORDE)
+        return false;
+
     TeamId enemyTeamId = bg->GetOtherTeamId(teamId);
 
     // If the bot is carrying any flag, don't activate
@@ -225,16 +262,12 @@ bool EnemyTeamHasFlag::IsActive()
         {
             BattlegroundWS* bg = (BattlegroundWS*)botAI->GetBot()->GetBattleground();
 
-            if (bot->GetTeamId() == TEAM_HORDE)
-            {
-                if (!bg->GetFlagPickerGUID(TEAM_HORDE).IsEmpty())
-                    return true;
-            }
-            else
-            {
-                if (!bg->GetFlagPickerGUID(TEAM_ALLIANCE).IsEmpty())
-                    return true;
-            }
+            TeamId const team = RTG_TriggerEffectiveBgTeamId(bot);
+            if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+                return false;
+
+            if (!bg->GetFlagPickerGUID(team).IsEmpty())
+                return true;
         }
 
         return false;
