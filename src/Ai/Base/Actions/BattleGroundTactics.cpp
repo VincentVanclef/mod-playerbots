@@ -1549,7 +1549,7 @@ static bool RTG_WsgShouldEscortCarrier(uint32 stableRole)
     // WSG broke down because every nearby bot treated the friendly FC as the
     // highest-priority objective. Keep only a tiny deterministic escort group;
     // everyone else should defend home or recover our flag so the FC can cap.
-    return stableRole == 0 || stableRole == 5;
+    return stableRole == 0;
 }
 
 static Position const& RTG_WsgOwnFlagRoom(TeamId team)
@@ -1560,6 +1560,44 @@ static Position const& RTG_WsgOwnFlagRoom(TeamId team)
 static Position const& RTG_WsgEnemyFlagRoom(TeamId team)
 {
     return team == TEAM_ALLIANCE ? WS_FLAG_POS_HORDE : WS_FLAG_POS_ALLIANCE;
+}
+
+static bool RTG_WsgIsNearGraveyard(Player* bot, float range = 42.0f)
+{
+    if (!bot)
+        return false;
+
+    return bot->GetDistance(WS_GY_CAMPING_HORDE) <= range ||
+           bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
+}
+
+static bool RTG_WsgEnemyThreatNearby(Player* bot, Unit* enemy, float range = 35.0f)
+{
+    return RTG_EotsUnitValidForObjective(bot, enemy) && bot->GetDistance(enemy) <= range;
+}
+
+static Position RTG_WsgStrategicFallback(Player* bot, BattlegroundWS* wsBg, uint32 stableRole, Unit* enemyFC, Unit* teamFC)
+{
+    TeamId const team = bot ? bot->GetTeamId() : TEAM_NEUTRAL;
+    Position const& ownFlagRoom = RTG_WsgOwnFlagRoom(team);
+    Position const& enemyFlagRoom = RTG_WsgEnemyFlagRoom(team);
+
+    if (!bot || !wsBg)
+        return WS_ROAM_POS;
+
+    // If our flag is taken, recover it first. If their flag is loose/home, pressure
+    // their room. Defenders return home; everyone else leaves the graveyard area.
+    if (RTG_EotsUnitValidForObjective(bot, enemyFC))
+        return enemyFC->GetPosition();
+
+    if (RTG_EotsUnitValidForObjective(bot, teamFC) && RTG_WsgShouldEscortCarrier(stableRole))
+        return teamFC->GetPosition();
+
+    bool const ownFlagTaken = !wsBg->GetFlagPickerGUID(team).IsEmpty();
+    if (ownFlagTaken)
+        return (stableRole <= 1) ? ownFlagRoom : WS_ROAM_POS;
+
+    return (stableRole <= 1) ? ownFlagRoom : enemyFlagRoom;
 }
 
 static void RTG_WsgClampInvalidUpperBaseTarget(Position& target)
@@ -1640,9 +1678,9 @@ static Position RTG_EotsObjectiveAnchor(uint32 nodeId, uint32 seed, bool exact =
 static float constexpr RTG_EOTS_TOWER_ARRIVE_RADIUS_2D = 7.5f;
 static float constexpr RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF = 8.0f;
 static uint32 constexpr RTG_EOTS_CAPTURE_MISSION_MS = 70000;
-static uint32 constexpr RTG_EOTS_CAPTURE_HOLD_MS = 52000;
-static uint32 constexpr RTG_EOTS_HOLD_MISSION_MS = 42000;
-static uint32 constexpr RTG_EOTS_ASSAULT_MISSION_MS = 65000;
+static uint32 constexpr RTG_EOTS_CAPTURE_HOLD_MS = 22000;
+static uint32 constexpr RTG_EOTS_HOLD_MISSION_MS = 38000;
+static uint32 constexpr RTG_EOTS_ASSAULT_MISSION_MS = 55000;
 static uint32 constexpr RTG_EOTS_FLAG_MISSION_MS = 18000;
 static uint32 constexpr RTG_EOTS_CARRIER_MISSION_MS = 7000;
 static uint32 constexpr RTG_EOTS_PVP_MISSION_MS = 9000;
@@ -3145,6 +3183,10 @@ bool BGTactics::selectObjective(bool reset)
             if (enemyStrategy == WS_STRATEGY_DEFENSIVE)
                 defendersProhab = std::max<uint8>(uint8(2), defendersProhab);
 
+            // RTG WSG: keep defense small and purposeful. Too many defenders/escorts
+            // caused graveyard/tree stacks where nobody recovered EFC or advanced the flag.
+            defendersProhab = std::min<uint8>(defendersProhab, uint8(2));
+
             bool const isDefender = stableRole < defendersProhab;
             bool const escortRole = RTG_WsgShouldEscortCarrier(stableRole);
             bool const interceptorRole = (stableRole % 4) != 0;
@@ -3219,7 +3261,10 @@ bool BGTactics::selectObjective(bool reset)
             }
             else if (winningHard && stableRole == 7)
             {
-                SetSafePos(team == TEAM_ALLIANCE ? WS_GY_CAMPING_HORDE : WS_GY_CAMPING_ALLIANCE, 6.0f);
+                // Do not camp graveyards on RTG. It looked like bots were stuck
+                // and also removed bodies from the flag game. Keep the snowball role
+                // in midfield where it can help with EFC/FC transitions.
+                SetSafePos(WS_ROAM_POS, 18.0f);
             }
             else if (isDefender)
             {
@@ -3243,6 +3288,18 @@ bool BGTactics::selectObjective(bool reset)
             if (target.IsPositionValid())
             {
                 RTG_WsgClampInvalidUpperBaseTarget(target);
+
+                // If a bot is sitting around either graveyard and its selected target is
+                // still local/defensive, force a real flag-game destination. This catches
+                // the common WSG failure case where several bots idle by the tree/GY until
+                // an enemy walks into aggro range.
+                if (!hasFlag && RTG_WsgIsNearGraveyard(bot) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
+                {
+                    Position fallback = RTG_WsgStrategicFallback(bot, static_cast<BattlegroundWS*>(bg), stableRole, enemyFC, teamFC);
+                    if (fallback.IsPositionValid() && bot->GetDistance(fallback) > 25.0f)
+                        target.Relocate(fallback);
+                }
+
                 pos.Set(target.GetPositionX(), target.GetPositionY(), target.GetPositionZ(), bot->GetMapId());
                 posMap["bg objective"] = pos;
                 return true;
@@ -3626,6 +3683,19 @@ bool BGTactics::selectObjective(bool reset)
                     else
                         AssignMission(RTG_EOTS_MISSION_MID_PRESSURE, 0, centerPos,
                                       "carrier_hold_center", RTG_EOTS_FLAG_MISSION_MS);
+                }
+
+                // If either home tower is still missing, do not preserve stale enemy-side
+                // tower missions. This was letting Horde keep a Mage Tower assignment
+                // and skip Fel Reaver even though FRR still needed bodies.
+                if (!foundObjective && homeOwnedCount < 2)
+                {
+                    if (RtgEotsMission* currentMission = RTG_EotsGetMission(bot, bg))
+                    {
+                        if (RTG_EotsMissionIsTower(currentMission->type) &&
+                            currentMission->targetNode && !RTG_EotsIsHomeNode(team, currentMission->targetNode))
+                            RTG_EotsClearMission(bot, bg);
+                    }
                 }
 
                 // Preserve a non-carrier mission if it still makes sense. This is
@@ -4282,6 +4352,9 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     bool const appearsStuck = dist2d > 10.0f && progress.initialized &&
         getMSTimeDiff(progress.lastProgressMs, now) > 3500;
 
+    bool const forceRedirectFromGraveyard = RTG_WsgIsNearGraveyard(bot) && dist2d > 15.0f &&
+        !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target"), 30.0f);
+
     // If our flag is away, the FC should wait at a deliberate safe spot. Do not let
     // the whole team stack here; non-carrier logic now sends most bots after the enemy FC.
     if (ownFlagTaken && dist2d <= 7.0f && std::fabs(bot->GetPositionZ() - destination.GetPositionZ()) <= 10.0f)
@@ -4294,7 +4367,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     // If movement is already taking us toward the current destination and progress is
     // happening, do not churn the motion master. If the objective changed from hide ->
     // cap room or the bot has not moved for a few seconds, hard-redirect.
-    if (bot->isMoving() && !needObjective && !destinationChanged && !appearsStuck)
+    if (bot->isMoving() && !needObjective && !destinationChanged && !appearsStuck && !forceRedirectFromGraveyard)
         return true;
 
     bot->StopMoving();
@@ -4400,6 +4473,23 @@ bool BGTactics::recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo co
     {
         resetProgress();
         return true;
+    }
+
+    if (bgType == BATTLEGROUND_WS && RTG_WsgIsNearGraveyard(bot) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
+    {
+        if (BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg))
+        {
+            uint32 const role = context->GetValue<uint32>("bg role")->Get();
+            uint32 const stableRole = RTG_WsgStableRole(bot, role);
+            Position fallback = RTG_WsgStrategicFallback(bot, wsBg, stableRole, AI_VALUE(Unit*, "enemy flag carrier"), AI_VALUE(Unit*, "team flag carrier"));
+            if (fallback.IsPositionValid() && bot->GetDistance(fallback) > 25.0f)
+            {
+                bot->StopMoving();
+                bot->GetMotionMaster()->Clear();
+                clearProgress();
+                return MoveNear(bot->GetMapId(), fallback.GetPositionX(), fallback.GetPositionY(), fallback.GetPositionZ(), 4.0f, MovementPriority::MOVEMENT_NORMAL);
+            }
+        }
     }
 
     if (moved > 2.25f || distToObjective < 6.0f)
@@ -4776,12 +4866,12 @@ bool BGTactics::startNewPathBegin(std::vector<BattleBotPath*> const& vPaths)
         return false;
 
     AvailablePath const* chosenPath = nullptr;
-    if (bgType == BATTLEGROUND_EY)
+    if (bgType == BATTLEGROUND_EY || bgType == BATTLEGROUND_WS)
     {
-        // EotS should not randomly pick an outgoing lane from a tower/fork.
+        // EotS/WSG should not randomly pick an outgoing lane from a tower/base/fork.
         // Choose the path whose far endpoint moves closest to the current
-        // mission objective. Random endpoint selection is what made bots reach
-        // a tower perimeter, turn around, and carousel to another base.
+        // mission/objective. Random endpoint selection is what made bots reach
+        // a tower/base perimeter, turn around, and carousel to another node.
         float bestScore = FLT_MAX;
         for (AvailablePath const& candidate : availablePaths)
         {
@@ -4854,12 +4944,12 @@ bool BGTactics::startNewPathFree(std::vector<BattleBotPath*> const& vPaths)
             BattleBotWaypoint& waypoint = ((*pPath)[i]);
             float const distanceToPoint = FreePathDistanceForCurrentBg(bot->GetDistance(waypoint.x, waypoint.y, waypoint.z));
 
-            if (bgType == BATTLEGROUND_EY)
+            if (bgType == BATTLEGROUND_EY || bgType == BATTLEGROUND_WS)
             {
-                // EotS route memory-lite: if we have to jump onto a nearby path
+                // EotS/WSG route memory-lite: if we have to jump onto a nearby path
                 // from open ground, score both directions by the endpoint closest
-                // to the current mission objective. The old fallback always
-                // walked forward, which was often the wrong direction at towers.
+                // to the current mission/objective. The old fallback always
+                // walked forward, which was often the wrong direction at towers, graveyards, and tunnels.
                 if (i + 1 < pPath->size())
                 {
                     BattleBotWaypoint const& endPoint = pPath->back();

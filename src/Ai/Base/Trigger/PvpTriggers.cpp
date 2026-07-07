@@ -287,7 +287,7 @@ bool TeamFlagCarrierNear::IsActive()
     // RTG WSG: a 200y escort trigger made nearly the whole team peel onto the
     // friendly FC. Keep this trigger local; BGTactics::protectFC then restricts
     // actual escorting to a deterministic role.
-    return carrier && ServerFacade::instance().IsDistanceLessOrEqualThan(ServerFacade::instance().GetDistance2d(bot, carrier), 55.f);
+    return carrier && ServerFacade::instance().IsDistanceLessOrEqualThan(ServerFacade::instance().GetDistance2d(bot, carrier), 35.f);
 }
 
 bool PlayerWantsInBattlegroundTrigger::IsActive()
