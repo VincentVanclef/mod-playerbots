@@ -1395,13 +1395,16 @@ static bool RTG_EotsIsEnemySideNode(TeamId team, uint32 nodeId)
 
 static uint32 RTG_EotsAssignedHomeNode(TeamId team, uint32 role, uint32 botGuid)
 {
-    // Split the opening push. Without this, most bots pick the same nearest tower
-    // and the match starts with only one side base being pressured.
-    uint32 const seed = role ? role : botGuid;
-    if (team == TEAM_HORDE)
-        return (seed % 2) ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
+    // Split the opening push using the bot GUID as the primary seed. Using only
+    // the transient bg role caused some teams to roll the same home assignment
+    // and Horde would often skip Fel Reaver Ruins for an enemy-side push.
+    uint32 const seed = (botGuid ? botGuid : role) + role;
+    bool const firstHalf = (seed % 4u) < 2u;
 
-    return (seed % 2) ? POINT_DRAENEI_RUINS : POINT_MAGE_TOWER;
+    if (team == TEAM_HORDE)
+        return firstHalf ? POINT_FEL_REAVER : POINT_BLOOD_ELF;
+
+    return firstHalf ? POINT_MAGE_TOWER : POINT_DRAENEI_RUINS;
 }
 
 static uint32 RTG_EotsAssignedEnemySideNode(TeamId team, uint32 role, uint32 botGuid)
@@ -1535,8 +1538,28 @@ static Position const& RTG_WsgStableHideSpot(TeamId team, uint32 stableRole, uin
 
 static bool RTG_WsgHasFlag(Player* bot)
 {
-    return bot &&
-           (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG));
+    if (!bot)
+        return false;
+
+    if (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG))
+        return true;
+
+    // Be defensive: depending on timing, the visible WSG carrier can be known by
+    // the battleground flag-picker GUID before/after the aura value updates.
+    Battleground* bg = bot->GetBattleground();
+    if (!bg)
+        return false;
+
+    BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
+
+    if (bgType != BATTLEGROUND_WS)
+        return false;
+
+    BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
+    TeamId const enemyTeam = bot->GetTeamId() == TEAM_HORDE ? TEAM_ALLIANCE : TEAM_HORDE;
+    return wsBg && wsBg->GetFlagPickerGUID(enemyTeam) == bot->GetGUID();
 }
 
 static bool RTG_WsgIsNear(Position const& a, Position const& b, float range2d, float maxZDiff = 12.0f)
@@ -1560,6 +1583,43 @@ static Position const& RTG_WsgOwnFlagRoom(TeamId team)
 static Position const& RTG_WsgEnemyFlagRoom(TeamId team)
 {
     return team == TEAM_ALLIANCE ? WS_FLAG_POS_HORDE : WS_FLAG_POS_ALLIANCE;
+}
+
+static bool RTG_WsgIsInsideOwnFlagRoom(Player* bot, TeamId team)
+{
+    if (!bot)
+        return false;
+
+    float const x = bot->GetPositionX();
+    float const y = bot->GetPositionY();
+    float const z = bot->GetPositionZ();
+
+    if (team == TEAM_HORDE)
+        return x >= 890.0f && x <= 985.0f && y >= 1405.0f && y <= 1495.0f && z >= 340.0f && z <= 372.0f;
+
+    return x >= 1485.0f && x <= 1565.0f && y >= 1430.0f && y <= 1510.0f && z >= 346.0f && z <= 378.0f;
+}
+
+static bool RTG_WsgIsUnsafeCarrierHoldSpot(Player* bot, TeamId team)
+{
+    if (!bot)
+        return false;
+
+    // The graveyard/hut/tree area must never be a valid WSG FC hide spot. Keep
+    // this narrow so carriers do not churn movement through normal midfield; it
+    // should only fire around the known bad front-yard/gy hold zones.
+    float const x = bot->GetPositionX();
+    float const y = bot->GetPositionY();
+
+    bool const nearAnyGy = bot->GetDistance(WS_GY_CAMPING_HORDE) <= 75.0f ||
+                           bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= 75.0f;
+    if (nearAnyGy)
+        return true;
+
+    if (team == TEAM_HORDE)
+        return x >= 990.0f && x <= 1120.0f && y >= 1360.0f && y <= 1440.0f;
+
+    return x >= 1360.0f && x <= 1450.0f && y >= 1510.0f && y <= 1590.0f;
 }
 
 static bool RTG_WsgIsNearGraveyard(Player* bot, float range = 42.0f)
@@ -2521,9 +2581,7 @@ bool BGTactics::Execute(Event /*event*/)
     if (getName() == "reset objective force")
     {
         bool isCarryingFlag =
-            bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) ||
-            bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) ||
-            bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
+            RTG_WsgHasFlag(bot) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
 
         if (!isCarryingFlag)
         {
@@ -2651,8 +2709,7 @@ bool BGTactics::Execute(Event /*event*/)
                 return moveToObjective(true);
 
         // bot with flag should only move to objective
-        if (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) ||
-            bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+        if (RTG_WsgHasFlag(bot) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
             return false;
 
         if (!startNewPathBegin(*vPaths))
@@ -3156,7 +3213,7 @@ bool BGTactics::selectObjective(bool reset)
                 return true;
             };
 
-            bool const hasFlag = bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG);
+            bool const hasFlag = RTG_WsgHasFlag(bot);
 
             uint32 role = context->GetValue<uint32>("bg role")->Get();
             uint32 stableRole = RTG_WsgStableRole(bot, role);
@@ -3204,8 +3261,17 @@ bool BGTactics::selectObjective(bool reset)
 
             if (hasFlag)
             {
+                // A WSG carrier must never choose the graveyard/hut/front-yard as a
+                // holding point. If our flag is away, first get the carrier safely
+                // back into the flag-room/roof layer, then hold a small spread spot
+                // there. If our flag is home, go straight for the cap trigger.
                 if (teamFlagTaken())
-                    SetSafePos(RTG_WsgStableHideSpot(team, stableRole, botSeed), 3.0f);
+                {
+                    if (!RTG_WsgIsInsideOwnFlagRoom(bot, team))
+                        SetSafePos(ownFlagRoom);
+                    else
+                        SetSafePos(RTG_WsgStableHideSpot(team, stableRole, botSeed), 2.0f);
+                }
                 else
                     SetSafePos(ownFlagRoom);
             }
@@ -3685,16 +3751,26 @@ bool BGTactics::selectObjective(bool reset)
                                       "carrier_hold_center", RTG_EOTS_FLAG_MISSION_MS);
                 }
 
-                // If either home tower is still missing, do not preserve stale enemy-side
-                // tower missions. This was letting Horde keep a Mage Tower assignment
-                // and skip Fel Reaver even though FRR still needed bodies.
+                // If either home tower is still missing, home split beats every stale
+                // tower mission. This prevents Horde from keeping Mage Tower pressure
+                // while Fel Reaver Ruins is uncapped, and prevents a whole clump from
+                // babysitting Blood Elf after it flips. Leave only a small guard role
+                // on the captured home tower; everyone else goes to the missing home.
                 if (!foundObjective && homeOwnedCount < 2)
                 {
+                    uint32 const missingHomeNode = FindOtherHomeAttackNode();
                     if (RtgEotsMission* currentMission = RTG_EotsGetMission(bot, bg))
                     {
-                        if (RTG_EotsMissionIsTower(currentMission->type) &&
-                            currentMission->targetNode && !RTG_EotsIsHomeNode(team, currentMission->targetNode))
-                            RTG_EotsClearMission(bot, bg);
+                        if (RTG_EotsMissionIsTower(currentMission->type) && currentMission->targetNode)
+                        {
+                            bool const enemySideMission = !RTG_EotsIsHomeNode(team, currentMission->targetNode);
+                            bool const sittingOnOwnedHome = RTG_EotsIsHomeNode(team, currentMission->targetNode) &&
+                                IsOwned(currentMission->targetNode) && missingHomeNode && currentMission->targetNode != missingHomeNode;
+                            bool const assignedTinyGuard = (stableRole % 5u) == 0u;
+
+                            if (enemySideMission || (sittingOnOwnedHome && !assignedTinyGuard))
+                                RTG_EotsClearMission(bot, bg);
+                        }
                     }
                 }
 
@@ -3714,7 +3790,7 @@ bool BGTactics::selectObjective(bool reset)
                     if (nodeId)
                         AssignNodeMission(RTG_EOTS_MISSION_CAPTURE_TOWER, nodeId,
                                           "opening_capture_home_tower", RTG_EOTS_CAPTURE_MISSION_MS,
-                                          RTG_EOTS_CAPTURE_HOLD_MS);
+                                          RTG_EOTS_CAPTURE_HOLD_MS, true);
                     else if ((nodeId = FindAssignedOwnedDefenseNode()) != 0)
                         AssignNodeMission(RTG_EOTS_MISSION_HOLD_TOWER, nodeId,
                                           "opening_hold_captured_home", RTG_EOTS_HOLD_MISSION_MS,
@@ -4277,7 +4353,13 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
 
     Position const& ownFlagRoom = RTG_WsgOwnFlagRoom(team);
     Position const& hideSpot = RTG_WsgStableHideSpot(team, stableRole, botSeed);
-    Position const& destination = ownFlagTaken ? hideSpot : ownFlagRoom;
+
+    // Do not let FCs select/hold the graveyard hut/tree area. When our flag is
+    // away, the carrier should first enter the own flag-room/roof layer, then use
+    // one of the small flag-room hide points. When our flag is home, cap.
+    Position destination = ownFlagRoom;
+    if (ownFlagTaken && RTG_WsgIsInsideOwnFlagRoom(bot, team))
+        destination.Relocate(hideSpot);
 
     Position botPos(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation());
 
@@ -4297,11 +4379,10 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         Position(pos.x, pos.y, pos.z, 0.0f).GetExactDist(destination.GetPositionX(), destination.GetPositionY(),
                                                         destination.GetPositionZ()) > 6.0f;
 
-    if (needObjective)
-    {
-        pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
-        posMap["bg objective"] = pos;
-    }
+    // FC objective is authoritative every pulse. Do not preserve a stale hide/gy
+    // point from generic WSG objective selection.
+    pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
+    posMap["bg objective"] = pos;
 
     float const dist2d = bot->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
 
@@ -4352,12 +4433,14 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     bool const appearsStuck = dist2d > 10.0f && progress.initialized &&
         getMSTimeDiff(progress.lastProgressMs, now) > 3500;
 
-    bool const forceRedirectFromGraveyard = RTG_WsgIsNearGraveyard(bot) && dist2d > 15.0f &&
-        !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target"), 30.0f);
+    bool const forceRedirectFromGraveyard = (RTG_WsgIsNearGraveyard(bot, 75.0f) ||
+        RTG_WsgIsUnsafeCarrierHoldSpot(bot, team)) && dist2d > 10.0f;
 
     // If our flag is away, the FC should wait at a deliberate safe spot. Do not let
     // the whole team stack here; non-carrier logic now sends most bots after the enemy FC.
-    if (ownFlagTaken && dist2d <= 7.0f && std::fabs(bot->GetPositionZ() - destination.GetPositionZ()) <= 10.0f)
+    if (ownFlagTaken && RTG_WsgIsInsideOwnFlagRoom(bot, team) &&
+        !RTG_WsgIsUnsafeCarrierHoldSpot(bot, team) && dist2d <= 6.0f &&
+        std::fabs(bot->GetPositionZ() - destination.GetPositionZ()) <= 10.0f)
     {
         if (bot->isMoving())
             bot->StopMoving();
@@ -4707,9 +4790,7 @@ bool BGTactics::resetObjective()
         oddsToChangeRole = 0;
 
     bool isCarryingFlag =
-        bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) ||
-        bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG) ||
-        bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
+        RTG_WsgHasFlag(bot) || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
 
     // Change role if allowed by odds and not carrying flag
     if (urand(0, 99) < oddsToChangeRole && !isCarryingFlag)
