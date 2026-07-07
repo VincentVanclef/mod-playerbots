@@ -119,6 +119,7 @@ private:
     bool selectObjective(bool reset = false);
     bool moveToObjective(bool ignoreDist);
     bool recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo const& pos);
+    bool rtgEotsMoveFlagCarrier();
     bool rtgWsgMoveFlagCarrier();
     bool selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths);
     bool moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 currentPoint, bool reverse = false);

@@ -1539,6 +1539,24 @@ static bool RTG_WsgHasFlag(Player* bot)
            (bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG));
 }
 
+static bool RTG_WsgOwnFlagAway(Player* bot, BattlegroundWS* wsBg)
+{
+    if (!bot || !wsBg)
+        return false;
+
+    ObjectGuid const ownFlagPicker = wsBg->GetFlagPickerGUID(bot->GetTeamId());
+    if (ownFlagPicker.IsEmpty())
+        return false;
+
+    // Defensive RTG guard: some bot/CFBG-style states can leave the carrier aura
+    // on the same bot that is returned by this lookup.  Do not let that false
+    // positive make a real FC hide forever instead of running home to score.
+    if (ownFlagPicker == bot->GetGUID() && RTG_WsgHasFlag(bot))
+        return false;
+
+    return true;
+}
+
 static bool RTG_WsgIsNear(Position const& a, Position const& b, float range2d, float maxZDiff = 12.0f)
 {
     return a.GetExactDist2d(b) <= range2d && std::fabs(a.GetPositionZ() - b.GetPositionZ()) <= maxZDiff;
@@ -1876,13 +1894,12 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     if (!bot || !botAI || !eyeBg || !bg || !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
         return false;
 
-    // Be strict: only the actual Netherstorm flag carrier should fire the turn-in area trigger.
+    // Aura is the important gate for RTG bots.  In some bot/temporary-team edge
+    // cases GetFlagPickerGUID can disagree for a tick, and returning false here
+    // leaves the visible flag carrier holding the Netherstorm flag all game.
     ObjectGuid const picker = eyeBg->GetFlagPickerGUID();
     if (!picker.IsEmpty() && picker != bot->GetGUID())
-    {
-        RTG_EotsDebugRaw(bot, bg, "turnin_skip", "aura_but_not_picker");
-        return false;
-    }
+        RTG_EotsDebugRaw(bot, bg, "turnin_warn", "aura_picker_mismatch");
 
     TeamId const team = bot->GetTeamId();
     uint32 bestNodeId = 0;
@@ -1913,9 +1930,13 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     if (!bestNodeId || !bestTriggerId)
         return false;
 
-    if (bestDist > 40.0f)
+    // Keep this a little generous.  The server-side area trigger handler is the
+    // final authority, but bots often path to a nearby tower anchor rather than
+    // perfectly crossing the client trigger volume.  Repeated guarded attempts
+    // prevent a carrier from holding the flag for an entire match while owning bases.
+    if (bestDist > 65.0f)
     {
-        if (bestDist < 100.0f)
+        if (bestDist < 120.0f)
             RTG_EotsDebugRaw(bot, bg, "turnin_wait", "owned_tower_not_close", bestNodeId, bestTriggerId);
         return false;
     }
@@ -2488,6 +2509,17 @@ bool BGTactics::Execute(Event /*event*/)
 
     if (getName() == "protect fc")
     {
+        // RTG WSG: the generic protect-FC action made nearly the whole team
+        // dogpile the carrier.  Let only a small deterministic escort slice use
+        // this action; the objective planner sends everyone else to recover/attack.
+        if (bgType == BATTLEGROUND_WS)
+        {
+            uint32 const role = context->GetValue<uint32>("bg role")->Get();
+            uint32 const stableRole = RTG_WsgStableRole(bot, role);
+            if ((stableRole % 5) != 0)
+                return false;
+        }
+
         if (protectFC())
             return true;
     }
@@ -2518,6 +2550,9 @@ bool BGTactics::Execute(Event /*event*/)
                     return true;
                 }
             }
+
+            if (rtgEotsMoveFlagCarrier())
+                return true;
         }
 
         if (bgType == BATTLEGROUND_WS && RTG_WsgHasFlag(bot))
@@ -3144,18 +3179,20 @@ bool BGTactics::selectObjective(bool reset)
 
             if (hasFlag)
             {
-                if (teamFlagTaken())
+                BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
+                if (RTG_WsgOwnFlagAway(bot, wsBg))
                     SetSafePos(RTG_WsgStableHideSpot(team, stableRole, botSeed), 3.0f);
                 else
                     SetSafePos(ownFlagRoom);
             }
             else if (RTG_EotsUnitValidForObjective(bot, enemyFC) && RTG_EotsUnitValidForObjective(bot, teamFC))
             {
-                // Both flags are out: keep a small deterministic escort group and
-                // send the rest after our flag instead of rerolling every pulse.
+                // Both flags are out: only a small escort slice stays on our FC.
+                // Everyone else must pressure the enemy FC, otherwise the whole
+                // team stacks around our carrier and nobody returns the flag.
                 if (escortRole && SetUnitObjective(teamFC))
                 {
-                    if (ServerFacade::instance().GetDistance2d(bot, teamFC) < 33.0f)
+                    if (ServerFacade::instance().GetDistance2d(bot, teamFC) < 24.0f)
                         Follow(teamFC);
                 }
                 else
@@ -3171,12 +3208,15 @@ bool BGTactics::selectObjective(bool reset)
             }
             else if (RTG_EotsUnitValidForObjective(bot, teamFC))
             {
-                bool const closeToTeamFC = bot->GetDistance(teamFC) < 110.0f;
-                if (escortRole || closeToTeamFC || isDefender)
+                // Do not let proximity make the whole team escort.  One escort
+                // group follows; defenders hold home; offense keeps pressure.
+                if (escortRole)
                 {
-                    if (SetUnitObjective(teamFC) && ServerFacade::instance().GetDistance2d(bot, teamFC) < 33.0f)
+                    if (SetUnitObjective(teamFC) && ServerFacade::instance().GetDistance2d(bot, teamFC) < 24.0f)
                         Follow(teamFC);
                 }
+                else if (isDefender)
+                    SetSafePos(ownFlagRoom, 7.0f);
                 else
                     SetSafePos(enemyFlagRoom, 5.0f);
             }
@@ -4142,6 +4182,102 @@ bool BGTactics::moveToObjective(bool ignoreDist)
 }
 
 
+bool BGTactics::rtgEotsMoveFlagCarrier()
+{
+    Battleground* bg = bot->GetBattleground();
+    if (!bg)
+        return false;
+
+    BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
+
+    if (bgType != BATTLEGROUND_EY || !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) || !bot->IsAlive())
+        return false;
+
+    BattlegroundEY* eyeBg = static_cast<BattlegroundEY*>(bg);
+    if (!eyeBg)
+        return false;
+
+    if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
+    {
+        resetObjective();
+        return true;
+    }
+
+    TeamId const team = bot->GetTeamId();
+    uint32 bestNodeId = 0;
+    float bestDist = FLT_MAX;
+    Position destination;
+
+    for (auto const& objective : EY_AttackObjectives)
+    {
+        uint32 const nodeId = std::get<0>(objective);
+        if (eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId != team)
+            continue;
+
+        Position nodePos;
+        if (!RTG_EotsGetNodePosition(nodeId, nodePos))
+            continue;
+
+        float const dist = bot->GetDistance(nodePos);
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            bestNodeId = nodeId;
+            destination = nodePos;
+        }
+    }
+
+    // No owned tower means there is nowhere legal to score yet.  Let the mission
+    // planner send the FC toward a home/enemy tower instead of idling at mid.
+    if (!bestNodeId || !destination.IsPositionValid())
+        return false;
+
+    PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
+    PositionInfo pos = posMap["bg objective"];
+    bool const needObjective = !pos.isSet() ||
+        Position(pos.x, pos.y, pos.z, 0.0f).GetExactDist(destination.GetPositionX(), destination.GetPositionY(),
+                                                        destination.GetPositionZ()) > 5.0f;
+
+    if (needObjective)
+    {
+        pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
+        posMap["bg objective"] = pos;
+
+        if (bot->isMoving())
+            bot->StopMoving();
+        bot->GetMotionMaster()->Clear();
+    }
+
+    // A flag carrier has to prioritize scoring over random fights.  Bad/distant
+    // combat targets were enough to pin FCs indefinitely before this override.
+    if (Unit* currentTarget = context->GetValue<Unit*>("current target")->Get())
+    {
+        if (!currentTarget->IsAlive() || currentTarget->GetDistance(bot) > 30.0f ||
+            !bot->IsWithinLOSInMap(currentTarget))
+            context->GetValue<Unit*>("current target")->Set(nullptr);
+    }
+
+    // Try once more after setting the exact owned-tower objective.
+    if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
+    {
+        resetObjective();
+        return true;
+    }
+
+    if (bot->isMoving() && !needObjective)
+        return true;
+
+    bot->StopMoving();
+    bot->GetMotionMaster()->Clear();
+
+    if (MoveNear(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), 1.5f))
+        return true;
+
+    return MoveTo(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+}
+
 bool BGTactics::rtgWsgMoveFlagCarrier()
 {
     Battleground* bg = bot->GetBattleground();
@@ -4157,7 +4293,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
 
     BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
     TeamId const team = bot->GetTeamId();
-    bool const ownFlagTaken = !wsBg->GetFlagPickerGUID(team).IsEmpty();
+    bool const ownFlagTaken = RTG_WsgOwnFlagAway(bot, wsBg);
 
     uint32 const role = context->GetValue<uint32>("bg role")->Get();
     uint32 const stableRole = RTG_WsgStableRole(bot, role);
@@ -4172,7 +4308,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     // If our flag is home, make the cap attempt directly.  The generic close-object
     // scan can miss this when the FC is moving or stuck in combat, which leaves the
     // carrier standing still even though the capture trigger is right there.
-    if (!ownFlagTaken && RTG_WsgIsNear(botPos, ownFlagRoom, 12.0f, 12.0f))
+    if (!ownFlagTaken && RTG_WsgIsNear(botPos, ownFlagRoom, 22.0f, 14.0f))
     {
         WorldPacket data(CMSG_AREATRIGGER);
         data << uint32(team == TEAM_HORDE ? BG_WS_TRIGGER_HORDE_FLAG_SPAWN : BG_WS_TRIGGER_ALLIANCE_FLAG_SPAWN);
@@ -4190,6 +4326,13 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     {
         pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
         posMap["bg objective"] = pos;
+
+        // If the FC was previously hiding because our flag was away, then the
+        // flag returns, the destination flips to our flag room.  Do not allow the
+        // old movement generator to keep carrying the bot back to the stale hide spot.
+        if (bot->isMoving())
+            bot->StopMoving();
+        bot->GetMotionMaster()->Clear();
     }
 
     float const dist2d = bot->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
@@ -4216,7 +4359,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     // Keep the FC moving even while technically in combat.  This is the opposite of
     // the normal BG behavior on purpose: a WSG FC that stops to fight becomes a stuck
     // pile-up and never scores.
-    if (bot->isMoving())
+    if (bot->isMoving() && !needObjective)
         return true;
 
     bot->StopMoving();
