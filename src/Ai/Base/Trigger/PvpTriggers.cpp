@@ -107,7 +107,7 @@ bool PlayerIsInBattlegroundWithoutFlag::IsActive()
                 return true;
 
             if (bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_ALLIANCE) ||
-                bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_ALLIANCE))
+                bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_HORDE))
             {
                 return false;
             }
@@ -283,7 +283,11 @@ bool TeamFlagCarrierNear::IsActive()
     }
 
     Unit* carrier = AI_VALUE(Unit*, "team flag carrier");
-    return carrier && ServerFacade::instance().IsDistanceLessOrEqualThan(ServerFacade::instance().GetDistance2d(bot, carrier), 200.f);
+
+    // RTG WSG: a 200y escort trigger made nearly the whole team peel onto the
+    // friendly FC. Keep this trigger local; BGTactics::protectFC then restricts
+    // actual escorting to a deterministic role.
+    return carrier && ServerFacade::instance().IsDistanceLessOrEqualThan(ServerFacade::instance().GetDistance2d(bot, carrier), 55.f);
 }
 
 bool PlayerWantsInBattlegroundTrigger::IsActive()
