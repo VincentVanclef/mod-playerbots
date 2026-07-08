@@ -1355,6 +1355,52 @@ static Position RTG_EotsStartPosition(TeamId team)
     return team == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
 }
 
+static TeamId RTG_EotsEffectiveTeamId(Player* bot, Battleground* bg = nullptr)
+{
+    TeamId const fallback = RTG_BgEffectiveTeamId(bot);
+    if (!bot)
+        return fallback;
+
+    if (!bg)
+        bg = bot->GetBattleground();
+
+    if (!bg)
+        return fallback;
+
+    BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
+
+    if (bgType != BATTLEGROUND_EY)
+        return fallback;
+
+    // CFBG/playerbot builds can occasionally disagree between original faction,
+    // fake faction, and BG side. For EotS specifically, lock the side from the
+    // spawn rock/starting half the first time this bot is evaluated in the match.
+    // This prevents Horde-side bots from being planned as Alliance and skipping
+    // Fel Reaver Ruins for Mage Tower.
+    static std::unordered_map<uint64, TeamId> lockedSideByBot;
+    uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
+
+    auto itr = lockedSideByBot.find(key);
+    if (itr != lockedSideByBot.end() &&
+        (itr->second == TEAM_ALLIANCE || itr->second == TEAM_HORDE))
+        return itr->second;
+
+    float const hordeStartDist = bot->GetDistance(EY_WAITING_POS_HORDE);
+    float const allianceStartDist = bot->GetDistance(EY_WAITING_POS_ALLIANCE);
+    bool const onStartRockOrExit = bot->GetPositionZ() > 1230.0f || hordeStartDist < 360.0f || allianceStartDist < 360.0f;
+
+    if (onStartRockOrExit)
+    {
+        TeamId const inferred = hordeStartDist <= allianceStartDist ? TEAM_HORDE : TEAM_ALLIANCE;
+        lockedSideByBot[key] = inferred;
+        return inferred;
+    }
+
+    return fallback;
+}
+
 static bool RTG_EotsReachedStartExitField(Player* bot)
 {
     if (!bot)
@@ -1366,7 +1412,7 @@ static bool RTG_EotsReachedStartExitField(Player* bot)
     // tower, call eyJumpDown(), and run straight back to the start fork below
     // the rock. Once the bot crosses the exit-road threshold, it is on the
     // playable field for routing purposes even if the tower terrain rises.
-    TeamId const team = RTG_BgEffectiveTeamId(bot);
+    TeamId const team = RTG_EotsEffectiveTeamId(bot);
     if (team == TEAM_HORDE)
         return bot->GetPositionX() >= 1932.0f;
     if (team == TEAM_ALLIANCE)
@@ -1386,7 +1432,7 @@ static bool RTG_EotsNeedsStartExit(Player* bot)
     if (RTG_EotsReachedStartExitField(bot))
         return false;
 
-    Position const start = RTG_EotsStartPosition(RTG_BgEffectiveTeamId(bot));
+    Position const start = RTG_EotsStartPosition(RTG_EotsEffectiveTeamId(bot));
     if (bot->GetDistance(start) > RTG_EOTS_START_EXIT_MAX_DIST)
         return false;
 
@@ -1443,11 +1489,12 @@ static bool RTG_EotsIsEnemySideNode(TeamId team, uint32 nodeId)
 
 static uint32 RTG_EotsAssignedHomeNode(TeamId team, uint32 role, uint32 botGuid)
 {
-    // Split the opening push using the bot GUID as the primary seed. Using only
-    // the transient bg role caused some teams to roll the same home assignment
-    // and Horde would often skip Fel Reaver Ruins for an enemy-side push.
-    uint32 const seed = (botGuid ? botGuid : role) + role;
-    bool const firstHalf = (seed % 4u) < 2u;
+    // Keep the home split deterministic and simple. The previous seed could still
+    // clump depending on bot GUID/role patterns, which made Horde repeatedly skip
+    // Fel Reaver Ruins. stableRole is already mixed with the GUID by the caller,
+    // so parity gives an easy 50/50 split.
+    uint32 const seed = role + (botGuid % 2u);
+    bool const firstHalf = (seed % 2u) == 0u;
 
     if (team == TEAM_HORDE)
         return firstHalf ? POINT_FEL_REAVER : POINT_BLOOD_ELF;
@@ -1560,7 +1607,13 @@ static bool RTG_WsgAllowObjectivePulse(Player* bot, Battleground* bg)
     uint32 const botGuid = bot->GetGUID().GetCounter();
     uint32 const now = getMSTime();
     bool const carryingFlag = bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG);
-    uint32 const minPulseMs = carryingFlag ? 3000u : 9000u;
+    bool const flagGameUrgent = carryingFlag || PlayerHasFlag::IsCapturingFlag(bot);
+
+    // Non-carriers were visibly changing their mind at the exact cadence of this
+    // throttle near WSG graveyards. Let normal bots commit to offense/defense long
+    // enough to actually reach a flag room. Carriers still refresh fast so cap/hide
+    // state changes remain responsive.
+    uint32 const minPulseMs = flagGameUrgent ? 2500u : 22000u;
 
     auto itr = lastPulseMsByBot.find(botGuid);
     if (itr != lastPulseMsByBot.end() && getMSTimeDiff(itr->second, now) < minPulseMs)
@@ -1740,29 +1793,25 @@ static bool RTG_WsgChooseGraveyardEscapeTarget(Player* bot, TeamId team, Positio
     if (!bot || team == TEAM_NEUTRAL)
         return false;
 
-    if (!RTG_WsgIsNearGraveyard(bot, 85.0f) && !RTG_WsgIsUnsafeCarrierHoldSpot(bot, team))
+    Position const& ownRoom = RTG_WsgOwnFlagRoom(team);
+    bool const desiredIsOwnRoom =
+        desired.GetExactDist(ownRoom.GetPositionX(), ownRoom.GetPositionY(), ownRoom.GetPositionZ()) <= 35.0f;
+
+    // RTG WSG: this helper is now deliberately narrow.  The previous version
+    // fired for any bot near either graveyard and redirected enemy-room pressure
+    // back to midfield. That created the exact visual problem testers saw:
+    // run ~20 yards toward a flag, enter the GY radius, change mind, repeat.
+    // Only use the staged GY breadcrumbs when the current job is to reach our
+    // own flag room/cap/hide area.  Offense and EFC recovery must be allowed to
+    // pass through graveyard-adjacent lanes on their way to the enemy room.
+    if (!desiredIsOwnRoom)
         return false;
 
-    Position const& ownRoom = RTG_WsgOwnFlagRoom(team);
-    bool const desiredIsOwnRoom = desired.GetExactDist(ownRoom.GetPositionX(), ownRoom.GetPositionY(), ownRoom.GetPositionZ()) <= 35.0f;
+    if (!RTG_WsgIsNearTeamGraveyard(bot, team, 95.0f) &&
+        !RTG_WsgIsUnsafeCarrierHoldSpot(bot, team))
+        return false;
 
-    if (RTG_WsgIsNearTeamGraveyard(bot, team, 95.0f) && desiredIsOwnRoom)
-        return RTG_WsgGetOwnGraveyardEscapeStep(bot, team, target);
-
-    // If a carrier or regular bot is near the enemy graveyard / front yard, do
-    // not let it hold there. Pull it toward midfield first; the next strategy
-    // pulse can choose FC cap, EFC chase, or enemy-room pressure from a clean lane.
-    if (RTG_WsgIsNearEnemyGraveyard(bot, team, 95.0f))
-    {
-        target.Relocate(WS_ROAM_POS);
-        return true;
-    }
-
-    if (desiredIsOwnRoom)
-        return RTG_WsgGetOwnGraveyardEscapeStep(bot, team, target);
-
-    target.Relocate(WS_ROAM_POS);
-    return true;
+    return RTG_WsgGetOwnGraveyardEscapeStep(bot, team, target);
 }
 
 static bool RTG_WsgEnemyThreatNearby(Player* bot, Unit* enemy, float range = 35.0f)
@@ -3698,7 +3747,7 @@ bool BGTactics::selectObjective(bool reset)
             if (!eyeOfTheStormBG)
                 return false;
 
-            TeamId team = RTG_BgEffectiveTeamId(bot);
+            TeamId team = RTG_EotsEffectiveTeamId(bot, bg);
             uint32 role = context->GetValue<uint32>("bg role")->Get();
             uint32 stableRole = RTG_EotsStableRole(bot, role);
             uint32 const botSeed = bot->GetGUID().GetCounter();
@@ -3832,6 +3881,27 @@ bool BGTactics::selectObjective(bool reset)
 
             auto FindOtherHomeAttackNode = [&]() -> uint32
             {
+                // Home towers are mandatory before enemy-side pressure. Be extra
+                // explicit here so a wrong/stale enemy-side mission cannot keep
+                // Horde marching to Mage Tower while Fel Reaver Ruins is still open.
+                if (team == TEAM_HORDE)
+                {
+                    if (IsNotOwned(POINT_FEL_REAVER))
+                        return POINT_FEL_REAVER;
+                    if (IsNotOwned(POINT_BLOOD_ELF))
+                        return POINT_BLOOD_ELF;
+                    return 0;
+                }
+
+                if (team == TEAM_ALLIANCE)
+                {
+                    if (IsNotOwned(POINT_MAGE_TOWER))
+                        return POINT_MAGE_TOWER;
+                    if (IsNotOwned(POINT_DRAENEI_RUINS))
+                        return POINT_DRAENEI_RUINS;
+                    return 0;
+                }
+
                 uint32 const assigned = RTG_EotsAssignedHomeNode(team, stableRole, botSeed);
                 if (IsNotOwned(assigned))
                     return assigned;
@@ -4705,27 +4775,12 @@ bool BGTactics::recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo co
         return true;
     }
 
-    if (bgType == BATTLEGROUND_WS && RTG_WsgIsNearGraveyard(bot, 85.0f) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
-    {
-        if (BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg))
-        {
-            uint32 const role = context->GetValue<uint32>("bg role")->Get();
-            uint32 const stableRole = RTG_WsgStableRole(bot, role);
-            TeamId const team = RTG_BgEffectiveTeamId(bot);
-            Position fallback = RTG_WsgStrategicFallback(bot, wsBg, stableRole, AI_VALUE(Unit*, "enemy flag carrier"), AI_VALUE(Unit*, "team flag carrier"));
-            Position escapeTarget;
-            if (RTG_WsgChooseGraveyardEscapeTarget(bot, team, fallback, escapeTarget))
-                fallback.Relocate(escapeTarget);
-
-            if (fallback.IsPositionValid() && bot->GetDistance(fallback) > 10.0f)
-            {
-                bot->StopMoving();
-                bot->GetMotionMaster()->Clear();
-                clearProgress();
-                return MoveNear(bot->GetMapId(), fallback.GetPositionX(), fallback.GetPositionY(), fallback.GetPositionZ(), 3.0f, MovementPriority::MOVEMENT_NORMAL);
-            }
-        }
-    }
+    // RTG WSG: do not auto-redirect merely because a bot is near a graveyard.
+    // Both the normal flag-room route and the lower cross-map route pass through
+    // GY-adjacent space. Redirecting here every few seconds made bots visibly
+    // change their minds around the huts instead of continuing to the flag. The
+    // generic stuck watchdog below is enough; if a bot truly stops making
+    // progress, it resets the objective after the normal stuck timeout.
 
     if (moved > 2.25f || distToObjective < 6.0f)
     {
