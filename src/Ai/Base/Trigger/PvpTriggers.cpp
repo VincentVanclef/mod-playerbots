@@ -165,35 +165,28 @@ bool PlayerHasFlag::IsCapturingFlag(Player* bot)
         if (bot->GetBattlegroundTypeId() == BATTLEGROUND_WS)
         {
             BattlegroundWS* bg = (BattlegroundWS*)bot->GetBattleground();
-            // bot is horde and has ally flag
-            if (bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_ALLIANCE))
+            if (!bg)
+                return false;
+
+            TeamId const team = RTG_TriggerEffectiveBgTeamId(bot);
+            if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+                return false;
+
+            TeamId const enemyTeam = bg->GetOtherTeamId(team);
+            if (bot->GetGUID() != bg->GetFlagPickerGUID(enemyTeam))
+                return false;
+
+            // The bot has the enemy flag. If our own flag is also taken, only treat this
+            // as a pure capture objective once the carrier has meaningfully left the
+            // enemy flag room; otherwise allow local fighting/escape logic to run.
+            if (!bg->GetFlagPickerGUID(team).IsEmpty())
             {
-                if (bg->GetFlagPickerGUID(TEAM_HORDE))  // enemy has flag too
-                {
-                    if (GameObject* go = bg->GetBGObject(BG_WS_OBJECT_H_FLAG))
-                    {
-                        // only indicate capturing if signicant distance from own flag
-                        // (otherwise allow bot to defend itself)
-                        return bot->GetDistance(go) > 36.0f;
-                    }
-                }
-                return true;  // enemy doesnt have flag so we can cap immediately
+                uint32 const ownFlagObject = team == TEAM_HORDE ? BG_WS_OBJECT_H_FLAG : BG_WS_OBJECT_A_FLAG;
+                if (GameObject* go = bg->GetBGObject(ownFlagObject))
+                    return bot->GetDistance(go) > 36.0f;
             }
-            // bot is ally and has horde flag
-            if (bot->GetGUID() == bg->GetFlagPickerGUID(TEAM_HORDE))
-            {
-                if (bg->GetFlagPickerGUID(TEAM_ALLIANCE))  // enemy has flag too
-                {
-                    if (GameObject* go = bg->GetBGObject(BG_WS_OBJECT_A_FLAG))
-                    {
-                        // only indicate capturing if signicant distance from own flag
-                        // (otherwise allow bot to defend itself)
-                        return bot->GetDistance(go) > 36.0f;
-                    }
-                }
-                return true;  // enemy doesnt have flag so we can cap immediately
-            }
-            return false;  // bot doesn't have flag
+
+            return true;
         }
 
         if (bot->GetBattlegroundTypeId() == BATTLEGROUND_EY)

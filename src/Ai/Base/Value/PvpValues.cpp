@@ -11,6 +11,28 @@
 #include "Playerbots.h"
 #include "ServerFacade.h"
 
+namespace
+{
+TeamId RTG_ValueEffectiveBgTeamId(Player* player)
+{
+    if (!player)
+        return TEAM_NEUTRAL;
+
+    if (player->InBattleground())
+    {
+        TeamId const bgTeam = player->GetBgTeamId();
+        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
+            return bgTeam;
+    }
+
+    TeamId const team = player->GetTeamId();
+    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
+        return team;
+
+    return TEAM_NEUTRAL;
+}
+}
+
 Unit* FlagCarrierValue::Calculate()
 {
     Unit* carrier = nullptr;
@@ -24,13 +46,17 @@ Unit* FlagCarrierValue::Calculate()
             if (!bg)
                 return nullptr;
 
-            if ((!sameTeam && bot->GetTeamId() == TEAM_HORDE || (sameTeam && bot->GetTeamId() == TEAM_ALLIANCE)) &&
-                !bg->GetFlagPickerGUID(TEAM_HORDE).IsEmpty())
-                carrier = ObjectAccessor::GetPlayer(bg->GetBgMap(), bg->GetFlagPickerGUID(TEAM_HORDE));
+            TeamId const team = RTG_ValueEffectiveBgTeamId(bot);
+            if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+                return nullptr;
 
-            if ((!sameTeam && bot->GetTeamId() == TEAM_ALLIANCE || (sameTeam && bot->GetTeamId() == TEAM_HORDE)) &&
-                !bg->GetFlagPickerGUID(TEAM_ALLIANCE).IsEmpty())
-                carrier = ObjectAccessor::GetPlayer(bg->GetBgMap(), bg->GetFlagPickerGUID(TEAM_ALLIANCE));
+            // In WSG, GetFlagPickerGUID(team) returns the carrier of that team's own flag.
+            // For "enemy flag carrier", chase whoever has our flag. For "team flag carrier",
+            // support whoever has the enemy flag. Use BG team, not original faction, so CFBG
+            // and fake-faction states do not invert Alliance/Horde objective logic.
+            TeamId const flagOwnerTeam = sameTeam ? bg->GetOtherTeamId(team) : team;
+            if (!bg->GetFlagPickerGUID(flagOwnerTeam).IsEmpty())
+                carrier = ObjectAccessor::GetPlayer(bg->GetBgMap(), bg->GetFlagPickerGUID(flagOwnerTeam));
 
             if (carrier)
             {
@@ -57,10 +83,13 @@ Unit* FlagCarrierValue::Calculate()
             if (!fc)
                 return nullptr;
 
-            if (!sameTeam && (fc->GetTeamId() != bot->GetTeamId()))
+            TeamId const botTeam = RTG_ValueEffectiveBgTeamId(bot);
+            TeamId const fcTeam = RTG_ValueEffectiveBgTeamId(fc);
+
+            if (!sameTeam && fcTeam != TEAM_NEUTRAL && botTeam != TEAM_NEUTRAL && fcTeam != botTeam)
                 carrier = fc;
 
-            if (sameTeam && (fc->GetTeamId() == bot->GetTeamId()))
+            if (sameTeam && fcTeam != TEAM_NEUTRAL && botTeam != TEAM_NEUTRAL && fcTeam == botTeam)
                 carrier = fc;
 
             if (carrier)
