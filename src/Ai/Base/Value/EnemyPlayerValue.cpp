@@ -10,6 +10,28 @@
 #include "ServerFacade.h"
 #include "Vehicle.h"
 
+namespace
+{
+TeamId RTG_EnemyPlayerEffectiveBgTeamId(Player* player)
+{
+    if (!player)
+        return TEAM_NEUTRAL;
+
+    if (player->InBattleground())
+    {
+        TeamId const bgTeam = player->GetBgTeamId();
+        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
+            return bgTeam;
+    }
+
+    TeamId const team = player->GetTeamId();
+    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
+        return team;
+
+    return TEAM_NEUTRAL;
+}
+}
+
 bool NearestEnemyPlayersValue::AcceptUnit(Unit* unit)
 {
     // Apply parent's filtering first (includes level difference checks)
@@ -55,6 +77,7 @@ Unit* EnemyPlayerValue::Calculate()
     // 1. Check units we are currently in PvP combat with.
     std::vector<Unit*> targets;
     Unit* pVictim = bot->GetVictim();
+    TeamId const bgTeam = RTG_EnemyPlayerEffectiveBgTeamId(bot);
     for (auto const& [guid, combatRef] : bot->GetCombatManager().GetPvPCombatRefs())
     {
         Unit* pTarget = combatRef->GetOther(bot);
@@ -62,8 +85,8 @@ Unit* EnemyPlayerValue::Calculate()
             !bot->IsWithinDist(pTarget, VISIBILITY_DISTANCE_NORMAL))
             continue;
 
-        if ((bot->GetTeamId() == TEAM_HORDE && pTarget->HasAura(23333)) ||
-            (bot->GetTeamId() == TEAM_ALLIANCE && pTarget->HasAura(23335)))
+        if ((bgTeam == TEAM_HORDE && pTarget->HasAura(23333)) ||
+            (bgTeam == TEAM_ALLIANCE && pTarget->HasAura(23335)))
             return pTarget;
 
         targets.push_back(pTarget);
@@ -95,12 +118,12 @@ Unit* EnemyPlayerValue::Calculate()
         if (pTarget == pVictim)
             continue;
 
-        if (bot->GetTeamId() == TEAM_HORDE)
+        if (bgTeam == TEAM_HORDE)
         {
             if (pTarget->HasAura(23333))
                 return pTarget;
         }
-        else
+        else if (bgTeam == TEAM_ALLIANCE)
         {
             if (pTarget->HasAura(23335))
                 return pTarget;

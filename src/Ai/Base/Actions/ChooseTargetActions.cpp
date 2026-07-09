@@ -5,6 +5,8 @@
 
 #include "ChooseTargetActions.h"
 
+#include "BattlegroundEY.h"
+#include "BattlegroundWS.h"
 #include "ChooseRpgTargetAction.h"
 #include "Event.h"
 #include "LootObjectStack.h"
@@ -14,6 +16,46 @@
 #include "PossibleRpgTargetsValue.h"
 #include "PvpTriggers.h"
 #include "ServerFacade.h"
+
+namespace
+{
+constexpr uint32 RTG_BG_WS_SPELL_WARSONG_FLAG = 23333;
+constexpr uint32 RTG_BG_WS_SPELL_SILVERWING_FLAG = 23335;
+constexpr uint32 RTG_BG_EY_NETHERSTORM_FLAG_SPELL = 34976;
+
+bool RTG_IsCarryingBattlegroundFlag(Player* bot)
+{
+    if (!bot)
+        return false;
+
+    if (bot->HasAura(RTG_BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(RTG_BG_WS_SPELL_SILVERWING_FLAG) ||
+        bot->HasAura(RTG_BG_EY_NETHERSTORM_FLAG_SPELL))
+        return true;
+
+    Battleground* bg = bot->GetBattleground();
+    if (!bg)
+        return false;
+
+    BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
+
+    if (bgType == BATTLEGROUND_WS)
+    {
+        BattlegroundWS* wsBg = dynamic_cast<BattlegroundWS*>(bg);
+        return wsBg && (wsBg->GetFlagPickerGUID(TEAM_ALLIANCE) == bot->GetGUID() ||
+                        wsBg->GetFlagPickerGUID(TEAM_HORDE) == bot->GetGUID());
+    }
+
+    if (bgType == BATTLEGROUND_EY)
+    {
+        BattlegroundEY* eyeBg = dynamic_cast<BattlegroundEY*>(bg);
+        return eyeBg && eyeBg->GetFlagPickerGUID() == bot->GetGUID();
+    }
+
+    return false;
+}
+}
 
 bool AttackEnemyPlayerAction::isUseful()
 {
@@ -26,8 +68,15 @@ bool AttackEnemyPlayerAction::isUseful()
 bool AttackEnemyFlagCarrierAction::isUseful()
 {
     Unit* target = context->GetValue<Unit*>("enemy flag carrier")->Get();
-    return target && ServerFacade::instance().IsDistanceLessOrEqualThan(ServerFacade::instance().GetDistance2d(bot, target), 100.0f) &&
-           PlayerHasFlag::IsCapturingFlag(bot);
+    if (!target || RTG_IsCarryingBattlegroundFlag(bot))
+        return false;
+
+    if (sPlayerbotAIConfig.IsPvpProhibited(bot->GetZoneId(), bot->GetAreaId()) ||
+        sPlayerbotAIConfig.IsPvpProhibited(target->GetZoneId(), target->GetAreaId()))
+        return false;
+
+    return ServerFacade::instance().IsDistanceLessOrEqualThan(ServerFacade::instance().GetDistance2d(bot, target),
+                                                              120.0f);
 }
 
 bool AggressiveTargetAction::isUseful()
