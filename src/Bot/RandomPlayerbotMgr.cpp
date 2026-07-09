@@ -60,7 +60,6 @@ struct GuidClassRaceInfo
     uint32 rRace;
 };
 
-
 namespace
 {
 constexpr uint32 RTG_QUEUE_DEMAND_PVP = 1;

@@ -14,7 +14,6 @@
 #include "BattlegroundAV.h"
 #include "BattlegroundEY.h"
 
-
 namespace
 {
 TeamId RTG_TriggerEffectiveBgTeamId(Player* bot)
