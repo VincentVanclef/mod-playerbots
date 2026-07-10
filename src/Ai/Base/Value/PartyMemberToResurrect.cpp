@@ -43,6 +43,9 @@ private:
 
 Unit* PartyMemberToResurrect::Calculate()
 {
+    if (bot->InBattleground())
+        return nullptr;
+
     FindDeadPlayer finder(this);
     return FindPartyMember(finder);
 }

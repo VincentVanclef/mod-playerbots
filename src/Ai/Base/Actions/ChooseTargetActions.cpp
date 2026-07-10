@@ -59,7 +59,7 @@ bool RTG_IsCarryingBattlegroundFlag(Player* bot)
 
 bool AttackEnemyPlayerAction::isUseful()
 {
-    if (PlayerHasFlag::IsCapturingFlag(bot))
+    if (RTG_IsCarryingBattlegroundFlag(bot))
         return false;
 
     return !sPlayerbotAIConfig.IsPvpProhibited(bot->GetZoneId(), bot->GetAreaId());
@@ -81,6 +81,9 @@ bool AttackEnemyFlagCarrierAction::isUseful()
 
 bool AggressiveTargetAction::isUseful()
 {
+    if (RTG_IsCarryingBattlegroundFlag(bot))
+        return false;
+
     if (bot->IsInCombat())
         return false;
 
@@ -158,6 +161,9 @@ bool AttackAnythingAction::isUseful()
     if (!bot || !botAI)  // Prevents invalid accesses
         return false;
 
+    if (RTG_IsCarryingBattlegroundFlag(bot))
+        return false;
+
     if (!botAI->AllowActivity(GRIND_ACTIVITY))  // Bot cannot be active
         return false;
 
@@ -188,7 +194,7 @@ bool AttackAnythingAction::isPossible() { return GetTarget() && AttackAction::is
 
 bool DpsAssistAction::isUseful()
 {
-    if (PlayerHasFlag::IsCapturingFlag(bot))
+    if (RTG_IsCarryingBattlegroundFlag(bot))
         return false;
 
     return true;
@@ -233,6 +239,9 @@ bool AttackRtiTargetAction::Execute(Event /*event*/)
 
 bool AttackRtiTargetAction::isUseful()
 {
+    if (RTG_IsCarryingBattlegroundFlag(bot))
+        return false;
+
     if (botAI->ContainsStrategy(STRATEGY_TYPE_HEAL))
         return false;
 

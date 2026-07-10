@@ -206,6 +206,11 @@ bool CastSpellAction::isUseful()
            // && ServerFacade::instance().GetDistance2d(bot, target) <= (range + combatReach);
 }
 
+bool ResurrectPartyMemberAction::isUseful()
+{
+    return !bot->InBattleground() && CastSpellAction::isUseful();
+}
+
 bool CastSpellAction::isPossible()
 {
     if (botAI->IsInVehicle() && !botAI->IsInVehicle(false, false, true))

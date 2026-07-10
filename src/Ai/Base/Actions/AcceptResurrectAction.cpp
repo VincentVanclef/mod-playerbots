@@ -10,6 +10,9 @@
 
 bool AcceptResurrectAction::Execute(Event event)
 {
+    if (bot->InBattleground())
+        return false;
+
     if (bot->IsAlive())
         return false;
 

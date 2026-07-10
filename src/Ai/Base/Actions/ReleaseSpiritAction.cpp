@@ -255,6 +255,9 @@ void RepopAction::PerformGraveyardTeleport(const GraveyardStruct* graveyard) con
 // SelfResurrectAction implementation for Warlock's Soulstone Resurrection/Shaman's Reincarnation
 bool SelfResurrectAction::Execute(Event /*event*/)
 {
+    if (bot->InBattleground())
+        return false;
+
     if (!bot->IsAlive() && bot->GetUInt32Value(PLAYER_SELF_RES_SPELL))
     {
         WorldPacket packet(CMSG_SELF_RES);
@@ -265,5 +268,5 @@ bool SelfResurrectAction::Execute(Event /*event*/)
 }
 bool SelfResurrectAction::isUseful()
 {
-    return !bot->IsAlive() && bot->GetUInt32Value(PLAYER_SELF_RES_SPELL);
+    return !bot->InBattleground() && !bot->IsAlive() && bot->GetUInt32Value(PLAYER_SELF_RES_SPELL);
 }

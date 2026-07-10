@@ -17,6 +17,9 @@
 
 bool ReviveFromCorpseAction::Execute(Event event)
 {
+    if (bot->InBattleground())
+        return false;
+
     Player* groupLeader = botAI->GetGroupLeader();
     Corpse* corpse = bot->GetCorpse();
 
@@ -295,6 +298,9 @@ GraveyardStruct const* SpiritHealerAction::GetGrave(bool startZone)
 
 bool SpiritHealerAction::Execute(Event /*event*/)
 {
+    if (bot->InBattleground())
+        return false;
+
     Corpse* corpse = bot->GetCorpse();
     if (!corpse)
     {
@@ -362,4 +368,4 @@ bool SpiritHealerAction::Execute(Event /*event*/)
     return false;
 }
 
-bool SpiritHealerAction::isUseful() { return bot->HasPlayerFlag(PLAYER_FLAGS_GHOST); }
+bool SpiritHealerAction::isUseful() { return !bot->InBattleground() && bot->HasPlayerFlag(PLAYER_FLAGS_GHOST); }

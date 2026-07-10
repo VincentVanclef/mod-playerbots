@@ -121,6 +121,7 @@ private:
     bool recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo const& pos);
     bool rtgEotsMoveFlagCarrier();
     bool rtgEotsMoveOpeningHomeTower();
+    bool rtgEotsMoveToObjectiveRoute();
     bool rtgWsgMoveFlagCarrier();
     bool rtgWsgMoveToEnemyFlagObjective();
     bool selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths);

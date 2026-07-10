@@ -2378,6 +2378,9 @@ bool RandomPlayerbotMgr::ProcessBot(Player* bot)
 
 void RandomPlayerbotMgr::Revive(Player* player)
 {
+    if (!player || player->InBattleground())
+        return;
+
     uint32 bot = player->GetGUID().GetCounter();
 
     // LOG_INFO("playerbots", "Bot {} revived", player->GetName().c_str());
@@ -2891,6 +2894,9 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
     if (!botAI)
         return;
 
+    if (bot->InBattleground())
+        return;
+
     if (bot->isDead())
     {
         bot->ResurrectPlayer(1.0f);
@@ -2900,9 +2906,6 @@ void RandomPlayerbotMgr::Refresh(Player* bot)
 
     // if (sPlayerbotAIConfig.disableRandomLevels)
     //     return;
-
-    if (bot->InBattleground())
-        return;
 
     LOG_DEBUG("playerbots", "Refreshing bot {} <{}>", bot->GetGUID().ToString().c_str(), bot->GetName().c_str());
 

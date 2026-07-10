@@ -486,6 +486,12 @@ bool RTG_EotsIsHomeNode(TeamId team, uint32 nodeId)
     return nodeId == POINT_MAGE_TOWER || nodeId == POINT_DRAENEI_RUINS;
 }
 
+bool RTG_EotsSplitSecond(uint32 stableRole, uint32 seed, uint32 salt)
+{
+    uint32 const hash = seed * 1103515245u + stableRole * 12345u + salt;
+    return ((hash >> 16) & 1u) != 0u;
+}
+
 uint32 RTG_EotsOwnedCount(BattlegroundEY* eyeBg, TeamId team)
 {
     uint32 count = 0;
@@ -510,20 +516,28 @@ uint32 RTG_EotsAssignedHomeNode(BattlegroundEY* eyeBg, TeamId team, uint32 stabl
 {
     if (team == TEAM_HORDE)
     {
-        if (!RTG_EotsNodeOwned(eyeBg, POINT_FEL_REAVER, team))
+        bool const needFelReaver = !RTG_EotsNodeOwned(eyeBg, POINT_FEL_REAVER, team);
+        bool const needBloodElf = !RTG_EotsNodeOwned(eyeBg, POINT_BLOOD_ELF, team);
+        if (needFelReaver && needBloodElf)
+            return RTG_EotsSplitSecond(stableRole, seed, 0xE0750001u) ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
+        if (needFelReaver)
             return POINT_FEL_REAVER;
-        if (!RTG_EotsNodeOwned(eyeBg, POINT_BLOOD_ELF, team))
+        if (needBloodElf)
             return POINT_BLOOD_ELF;
-        return ((seed + stableRole) % 2) ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
+        return RTG_EotsSplitSecond(stableRole, seed, 0xE0750002u) ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
     }
 
     if (team == TEAM_ALLIANCE)
     {
-        if (!RTG_EotsNodeOwned(eyeBg, POINT_MAGE_TOWER, team))
+        bool const needMageTower = !RTG_EotsNodeOwned(eyeBg, POINT_MAGE_TOWER, team);
+        bool const needDraeneiRuins = !RTG_EotsNodeOwned(eyeBg, POINT_DRAENEI_RUINS, team);
+        if (needMageTower && needDraeneiRuins)
+            return RTG_EotsSplitSecond(stableRole, seed, 0xE0750003u) ? POINT_DRAENEI_RUINS : POINT_MAGE_TOWER;
+        if (needMageTower)
             return POINT_MAGE_TOWER;
-        if (!RTG_EotsNodeOwned(eyeBg, POINT_DRAENEI_RUINS, team))
+        if (needDraeneiRuins)
             return POINT_DRAENEI_RUINS;
-        return ((seed + stableRole) % 2) ? POINT_DRAENEI_RUINS : POINT_MAGE_TOWER;
+        return RTG_EotsSplitSecond(stableRole, seed, 0xE0750004u) ? POINT_DRAENEI_RUINS : POINT_MAGE_TOWER;
     }
 
     return 0;
@@ -538,7 +552,7 @@ uint32 RTG_EotsAssignedEnemyNode(BattlegroundEY* eyeBg, TeamId team, uint32 stab
 
     uint32 first = team == TEAM_HORDE ? POINT_MAGE_TOWER : POINT_BLOOD_ELF;
     uint32 second = team == TEAM_HORDE ? POINT_DRAENEI_RUINS : POINT_FEL_REAVER;
-    uint32 assigned = ((seed + stableRole) % 2) ? second : first;
+    uint32 assigned = RTG_EotsSplitSecond(stableRole, seed, 0xE0750005u) ? second : first;
     if (!RTG_EotsNodeOwned(eyeBg, assigned, team))
         return assigned;
 
@@ -551,7 +565,7 @@ uint32 RTG_EotsAssignedEnemyNode(BattlegroundEY* eyeBg, TeamId team, uint32 stab
 
 uint32 RTG_EotsAssignedDefenseNode(BattlegroundEY* eyeBg, TeamId team, uint32 stableRole, uint32 seed)
 {
-    uint32 assigned = ((seed + stableRole) % 2)
+    uint32 assigned = RTG_EotsSplitSecond(stableRole, seed, 0xE0750006u)
         ? (team == TEAM_HORDE ? POINT_BLOOD_ELF : POINT_DRAENEI_RUINS)
         : (team == TEAM_HORDE ? POINT_FEL_REAVER : POINT_MAGE_TOWER);
 
@@ -627,6 +641,46 @@ bool RTG_EotsNearestOwnedTower(Player* bot, BattlegroundEY* eyeBg, TeamId team, 
     return nodeId != 0;
 }
 
+bool RTG_EotsShouldRunCenterFlag(Player* bot, uint32 stableRole, uint32 seed, uint32 ownedCount,
+                                 uint32 homeOwnedCount, bool centerSpawned, uint32 teamSize)
+{
+    if (!centerSpawned || !bot)
+        return false;
+
+    uint32 slots = 0;
+    if (ownedCount >= 3)
+        slots = teamSize <= 6 ? 2 : 4;
+    else if (ownedCount >= 2)
+        slots = teamSize <= 6 ? 1 : 3;
+    else if (homeOwnedCount >= 1)
+        slots = 1;
+
+    if (!slots)
+        return false;
+
+    uint32 const pickupRank = RTG_ClassFlagPickupRank(bot);
+    uint32 const ticket = (seed * 1103515245u + stableRole * 12345u + 0xE07500F1u) % 10u;
+    if (ticket < slots)
+        return true;
+
+    return pickupRank <= 1 && homeOwnedCount >= 1 &&
+           ((seed * 1103515245u + stableRole * 12345u + 0xE07500F2u) % 4u) == 0u;
+}
+
+bool RTG_EotsShouldDefendTower(uint32 stableRole, uint32 ownedCount, uint32 teamSize)
+{
+    if (!ownedCount)
+        return false;
+
+    if (teamSize <= 6)
+        return ownedCount >= 2 && (stableRole % 5u) == 0u;
+
+    if (ownedCount >= 3)
+        return (stableRole % 3u) == 0u;
+
+    return (stableRole % 4u) == 0u;
+}
+
 bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, RTGBgObjectiveAssignment& out)
 {
     BattlegroundEY* eyeBg = dynamic_cast<BattlegroundEY*>(bg);
@@ -639,6 +693,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
 
     uint32 const stableRole = RTG_StableRole(botAI, bot);
     uint32 const seed = bot->GetGUID().GetCounter();
+    uint32 const teamSize = std::max<uint32>(1, RTG_TeamSize(bg, team));
     uint32 const ownedCount = RTG_EotsOwnedCount(eyeBg, team);
     uint32 const homeOwnedCount = RTG_EotsHomeOwnedCount(eyeBg, team);
     PositionInfo centerPos;
@@ -679,12 +734,23 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
 
     if (homeOwnedCount < 2)
     {
+        if (homeOwnedCount >= 1 &&
+            RTG_EotsShouldRunCenterFlag(bot, stableRole, seed, ownedCount, homeOwnedCount, centerSpawned, teamSize))
+        {
+            out.role = RTGBgObjectiveRole::CaptureEnemyFlag;
+            out.objectiveId = 0;
+            RTG_SetDestination(out, centerPos, bg->GetMapId());
+            out.reason = "OpeningCenterFlagSplit";
+            return true;
+        }
+
         uint32 const nodeId = RTG_EotsAssignedHomeNode(eyeBg, team, stableRole, seed);
         if (RTGTowerDef const* tower = RTG_EotsTower(nodeId))
         {
             out.role = RTGBgObjectiveRole::CaptureTower;
             out.objectiveId = nodeId;
             RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+            out.minCommitMs = 30000;
             out.reason = nodeId == POINT_FEL_REAVER ? "NeedHomeTowerFRR" : "NeedSecondHomeTower";
             return true;
         }
@@ -706,16 +772,17 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
         return true;
     }
 
-    if (ownedCount == 2 && centerSpawned && (stableRole % 6u) == 2u && RTG_Distance2d(bot, centerPos) < 130.0f)
+    if (ownedCount >= 2 &&
+        RTG_EotsShouldRunCenterFlag(bot, stableRole, seed, ownedCount, homeOwnedCount, centerSpawned, teamSize))
     {
-        out.role = RTGBgObjectiveRole::MidfieldPressure;
+        out.role = RTGBgObjectiveRole::CaptureEnemyFlag;
         out.objectiveId = 0;
         RTG_SetDestination(out, centerPos, bg->GetMapId());
-        out.reason = "LimitedCenterFlagAtTwoTowers";
+        out.reason = ownedCount >= 3 ? "CenterFlagWithTowerLead" : "CenterFlagAtTwoTowers";
         return true;
     }
 
-    if (ownedCount >= 2 && (stableRole % 5u) == 0u)
+    if (RTG_EotsShouldDefendTower(stableRole, ownedCount, teamSize))
     {
         uint32 const nodeId = RTG_EotsAssignedDefenseNode(eyeBg, team, stableRole, seed);
         if (RTGTowerDef const* tower = RTG_EotsTower(nodeId))
@@ -723,18 +790,10 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             out.role = RTGBgObjectiveRole::DefendTower;
             out.objectiveId = nodeId;
             RTG_SetDestination(out, tower->defense, bg->GetMapId());
+            out.minCommitMs = 30000;
             out.reason = "AssignedTowerDefense";
             return true;
         }
-    }
-
-    if (ownedCount >= 3 && centerSpawned && (stableRole % 4u) == 1u)
-    {
-        out.role = RTGBgObjectiveRole::MidfieldPressure;
-        out.objectiveId = 0;
-        RTG_SetDestination(out, centerPos, bg->GetMapId());
-        out.reason = "SafeCenterFlagWithTowerLead";
-        return true;
     }
 
     uint32 attackNode = RTG_EotsAssignedEnemyNode(eyeBg, team, stableRole, seed);
@@ -745,6 +804,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             out.role = RTGBgObjectiveRole::CaptureTower;
             out.objectiveId = attackNode;
             RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+            out.minCommitMs = 30000;
             out.reason = attackNode == POINT_FEL_REAVER ? "ContestFRR" : "ContestWeakTower";
             return true;
         }
@@ -819,6 +879,11 @@ bool RTG_AssignmentStillValid(PlayerbotAI* botAI, Player* bot, Battleground* bg,
         {
             case RTGBgObjectiveRole::CarrierTurnIn:
                 return RTG_IsEotsFlagCarrier(bot, eyeBg) && RTG_EotsOwnedCount(eyeBg, team) > 0;
+            case RTGBgObjectiveRole::CaptureEnemyFlag:
+            {
+                PositionInfo centerPos;
+                return !RTG_IsEotsFlagCarrier(bot, eyeBg) && RTG_EotsCenterFlagSpawned(bg, centerPos);
+            }
             case RTGBgObjectiveRole::CaptureTower:
                 if (!assignment.objectiveId)
                     return true;
