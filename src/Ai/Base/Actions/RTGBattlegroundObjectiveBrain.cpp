@@ -32,10 +32,11 @@ constexpr uint32 RTG_BG_EY_NETHERSTORM_FLAG_SPELL = 34976;
 constexpr uint32 RTG_OBJECTIVE_WSG_RETURN_OWN_FLAG = 1;
 constexpr uint32 RTG_OBJECTIVE_WSG_CAPTURE_ENEMY_FLAG = 2;
 constexpr uint32 RTG_OBJECTIVE_WSG_DEFEND_OWN_FLAG = 3;
-constexpr uint32 RTG_OBJECTIVE_WSG_MIDFIELD = 4;
+constexpr uint32 RTG_OBJECTIVE_WSG_PRESSURE_ENEMY = 5;
+constexpr uint32 RTG_OBJECTIVE_WSG_HUNT_OWN_FLAG = 6;
 
-PositionInfo const WSG_HORDE_FLAG_ROOM(915.958f, 1433.925f, 346.193f, 489);
-PositionInfo const WSG_ALLIANCE_FLAG_ROOM(1539.219f, 1481.747f, 352.458f, 489);
+PositionInfo const WSG_HORDE_FLAG_ROOM(917.36304f, 1434.0795f, 346.34628f, 489);
+PositionInfo const WSG_ALLIANCE_FLAG_ROOM(1540.2811f, 1481.4397f, 352.63336f, 489);
 PositionInfo const WSG_MIDFIELD(1227.446f, 1476.235f, 307.484f, 489);
 PositionInfo const WSG_HORDE_BASE_EXIT(1016.42f, 1402.33f, 341.352f, 489);
 PositionInfo const WSG_ALLIANCE_BASE_EXIT(1443.55f, 1533.40f, 343.148f, 489);
@@ -59,28 +60,28 @@ struct RTGTowerDef
 
 RTGTowerDef const EOTS_TOWERS[] = {
     {POINT_FEL_REAVER, "FRR",
-     PositionInfo(2044.173f, 1727.503f, 1189.505f, 566),
+     PositionInfo(2043.8687f, 1730.0178f, 1189.8501f, 566),
      PositionInfo(2132.0f, 1705.0f, 1178.0f, 566),
      PositionInfo(1996.0f, 1666.0f, 1182.0f, 566),
-     PositionInfo(2047.0f, 1717.0f, 1189.5f, 566),
+     PositionInfo(2043.8687f, 1730.0178f, 1189.8501f, 566),
      EOTS_HORDE_ROAD_FORK},
     {POINT_BLOOD_ELF, "BET",
-     PositionInfo(2048.277f, 1395.093f, 1194.255f, 566),
+     PositionInfo(2048.3354f, 1392.6724f, 1194.3562f, 566),
      PositionInfo(2132.0f, 1436.0f, 1178.0f, 566),
      PositionInfo(1994.0f, 1466.0f, 1180.0f, 566),
-     PositionInfo(2057.0f, 1405.0f, 1194.2f, 566),
+     PositionInfo(2048.3354f, 1392.6724f, 1194.3562f, 566),
      EOTS_HORDE_ROAD_FORK},
     {POINT_DRAENEI_RUINS, "DR",
-     PositionInfo(2286.245f, 1404.683f, 1196.991f, 566),
+     PositionInfo(2286.697f, 1402.5239f, 1197.133f, 566),
      PositionInfo(2355.0f, 1461.0f, 1180.0f, 566),
      PositionInfo(2215.0f, 1432.0f, 1178.0f, 566),
-     PositionInfo(2276.0f, 1414.0f, 1196.9f, 566),
+     PositionInfo(2286.697f, 1402.5239f, 1197.133f, 566),
      EOTS_ALLIANCE_ROAD_FORK},
     {POINT_MAGE_TOWER, "MT",
-     PositionInfo(2284.720f, 1728.457f, 1189.153f, 566),
+     PositionInfo(2284.7944f, 1731.2412f, 1189.8682f, 566),
      PositionInfo(2357.0f, 1688.0f, 1178.0f, 566),
      PositionInfo(2216.0f, 1699.0f, 1178.0f, 566),
-     PositionInfo(2274.0f, 1718.0f, 1189.1f, 566),
+     PositionInfo(2284.7944f, 1731.2412f, 1189.8682f, 566),
      EOTS_ALLIANCE_ROAD_FORK},
 };
 
@@ -346,6 +347,11 @@ PositionInfo RTG_WsgBaseExit(TeamId team)
     return team == TEAM_ALLIANCE ? WSG_ALLIANCE_BASE_EXIT : WSG_HORDE_BASE_EXIT;
 }
 
+PositionInfo RTG_WsgEnemyCarrierSearchDestination(TeamId team)
+{
+    return team == TEAM_ALLIANCE ? WSG_HORDE_BASE_EXIT : WSG_ALLIANCE_BASE_EXIT;
+}
+
 bool RTG_SelectWsgObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, RTGBgObjectiveAssignment& out)
 {
     BattlegroundWS* wsBg = dynamic_cast<BattlegroundWS*>(bg);
@@ -404,6 +410,8 @@ bool RTG_SelectWsgObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, R
     Unit* enemyFC = RTG_GetUnitValue(botAI, "enemy flag carrier");
     Unit* friendlyFC = RTG_GetUnitValue(botAI, "team flag carrier");
     Unit* enemyPlayer = RTG_GetUnitValue(botAI, "enemy player target");
+    bool const ownFlagTaken = wsBg->GetFlagState(team) == BG_WS_FLAG_STATE_ON_PLAYER;
+    bool const enemyFlagAtBase = wsBg->GetFlagState(enemyTeam) == BG_WS_FLAG_STATE_ON_BASE;
 
     if (RTG_UnitValidForObjective(bot, enemyFC) && (hunterRole || bot->GetDistance(enemyFC) < 155.0f))
     {
@@ -429,7 +437,30 @@ bool RTG_SelectWsgObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, R
         return true;
     }
 
-    bool const enemyFlagAtBase = wsBg->GetFlagState(enemyTeam) == BG_WS_FLAG_STATE_ON_BASE;
+    if (RTG_UnitValidForObjective(bot, enemyPlayer) &&
+        (!defenderRole || ownFlagTaken || bot->GetDistance(enemyPlayer) < 95.0f))
+    {
+        out.role = RTGBgObjectiveRole::MidfieldPressure;
+        out.objectiveId = RTG_OBJECTIVE_WSG_PRESSURE_ENEMY;
+        out.targetGuid = enemyPlayer->GetGUID();
+        out.destination.Set(enemyPlayer->GetPositionX(), enemyPlayer->GetPositionY(), enemyPlayer->GetPositionZ(), bg->GetMapId());
+        out.minCommitMs = 6000;
+        out.emergency = ownFlagTaken || bot->GetDistance(enemyPlayer) < 70.0f;
+        out.reason = out.emergency ? "EnemyPressureNearby" : "EnemyPressureVisible";
+        return true;
+    }
+
+    if (ownFlagTaken && !RTG_UnitValidForObjective(bot, enemyFC))
+    {
+        out.role = RTGBgObjectiveRole::MidfieldPressure;
+        out.objectiveId = RTG_OBJECTIVE_WSG_HUNT_OWN_FLAG;
+        RTG_SetDestination(out, RTG_WsgEnemyCarrierSearchDestination(team), bg->GetMapId());
+        out.minCommitMs = 8000;
+        out.emergency = true;
+        out.reason = "HuntMissingEnemyCarrier";
+        return true;
+    }
+
     if (enemyFlagAtBase && pickupRole)
     {
         out.role = RTGBgObjectiveRole::CaptureEnemyFlag;
@@ -450,10 +481,20 @@ bool RTG_SelectWsgObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, R
 
     if (stableRole == 6 || stableRole == 7 || (!enemyFlagAtBase && !pickupRole))
     {
-        out.role = RTGBgObjectiveRole::MidfieldPressure;
-        out.objectiveId = RTG_OBJECTIVE_WSG_MIDFIELD;
-        RTG_SetDestination(out, WSG_MIDFIELD, bg->GetMapId());
-        out.reason = "MidfieldPressure";
+        if (!enemyFlagAtBase)
+        {
+            out.role = RTGBgObjectiveRole::MidfieldPressure;
+            out.objectiveId = RTG_OBJECTIVE_WSG_HUNT_OWN_FLAG;
+            RTG_SetDestination(out, RTG_WsgEnemyCarrierSearchDestination(team), bg->GetMapId());
+            out.minCommitMs = 8000;
+            out.reason = "RoamEnemyFlagSide";
+            return true;
+        }
+
+        out.role = RTGBgObjectiveRole::CaptureEnemyFlag;
+        out.objectiveId = RTG_OBJECTIVE_WSG_CAPTURE_ENEMY_FLAG;
+        RTG_SetDestination(out, RTG_WsgEnemyFlagDestination(wsBg, team), bg->GetMapId());
+        out.reason = "MidfieldPushEnemyFlag";
         return true;
     }
 
@@ -669,14 +710,14 @@ bool RTG_EotsShouldRunCenterFlag(Player* bot, uint32 stableRole, uint32 seed, ui
 
 bool RTG_EotsShouldDefendTower(uint32 stableRole, uint32 ownedCount, uint32 teamSize)
 {
-    if (!ownedCount)
+    if (ownedCount < 3)
         return false;
 
     if (teamSize <= 6)
-        return ownedCount >= 2 && (stableRole % 5u) == 0u;
+        return (stableRole % 6u) == 0u;
 
-    if (ownedCount >= 3)
-        return (stableRole % 3u) == 0u;
+    if (teamSize <= 10)
+        return (stableRole % 5u) == 0u;
 
     return (stableRole % 4u) == 0u;
 }
@@ -782,20 +823,6 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
         return true;
     }
 
-    if (RTG_EotsShouldDefendTower(stableRole, ownedCount, teamSize))
-    {
-        uint32 const nodeId = RTG_EotsAssignedDefenseNode(eyeBg, team, stableRole, seed);
-        if (RTGTowerDef const* tower = RTG_EotsTower(nodeId))
-        {
-            out.role = RTGBgObjectiveRole::DefendTower;
-            out.objectiveId = nodeId;
-            RTG_SetDestination(out, tower->defense, bg->GetMapId());
-            out.minCommitMs = 30000;
-            out.reason = "AssignedTowerDefense";
-            return true;
-        }
-    }
-
     uint32 attackNode = RTG_EotsAssignedEnemyNode(eyeBg, team, stableRole, seed);
     if (attackNode)
     {
@@ -806,6 +833,20 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
             out.minCommitMs = 30000;
             out.reason = attackNode == POINT_FEL_REAVER ? "ContestFRR" : "ContestWeakTower";
+            return true;
+        }
+    }
+
+    if (RTG_EotsShouldDefendTower(stableRole, ownedCount, teamSize))
+    {
+        uint32 const nodeId = RTG_EotsAssignedDefenseNode(eyeBg, team, stableRole, seed);
+        if (RTGTowerDef const* tower = RTG_EotsTower(nodeId))
+        {
+            out.role = RTGBgObjectiveRole::DefendTower;
+            out.objectiveId = nodeId;
+            RTG_SetDestination(out, tower->defense, bg->GetMapId());
+            out.minCommitMs = 12000;
+            out.reason = "AssignedTowerDefenseFallback";
             return true;
         }
     }
@@ -864,6 +905,11 @@ bool RTG_AssignmentStillValid(PlayerbotAI* botAI, Player* bot, Battleground* bg,
             case RTGBgObjectiveRole::EscortFriendlyFlagCarrier:
                 return RTG_TargetAssignmentStillValid(botAI, bot, assignment.targetGuid) &&
                        elapsed < std::max<uint32>(assignment.minCommitMs, 8000);
+            case RTGBgObjectiveRole::MidfieldPressure:
+                if (!assignment.targetGuid.IsEmpty())
+                    return RTG_TargetAssignmentStillValid(botAI, bot, assignment.targetGuid) &&
+                           elapsed < std::max<uint32>(assignment.minCommitMs, 6000);
+                return elapsed < std::max<uint32>(assignment.minCommitMs, 8000);
             default:
                 return true;
         }
@@ -887,13 +933,18 @@ bool RTG_AssignmentStillValid(PlayerbotAI* botAI, Player* bot, Battleground* bg,
             case RTGBgObjectiveRole::CaptureTower:
                 if (!assignment.objectiveId)
                     return true;
-                return !RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team) || elapsed < assignment.minCommitMs;
+                if (RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team))
+                    return elapsed < 8000;
+                return true;
             case RTGBgObjectiveRole::DefendTower:
-                return RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team);
+                return RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team) &&
+                       elapsed < 12000;
             case RTGBgObjectiveRole::KillEnemyFlagCarrier:
             case RTGBgObjectiveRole::EscortFriendlyFlagCarrier:
                 return RTG_TargetAssignmentStillValid(botAI, bot, assignment.targetGuid) &&
                        elapsed < std::max<uint32>(assignment.minCommitMs, 8000);
+            case RTGBgObjectiveRole::MidfieldPressure:
+                return elapsed < 8000;
             default:
                 return true;
         }
@@ -914,7 +965,18 @@ PositionInfo RTG_RecoveryPoint(Player* bot, Battleground* bg, RTGBgObjectiveAssi
 
     if (bgType == BATTLEGROUND_WS)
     {
-        if (current.role == RTGBgObjectiveRole::CaptureEnemyFlag || current.role == RTGBgObjectiveRole::MidfieldPressure)
+        if (current.role == RTGBgObjectiveRole::MidfieldPressure)
+        {
+            if (current.destination.valueSet)
+                return current.destination;
+
+            if (current.objectiveId == RTG_OBJECTIVE_WSG_HUNT_OWN_FLAG)
+                return RTG_WsgEnemyCarrierSearchDestination(team);
+
+            return RTG_WsgEnemyFlagRoom(team);
+        }
+
+        if (current.role == RTGBgObjectiveRole::CaptureEnemyFlag)
             return WSG_MIDFIELD;
 
         return RTG_WsgBaseExit(team);

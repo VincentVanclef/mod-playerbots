@@ -43,8 +43,8 @@ Position const WS_WAITING_POS_HORDE_3 = {933.484f, 1433.726f, 345.535f, 0.08f};
 Position const WS_WAITING_POS_ALLIANCE_1 = {1510.502f, 1493.385f, 351.995f, 3.1f};
 Position const WS_WAITING_POS_ALLIANCE_2 = {1496.578f, 1457.900f, 344.442f, 3.1f};
 Position const WS_WAITING_POS_ALLIANCE_3 = {1521.235f, 1480.951f, 352.007f, 3.2f};
-Position const WS_FLAG_POS_HORDE = {915.958f, 1433.925f, 346.193f, 0.0f};
-Position const WS_FLAG_POS_ALLIANCE = {1539.219f, 1481.747f, 352.458f, 0.0f};
+Position const WS_FLAG_POS_HORDE = {917.36304f, 1434.0795f, 346.34628f, 0.0f};
+Position const WS_FLAG_POS_ALLIANCE = {1540.2811f, 1481.4397f, 352.63336f, 0.0f};
 Position const WS_FLAG_HIDE_HORDE_1 = {926.142f, 1460.641f, 346.116f, 4.84f};
 Position const WS_FLAG_HIDE_HORDE_2 = {925.166f, 1458.084f, 345.966f, 0.00f};
 Position const WS_FLAG_HIDE_HORDE_3 = {924.922f, 1423.672f, 345.524f, 0.82f};
@@ -1290,10 +1290,10 @@ static std::tuple<uint32, uint32, uint32> EY_AttackObjectives[] = {
 };
 
 static std::unordered_map<uint32, Position> EY_NodePositions = {
-    {POINT_FEL_REAVER, Position(2044.173f, 1727.503f, 1189.505f)},
-    {POINT_BLOOD_ELF, Position(2048.277f, 1395.093f, 1194.255f)},
-    {POINT_DRAENEI_RUINS, Position(2286.245f, 1404.683f, 1196.991f)},
-    {POINT_MAGE_TOWER, Position(2284.720f, 1728.457f, 1189.153f)}
+    {POINT_FEL_REAVER, Position(2043.8687f, 1730.0178f, 1189.8501f)},
+    {POINT_BLOOD_ELF, Position(2048.3354f, 1392.6724f, 1194.3562f)},
+    {POINT_DRAENEI_RUINS, Position(2286.697f, 1402.5239f, 1197.133f)},
+    {POINT_MAGE_TOWER, Position(2284.7944f, 1731.2412f, 1189.8682f)}
 };
 
 static TeamId RTG_BgEffectiveTeamId(Player* bot)
@@ -3827,6 +3827,15 @@ bool BGTactics::selectObjective(bool reset)
                 RTGBgObjectiveAssignment assignment;
                 if (RTG_SelectBattlegroundObjective(botAI, assignment))
                 {
+                    if (!assignment.targetGuid.IsEmpty() &&
+                        (assignment.role == RTGBgObjectiveRole::KillEnemyFlagCarrier ||
+                         assignment.role == RTGBgObjectiveRole::MidfieldPressure))
+                    {
+                        if (Unit* target = botAI->GetUnit(assignment.targetGuid))
+                            if (target->IsAlive() && target->GetMapId() == bot->GetMapId())
+                                context->GetValue<Unit*>("current target")->Set(target);
+                    }
+
                     posMap["bg objective"] = assignment.destination;
                     return true;
                 }
@@ -4223,6 +4232,15 @@ bool BGTactics::selectObjective(bool reset)
                 RTGBgObjectiveAssignment assignment;
                 if (RTG_SelectBattlegroundObjective(botAI, assignment))
                 {
+                    if (!assignment.targetGuid.IsEmpty() &&
+                        (assignment.role == RTGBgObjectiveRole::KillEnemyFlagCarrier ||
+                         assignment.role == RTGBgObjectiveRole::MidfieldPressure))
+                    {
+                        if (Unit* target = botAI->GetUnit(assignment.targetGuid))
+                            if (target->IsAlive() && target->GetMapId() == bot->GetMapId())
+                                context->GetValue<Unit*>("current target")->Set(target);
+                    }
+
                     posMap["bg objective"] = assignment.destination;
                     return true;
                 }
