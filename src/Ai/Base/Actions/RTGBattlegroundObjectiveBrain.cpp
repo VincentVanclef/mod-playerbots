@@ -690,9 +690,9 @@ bool RTG_EotsShouldRunCenterFlag(Player* bot, uint32 stableRole, uint32 seed, ui
 
     uint32 slots = 0;
     if (ownedCount >= 3)
-        slots = teamSize <= 6 ? 2 : 4;
+        slots = teamSize <= 6 ? 3 : 5;
     else if (ownedCount >= 2)
-        slots = teamSize <= 6 ? 1 : 3;
+        slots = teamSize <= 6 ? 2 : 4;
     else if (homeOwnedCount >= 1)
         slots = 1;
 
@@ -703,6 +703,9 @@ bool RTG_EotsShouldRunCenterFlag(Player* bot, uint32 stableRole, uint32 seed, ui
     uint32 const ticket = (seed * 1103515245u + stableRole * 12345u + 0xE07500F1u) % 10u;
     if (ticket < slots)
         return true;
+
+    if (pickupRank <= 1 && ownedCount >= 2)
+        return ((seed * 1103515245u + stableRole * 12345u + 0xE07500F2u) % 2u) == 0u;
 
     return pickupRank <= 1 && homeOwnedCount >= 1 &&
            ((seed * 1103515245u + stableRole * 12345u + 0xE07500F2u) % 4u) == 0u;
@@ -1352,6 +1355,9 @@ bool RTG_ShouldHoldBattlegroundObjective(PlayerbotAI* botAI, PositionInfo const&
 
     RTGBgObjectiveAssignment const& assignment = itr->second.assignment;
     BattlegroundTypeId bgType = RTG_GetRealBgType(bg);
+
+    if (!RTG_AssignmentStillValid(botAI, bot, bg, assignment))
+        return false;
 
     if (bgType == BATTLEGROUND_EY && RTG_IsTowerRole(assignment.role))
     {

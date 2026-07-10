@@ -1971,6 +1971,16 @@ static bool RTG_WsgIsEnemyFlagRoomObjective(TeamId team, Position const& target)
            std::fabs(target.GetPositionZ() - enemyRoom.GetPositionZ()) <= 45.0f;
 }
 
+static bool RTG_WsgIsOwnFlagRoomObjective(TeamId team, Position const& target)
+{
+    if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+        return false;
+
+    Position const& ownRoom = RTG_WsgOwnFlagRoom(team);
+    return target.GetExactDist2d(ownRoom.GetPositionX(), ownRoom.GetPositionY()) <= 55.0f &&
+           std::fabs(target.GetPositionZ() - ownRoom.GetPositionZ()) <= 45.0f;
+}
+
 static void RTG_WsgAppendPath(std::vector<Position>& route, BattleBotPath const& path, bool reverse)
 {
     if (reverse)
@@ -2022,14 +2032,16 @@ static std::vector<Position> RTG_WsgBuildEnemyFlagRoute(TeamId team, uint32 stab
     return route;
 }
 
-static bool RTG_WsgGetEnemyFlagRouteStep(Player* bot, TeamId team, Position const& finalTarget,
-                                         uint32 stableRole, Position& step)
+static std::vector<Position> RTG_WsgBuildCarrierHomeRoute(TeamId team, uint32 stableRole)
 {
-    if (!bot || !RTG_WsgIsEnemyFlagRoomObjective(team, finalTarget))
-        return false;
-
     std::vector<Position> route = RTG_WsgBuildEnemyFlagRoute(team, stableRole);
-    if (route.empty())
+    std::reverse(route.begin(), route.end());
+    return route;
+}
+
+static bool RTG_WsgGetRouteStep(Player* bot, std::vector<Position>& route, Position const& finalTarget, Position& step)
+{
+    if (!bot || route.empty())
         return false;
 
     if (route.back().GetExactDist(finalTarget.GetPositionX(), finalTarget.GetPositionY(), finalTarget.GetPositionZ()) > 5.0f)
@@ -2080,6 +2092,26 @@ static bool RTG_WsgGetEnemyFlagRouteStep(Player* bot, TeamId team, Position cons
 
     step.Relocate(destination);
     return true;
+}
+
+static bool RTG_WsgGetEnemyFlagRouteStep(Player* bot, TeamId team, Position const& finalTarget,
+                                         uint32 stableRole, Position& step)
+{
+    if (!RTG_WsgIsEnemyFlagRoomObjective(team, finalTarget))
+        return false;
+
+    std::vector<Position> route = RTG_WsgBuildEnemyFlagRoute(team, stableRole);
+    return RTG_WsgGetRouteStep(bot, route, finalTarget, step);
+}
+
+static bool RTG_WsgGetCarrierHomeRouteStep(Player* bot, TeamId team, Position const& finalTarget,
+                                           uint32 stableRole, Position& step)
+{
+    if (!RTG_WsgIsOwnFlagRoomObjective(team, finalTarget))
+        return false;
+
+    std::vector<Position> route = RTG_WsgBuildCarrierHomeRoute(team, stableRole);
+    return RTG_WsgGetRouteStep(bot, route, finalTarget, step);
 }
 
 static bool RTG_BgIsCaptureSpellActive(Player* bot)
@@ -2147,7 +2179,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     if (!bestTriggerId)
         return false;
 
-    if (bestDist > 18.0f)
+    if (bestDist > 25.0f)
     {
         if (bestDist < 75.0f)
             RTG_EotsDebugRaw(bot, bg, "turnin_wait", "owned_tower_not_close", bestNodeId, bestTriggerId);
@@ -2180,11 +2212,12 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
 
     auto itr = lastTurnInMsByBot.find(botGuid);
     if (itr != lastTurnInMsByBot.end() && getMSTimeDiff(itr->second, now) < 350)
-        return true;
+        return bestDist <= 8.0f;
 
     lastTurnInMsByBot[botGuid] = now;
 
-    if (bot->isMoving())
+    bool const closeEnoughToStop = bestDist <= 8.0f;
+    if (closeEnoughToStop && bot->isMoving())
         bot->StopMoving();
 
     if (bot->IsMounted())
@@ -2198,7 +2231,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     data << uint32(bestTriggerId);
     bot->GetSession()->HandleAreaTriggerOpcode(data);
     botAI->SetNextCheckDelay(250);
-    return true;
+    return closeEnoughToStop;
 }
 
 static std::pair<uint32, uint32> IC_AttackObjectives[] = {
@@ -3906,6 +3939,9 @@ bool BGTactics::moveToObjective(bool ignoreDist)
             bot->GetExactDist2d(pos.x, pos.y) < RTG_EOTS_TOWER_ARRIVE_RADIUS_2D &&
             std::fabs(bot->GetPositionZ() - pos.z) <= RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
         {
+            if (RTG_BgObjectiveBrainEnabledFor(bot))
+                return resetObjective();
+
             if (bot->isMoving())
                 bot->StopMoving();
 
@@ -4026,6 +4062,13 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
     if (RTG_EotsGetObjectiveRouteStep(bot, team, assignment.destination, routeStep, finalRouteStep) && !finalRouteStep)
         movementDestination.Relocate(routeStep);
 
+    float const finalDist2d = bot->GetExactDist2d(finalDestination.GetPositionX(), finalDestination.GetPositionY());
+    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 65.0f)
+    {
+        movementDestination.Relocate(finalDestination);
+        finalRouteStep = true;
+    }
+
     Unit* carrierThreat = context->GetValue<Unit*>("enemy player target")->Get();
     bool const carrierUnderPressure = bot->IsInCombat() ||
         (RTG_EotsUnitValidForObjective(bot, carrierThreat) && carrierThreat->GetDistance(bot) <= 30.0f);
@@ -4046,7 +4089,6 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         return true;
     }
 
-    float const finalDist2d = bot->GetExactDist2d(finalDestination.GetPositionX(), finalDestination.GetPositionY());
     if (finalDist2d <= 6.0f && std::fabs(bot->GetPositionZ() - finalDestination.GetPositionZ()) <= 10.0f)
     {
         if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
@@ -4165,6 +4207,9 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         return false;
 
     BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
+    if (!wsBg)
+        return false;
+
     TeamId const team = RTG_BgEffectiveTeamId(bot);
 
     // In BattlegroundWS, GetFlagPickerGUID(team) returns the carrier of that team's
@@ -4182,10 +4227,19 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     Unit* carrierThreat = AI_VALUE(Unit*, "enemy player target");
     bool const carrierUnderPressure = bot->IsInCombat() || RTG_WsgEnemyThreatNearby(bot, carrierThreat, 35.0f);
 
+    RTGBgObjectiveAssignment assignment;
+    bool const brainAssigned = RTG_SelectBattlegroundObjective(botAI, assignment) &&
+        assignment.valid && assignment.destination.valueSet &&
+        (assignment.role == RTGBgObjectiveRole::CaptureEnemyFlag ||
+         assignment.role == RTGBgObjectiveRole::DefendObjective);
+
     // Do not let FCs select/hold the graveyard hut/tree area. When our flag is
     // away, the carrier should first enter the own flag-room/roof layer, then use
     // one of the small flag-room hide points. When our flag is home, cap.
     Position finalDestination = ownFlagRoom;
+    if (brainAssigned)
+        finalDestination.Relocate(assignment.destination.x, assignment.destination.y, assignment.destination.z);
+
     if (ownFlagTaken && RTG_WsgIsInsideOwnFlagRoom(bot, team))
     {
         if (carrierUnderPressure)
@@ -4198,10 +4252,25 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     }
 
     Position destination = finalDestination;
+    bool finalRouteStep = true;
+    if (!RTG_WsgIsInsideOwnFlagRoom(bot, team))
+    {
+        Position routeStep;
+        if (RTG_WsgGetCarrierHomeRouteStep(bot, team, finalDestination, stableRole, routeStep))
+        {
+            destination.Relocate(routeStep);
+            finalRouteStep = routeStep.GetExactDist(finalDestination.GetPositionX(), finalDestination.GetPositionY(),
+                                                    finalDestination.GetPositionZ()) <= 5.0f;
+        }
+    }
+
     Position escapeTarget;
     if (!RTG_WsgIsInsideOwnFlagRoom(bot, team) &&
         RTG_WsgChooseGraveyardEscapeTarget(bot, team, finalDestination, escapeTarget))
+    {
         destination.Relocate(escapeTarget);
+        finalRouteStep = false;
+    }
 
     Position botPos(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation());
 
@@ -4231,6 +4300,9 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     // A flag carrier should not be rooted forever by a stale/invalid combat target.
     // WSG FC movement has to beat generic combat, otherwise escorts/enemies make a
     // permanent pile around the carrier.
+    if (carrierUnderPressure && RTG_WsgEnemyThreatNearby(bot, carrierThreat, 30.0f))
+        context->GetValue<Unit*>("current target")->Set(carrierThreat);
+
     if (Unit* currentTarget = context->GetValue<Unit*>("current target")->Get())
     {
         float const keepTargetRange = carrierUnderPressure ? 8.0f : 25.0f;
@@ -4296,10 +4368,13 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     if (bot->isMoving() && !needObjective && !destinationChanged && !appearsStuck && !forceRedirectFromGraveyard)
         return true;
 
-    bot->StopMoving();
-    bot->GetMotionMaster()->Clear();
+    if (appearsStuck || forceRedirectFromGraveyard)
+    {
+        bot->StopMoving();
+        bot->GetMotionMaster()->Clear();
+    }
 
-    float const approach = ownFlagTaken ? 3.5f : 1.5f;
+    float const approach = finalRouteStep ? (ownFlagTaken ? 3.5f : 1.5f) : 3.0f;
     if (MoveNear(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), approach))
         return true;
 
@@ -4687,6 +4762,12 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
                 bot->GetExactDist2d(pos.x, pos.y) < RTG_EOTS_TOWER_ARRIVE_RADIUS_2D &&
                 std::fabs(bot->GetPositionZ() - pos.z) <= RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
             {
+                if (RTG_BgObjectiveBrainEnabledFor(bot))
+                {
+                    resetObjective();
+                    return true;
+                }
+
                 if (bot->isMoving())
                     bot->StopMoving();
 
