@@ -584,18 +584,39 @@ uint32 RTG_EotsAssignedHomeNode(BattlegroundEY* eyeBg, TeamId team, uint32 stabl
     return 0;
 }
 
+uint32 RTG_EotsEnemyPressureNodeBySlot(TeamId team, uint32 slot)
+{
+    if (team == TEAM_HORDE)
+        return (slot % 2u) == 0u ? POINT_MAGE_TOWER : POINT_DRAENEI_RUINS;
+
+    if (team == TEAM_ALLIANCE)
+        return (slot % 2u) == 0u ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
+
+    return 0;
+}
+
+bool RTG_EotsShouldPressureEnemyWithOneHome(uint32 stableRole, uint32 seed, uint32 teamSize)
+{
+    uint32 const slots = teamSize <= 6 ? 2u : (teamSize <= 10 ? 3u : 4u);
+    uint32 const ticket = (seed * 1103515245u + stableRole * 12345u + 0xE0750007u) % 10u;
+    return ticket < slots;
+}
+
 uint32 RTG_EotsAssignedEnemyNode(BattlegroundEY* eyeBg, TeamId team, uint32 stableRole, uint32 seed)
 {
-    // FRR is deliberately present in both teams' pressure plan; previous EotS
-    // experiments starved it, especially for Alliance-side pressure.
-    if (!RTG_EotsNodeOwned(eyeBg, POINT_FEL_REAVER, team) && (stableRole % 3u) == 0u)
-        return POINT_FEL_REAVER;
+    uint32 const pressureSlot = stableRole + ((seed >> 4) & 1u);
+    uint32 const first = RTG_EotsEnemyPressureNodeBySlot(team, pressureSlot);
+    uint32 const second = RTG_EotsEnemyPressureNodeBySlot(team, pressureSlot + 1u);
 
-    uint32 first = team == TEAM_HORDE ? POINT_MAGE_TOWER : POINT_BLOOD_ELF;
-    uint32 second = team == TEAM_HORDE ? POINT_DRAENEI_RUINS : POINT_FEL_REAVER;
-    uint32 assigned = RTG_EotsSplitSecond(stableRole, seed, 0xE0750005u) ? second : first;
-    if (!RTG_EotsNodeOwned(eyeBg, assigned, team))
-        return assigned;
+    if (first && !RTG_EotsNodeOwned(eyeBg, first, team))
+        return first;
+
+    if (second && !RTG_EotsNodeOwned(eyeBg, second, team))
+        return second;
+
+    for (RTGTowerDef const& tower : EOTS_TOWERS)
+        if (!RTG_EotsIsHomeNode(team, tower.nodeId) && !RTG_EotsNodeOwned(eyeBg, tower.nodeId, team))
+            return tower.nodeId;
 
     for (RTGTowerDef const& tower : EOTS_TOWERS)
         if (!RTG_EotsNodeOwned(eyeBg, tower.nodeId, team))
@@ -850,6 +871,20 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             return true;
         }
 
+        if (homeOwnedCount >= 1 && RTG_EotsShouldPressureEnemyWithOneHome(stableRole, seed, teamSize))
+        {
+            uint32 const attackNode = RTG_EotsAssignedEnemyNode(eyeBg, team, stableRole, seed);
+            if (RTGTowerDef const* tower = RTG_EotsTower(attackNode))
+            {
+                out.role = RTGBgObjectiveRole::CaptureTower;
+                out.objectiveId = attackNode;
+                RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+                out.minCommitMs = 22000;
+                out.reason = std::string("OneHomeAwayPressure") + tower->name;
+                return true;
+            }
+        }
+
         uint32 const nodeId = RTG_EotsAssignedHomeNode(eyeBg, team, stableRole, seed);
         if (RTGTowerDef const* tower = RTG_EotsTower(nodeId))
         {
@@ -897,7 +932,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             out.objectiveId = attackNode;
             RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
             out.minCommitMs = 30000;
-            out.reason = attackNode == POINT_FEL_REAVER ? "ContestFRR" : "ContestWeakTower";
+            out.reason = std::string("Contest") + tower->name;
             return true;
         }
     }

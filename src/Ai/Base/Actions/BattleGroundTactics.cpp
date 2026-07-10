@@ -1855,24 +1855,22 @@ static bool RTG_WsgIsUnsafeCarrierHoldSpot(Player* bot, TeamId team)
     float const x = bot->GetPositionX();
     float const y = bot->GetPositionY();
 
-    bool const nearAnyGy = bot->GetDistance(WS_GY_CAMPING_HORDE) <= 75.0f ||
-                           bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= 75.0f;
-    if (nearAnyGy)
+    bool nearOwnGy = false;
+    if (team == TEAM_HORDE)
+        nearOwnGy = bot->GetDistance(WS_GY_CAMPING_HORDE) <= 75.0f;
+    else if (team == TEAM_ALLIANCE)
+        nearOwnGy = bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= 75.0f;
+
+    if (nearOwnGy)
         return true;
 
     if (team == TEAM_HORDE)
         return x >= 990.0f && x <= 1120.0f && y >= 1360.0f && y <= 1440.0f;
 
-    return x >= 1360.0f && x <= 1450.0f && y >= 1510.0f && y <= 1590.0f;
-}
+    if (team == TEAM_ALLIANCE)
+        return x >= 1360.0f && x <= 1450.0f && y >= 1510.0f && y <= 1590.0f;
 
-static bool RTG_WsgIsNearGraveyard(Player* bot, float range = 42.0f)
-{
-    if (!bot)
-        return false;
-
-    return bot->GetDistance(WS_GY_CAMPING_HORDE) <= range ||
-           bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
+    return false;
 }
 
 static bool RTG_WsgIsNearTeamGraveyard(Player* bot, TeamId team, float range = 75.0f)
@@ -1884,19 +1882,6 @@ static bool RTG_WsgIsNearTeamGraveyard(Player* bot, TeamId team, float range = 7
         return bot->GetDistance(WS_GY_CAMPING_HORDE) <= range;
     if (team == TEAM_ALLIANCE)
         return bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
-
-    return false;
-}
-
-static bool RTG_WsgIsNearEnemyGraveyard(Player* bot, TeamId team, float range = 75.0f)
-{
-    if (!bot)
-        return false;
-
-    if (team == TEAM_HORDE)
-        return bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
-    if (team == TEAM_ALLIANCE)
-        return bot->GetDistance(WS_GY_CAMPING_HORDE) <= range;
 
     return false;
 }
@@ -2207,18 +2192,13 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     {
         RTG_EotsDebugRaw(bot, bg, "turnin_retry", "flag_still_on_carrier", bestNodeId, bestTriggerId);
         progress.startedMs = now;
-        return false;
     }
 
     auto itr = lastTurnInMsByBot.find(botGuid);
     if (itr != lastTurnInMsByBot.end() && getMSTimeDiff(itr->second, now) < 350)
-        return bestDist <= 8.0f;
+        return !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
 
     lastTurnInMsByBot[botGuid] = now;
-
-    bool const closeEnoughToStop = bestDist <= 8.0f;
-    if (closeEnoughToStop && bot->isMoving())
-        bot->StopMoving();
 
     if (bot->IsMounted())
         bot->RemoveAurasByType(SPELL_AURA_MOUNTED);
@@ -2231,7 +2211,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     data << uint32(bestTriggerId);
     bot->GetSession()->HandleAreaTriggerOpcode(data);
     botAI->SetNextCheckDelay(250);
-    return closeEnoughToStop;
+    return !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
 }
 
 static std::pair<uint32, uint32> IC_AttackObjectives[] = {
@@ -4073,7 +4053,9 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
     bool const carrierUnderPressure = bot->IsInCombat() ||
         (RTG_EotsUnitValidForObjective(bot, carrierThreat) && carrierThreat->GetDistance(bot) <= 30.0f);
 
-    if (Unit* currentTarget = context->GetValue<Unit*>("current target")->Get())
+    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn)
+        context->GetValue<Unit*>("current target")->Set(nullptr);
+    else if (Unit* currentTarget = context->GetValue<Unit*>("current target")->Get())
     {
         float const keepTargetRange = carrierUnderPressure ? 8.0f : 20.0f;
         if (!currentTarget->IsAlive() || currentTarget->GetDistance(bot) > keepTargetRange ||
@@ -4089,22 +4071,9 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         return true;
     }
 
-    if (finalDist2d <= 6.0f && std::fabs(bot->GetPositionZ() - finalDestination.GetPositionZ()) <= 10.0f)
+    if (assignment.role != RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 6.0f &&
+        std::fabs(bot->GetPositionZ() - finalDestination.GetPositionZ()) <= 10.0f)
     {
-        if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
-        {
-            if (!carrierUnderPressure && bot->isMoving())
-                bot->StopMoving();
-
-            if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
-            {
-                resetObjective();
-                return true;
-            }
-
-            return true;
-        }
-
         if (!carrierUnderPressure && bot->isMoving())
             bot->StopMoving();
 
@@ -4143,7 +4112,7 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
     else if (bot->isMoving())
         return true;
 
-    float const approach = finalRouteStep ? 4.0f : 2.0f;
+    float const approach = assignment.role == RTGBgObjectiveRole::CarrierTurnIn ? 0.5f : (finalRouteStep ? 4.0f : 2.0f);
     if (MoveNear(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
                  movementDestination.GetPositionZ(), approach))
         return true;
@@ -4272,16 +4241,82 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         finalRouteStep = false;
     }
 
+    struct RtgWsgFcStickyDestination
+    {
+        float finalX = 0.0f;
+        float finalY = 0.0f;
+        float finalZ = 0.0f;
+        float moveX = 0.0f;
+        float moveY = 0.0f;
+        float moveZ = 0.0f;
+        float lastX = 0.0f;
+        float lastY = 0.0f;
+        uint32 lastProgressMs = 0;
+        bool finalStep = true;
+        bool initialized = false;
+    };
+
+    static std::unordered_map<uint64, RtgWsgFcStickyDestination> stickyDestinationByCarrier;
+    uint64 const stickyKey = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
+    uint32 const stickyNow = getMSTime();
+    RtgWsgFcStickyDestination& sticky = stickyDestinationByCarrier[stickyKey];
+
+    bool const finalChanged = !sticky.initialized ||
+        std::fabs(sticky.finalX - finalDestination.GetPositionX()) > 4.0f ||
+        std::fabs(sticky.finalY - finalDestination.GetPositionY()) > 4.0f ||
+        std::fabs(sticky.finalZ - finalDestination.GetPositionZ()) > 8.0f;
+    bool const stickyReached = sticky.initialized &&
+        bot->GetExactDist2d(sticky.moveX, sticky.moveY) <= (sticky.finalStep ? 3.0f : 5.0f) &&
+        std::fabs(bot->GetPositionZ() - sticky.moveZ) <= 9.0f;
+    float const stickyMoved = sticky.initialized
+        ? std::sqrt(std::pow(bot->GetPositionX() - sticky.lastX, 2.0f) +
+                    std::pow(bot->GetPositionY() - sticky.lastY, 2.0f))
+        : 999.0f;
+
+    if (!sticky.initialized || finalChanged || stickyReached ||
+        (stickyMoved <= 1.0f && getMSTimeDiff(sticky.lastProgressMs, stickyNow) > 5000))
+    {
+        sticky.initialized = true;
+        sticky.finalX = finalDestination.GetPositionX();
+        sticky.finalY = finalDestination.GetPositionY();
+        sticky.finalZ = finalDestination.GetPositionZ();
+        sticky.moveX = destination.GetPositionX();
+        sticky.moveY = destination.GetPositionY();
+        sticky.moveZ = destination.GetPositionZ();
+        sticky.finalStep = finalRouteStep;
+        sticky.lastX = bot->GetPositionX();
+        sticky.lastY = bot->GetPositionY();
+        sticky.lastProgressMs = stickyNow;
+    }
+    else
+    {
+        destination.Relocate(sticky.moveX, sticky.moveY, sticky.moveZ);
+        finalRouteStep = sticky.finalStep;
+
+        if (stickyMoved > 1.0f)
+        {
+            sticky.lastX = bot->GetPositionX();
+            sticky.lastY = bot->GetPositionY();
+            sticky.lastProgressMs = stickyNow;
+        }
+    }
+
     Position botPos(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetOrientation());
 
     // If our flag is home, make the cap attempt directly. The generic close-object
-    // scan can miss this when the FC is moving or stuck in combat.
+    // scan can miss this when the FC is moving or stuck in combat.  Do not treat
+    // "near the cap" as success; keep moving to the exact cap coordinate until
+    // the flag actually leaves the carrier.
     if (!ownFlagTaken && RTG_WsgIsNear(botPos, ownFlagRoom, 14.0f, 14.0f))
     {
         WorldPacket data(CMSG_AREATRIGGER);
         data << uint32(team == TEAM_HORDE ? BG_WS_TRIGGER_HORDE_FLAG_SPAWN : BG_WS_TRIGGER_ALLIANCE_FLAG_SPAWN);
         bot->GetSession()->HandleAreaTriggerOpcode(data);
-        return true;
+        if (!bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) && !bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG))
+        {
+            resetObjective();
+            return true;
+        }
     }
 
     PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
@@ -4300,15 +4335,20 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     // A flag carrier should not be rooted forever by a stale/invalid combat target.
     // WSG FC movement has to beat generic combat, otherwise escorts/enemies make a
     // permanent pile around the carrier.
-    if (carrierUnderPressure && RTG_WsgEnemyThreatNearby(bot, carrierThreat, 30.0f))
+    if (!ownFlagTaken)
+        context->GetValue<Unit*>("current target")->Set(nullptr);
+    else if (carrierUnderPressure && RTG_WsgEnemyThreatNearby(bot, carrierThreat, 30.0f))
         context->GetValue<Unit*>("current target")->Set(carrierThreat);
 
-    if (Unit* currentTarget = context->GetValue<Unit*>("current target")->Get())
+    if (ownFlagTaken)
     {
-        float const keepTargetRange = carrierUnderPressure ? 8.0f : 25.0f;
-        if (!currentTarget->IsAlive() || currentTarget->GetDistance(bot) > keepTargetRange ||
-            !bot->IsWithinLOSInMap(currentTarget))
-            context->GetValue<Unit*>("current target")->Set(nullptr);
+        if (Unit* currentTarget = context->GetValue<Unit*>("current target")->Get())
+        {
+            float const keepTargetRange = carrierUnderPressure ? 8.0f : 25.0f;
+            if (!currentTarget->IsAlive() || currentTarget->GetDistance(bot) > keepTargetRange ||
+                !bot->IsWithinLOSInMap(currentTarget))
+                context->GetValue<Unit*>("current target")->Set(nullptr);
+        }
     }
 
     struct RtgWsgFcProgress
@@ -4348,7 +4388,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     bool const appearsStuck = dist2d > 10.0f && progress.initialized &&
         getMSTimeDiff(progress.lastProgressMs, now) > 6500;
 
-    bool const forceRedirectFromGraveyard = (RTG_WsgIsNearGraveyard(bot, 95.0f) ||
+    bool const forceRedirectFromGraveyard = (RTG_WsgIsNearTeamGraveyard(bot, team, 95.0f) ||
         RTG_WsgIsUnsafeCarrierHoldSpot(bot, team)) && dist2d > 10.0f;
 
     // If our flag is away, the FC should wait at a deliberate safe spot. Do not let
@@ -4374,7 +4414,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         bot->GetMotionMaster()->Clear();
     }
 
-    float const approach = finalRouteStep ? (ownFlagTaken ? 3.5f : 1.5f) : 3.0f;
+    float const approach = finalRouteStep ? (ownFlagTaken ? 3.5f : 0.5f) : 3.0f;
     if (MoveNear(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), approach))
         return true;
 
@@ -5370,7 +5410,14 @@ bool BGTactics::atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<ui
                             data << uint32(BG_WS_TRIGGER_ALLIANCE_FLAG_SPAWN);
                             bot->GetSession()->HandleAreaTriggerOpcode(data);
                         }
-                        return true;
+
+                        if (!bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) && !bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG))
+                        {
+                            resetObjective();
+                            return true;
+                        }
+
+                        return false;
                     }
 
                     // Dismount before picking up flag
