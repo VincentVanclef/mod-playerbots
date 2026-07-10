@@ -10,6 +10,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundWS.h"
 #include "Playerbots.h"
+#include "RTGBattlegroundObjectiveBrain.h"
 #include "ServerFacade.h"
 #include "BattlegroundAV.h"
 #include "BattlegroundEY.h"
@@ -18,24 +19,7 @@ namespace
 {
 TeamId RTG_TriggerEffectiveBgTeamId(Player* bot)
 {
-    if (!bot)
-        return TEAM_NEUTRAL;
-
-    // CFBG / fake-faction modules can make GetTeamId() disagree with the
-    // battleground side. For flag state, FC, EFC, and own-base decisions, use
-    // the actual BG team slot first.
-    if (bot->InBattleground())
-    {
-        TeamId const bgTeam = bot->GetBgTeamId();
-        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
-            return bgTeam;
-    }
-
-    TeamId const team = bot->GetTeamId();
-    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
-        return team;
-
-    return TEAM_NEUTRAL;
+    return RTG_GetEffectiveBgTeam(bot);
 }
 }
 

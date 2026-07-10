@@ -31,6 +31,7 @@
 #include "Playerbots.h"
 #include "PositionValue.h"
 #include "PvpTriggers.h"
+#include "RTGBattlegroundObjectiveBrain.h"
 #include "ServerFacade.h"
 #include "Vehicle.h"
 #include "Player.h"
@@ -1297,24 +1298,7 @@ static std::unordered_map<uint32, Position> EY_NodePositions = {
 
 static TeamId RTG_BgEffectiveTeamId(Player* bot)
 {
-    if (!bot)
-        return TEAM_NEUTRAL;
-
-    // CFBG can temporarily change visible race/faction/team state.  For BG
-    // tactics the authoritative side is the battleground team slot: start side,
-    // graveyard side, score side, and objective ownership all key off this.
-    if (bot->InBattleground())
-    {
-        TeamId const bgTeam = bot->GetBgTeamId();
-        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
-            return bgTeam;
-    }
-
-    TeamId const team = bot->GetTeamId();
-    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
-        return team;
-
-    return TEAM_NEUTRAL;
+    return RTG_GetEffectiveBgTeam(bot);
 }
 
 static char const* RTG_EotsStrategyName(EYBotStrategy strategy)
@@ -1354,50 +1338,9 @@ static Position RTG_EotsStartPosition(TeamId team)
     return team == TEAM_HORDE ? EY_WAITING_POS_HORDE : EY_WAITING_POS_ALLIANCE;
 }
 
-static TeamId RTG_EotsEffectiveTeamId(Player* bot, Battleground* bg = nullptr)
+static TeamId RTG_EotsEffectiveTeamId(Player* bot, Battleground* = nullptr)
 {
-    TeamId const fallback = RTG_BgEffectiveTeamId(bot);
-    if (!bot)
-        return fallback;
-
-    if (!bg)
-        bg = bot->GetBattleground();
-
-    if (!bg)
-        return fallback;
-
-    BattlegroundTypeId bgType = bg->GetBgTypeID();
-    if (bgType == BATTLEGROUND_RB)
-        bgType = bg->GetBgTypeID(true);
-
-    if (bgType != BATTLEGROUND_EY)
-        return fallback;
-
-    // CFBG/playerbot builds can occasionally disagree between original faction,
-    // fake faction, and BG side. For EotS specifically, lock the side from the
-    // spawn rock/starting half the first time this bot is evaluated in the match.
-    // This prevents Horde-side bots from being planned as Alliance and skipping
-    // Fel Reaver Ruins for Mage Tower.
-    static std::unordered_map<uint64, TeamId> lockedSideByBot;
-    uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
-
-    auto itr = lockedSideByBot.find(key);
-    if (itr != lockedSideByBot.end() &&
-        (itr->second == TEAM_ALLIANCE || itr->second == TEAM_HORDE))
-        return itr->second;
-
-    float const hordeStartDist = bot->GetDistance(EY_WAITING_POS_HORDE);
-    float const allianceStartDist = bot->GetDistance(EY_WAITING_POS_ALLIANCE);
-    bool const onStartRockOrExit = bot->GetPositionZ() > 1230.0f || hordeStartDist < 360.0f || allianceStartDist < 360.0f;
-
-    if (onStartRockOrExit)
-    {
-        TeamId const inferred = hordeStartDist <= allianceStartDist ? TEAM_HORDE : TEAM_ALLIANCE;
-        lockedSideByBot[key] = inferred;
-        return inferred;
-    }
-
-    return fallback;
+    return RTG_GetEffectiveBgTeam(bot);
 }
 
 static bool RTG_EotsReachedStartExitField(Player* bot)
@@ -3097,6 +3040,9 @@ bool BGTactics::Execute(Event /*event*/)
 
         if (!isCarryingFlag)
         {
+            if ((bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY) && RTG_BgObjectiveBrainEnabledFor(bot))
+                return resetObjective();
+
             if (bgType == BATTLEGROUND_EY && bot->IsAlive() && !RTG_EotsAllowObjectivePulse(bot, bg))
                 return false;
 
@@ -3114,6 +3060,9 @@ bool BGTactics::Execute(Event /*event*/)
 
     if (getName() == "protect fc")
     {
+        if ((bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY) && RTG_BgObjectiveBrainEnabledFor(bot))
+            return false;
+
         if (protectFC())
             return true;
     }
@@ -3140,7 +3089,9 @@ bool BGTactics::Execute(Event /*event*/)
                 return true;
         }
 
-        if (bgType == BATTLEGROUND_EY)
+        // RTG cleanup: the shared objective brain owns non-carrier EotS assignments.
+        // Keep the older EotS mission layer as a fallback only when the new brain is disabled.
+        if (bgType == BATTLEGROUND_EY && !RTG_BgObjectiveBrainEnabledFor(bot))
         {
             if (rtgEotsMoveOpeningHomeTower())
                 return true;
@@ -3270,6 +3221,9 @@ bool BGTactics::Execute(Event /*event*/)
 
     if (getName() == "check objective")
     {
+        if ((bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY) && RTG_BgObjectiveBrainEnabledFor(bot))
+            return resetObjective();
+
         if (bgType == BATTLEGROUND_EY)
         {
             if (RTG_EotsCurrentMissionIsStable(bot, bg))
@@ -3716,6 +3670,18 @@ bool BGTactics::selectObjective(bool reset)
         }
         case BATTLEGROUND_WS:
         {
+            // RTG cleanup: prefer the shared WSG/EotS objective brain; the legacy
+            // WSG block below remains a disabled fallback for local troubleshooting.
+            if (RTG_BgObjectiveBrainEnabledFor(bot))
+            {
+                RTGBgObjectiveAssignment assignment;
+                if (RTG_SelectBattlegroundObjective(botAI, assignment))
+                {
+                    posMap["bg objective"] = assignment.destination;
+                    return true;
+                }
+            }
+
             Position target;
             TeamId team = RTG_BgEffectiveTeamId(bot);
             uint32 const botSeed = bot->GetGUID().GetCounter();
@@ -4100,6 +4066,18 @@ bool BGTactics::selectObjective(bool reset)
         }
         case BATTLEGROUND_EY:
         {
+            // RTG cleanup: prefer the shared WSG/EotS objective brain; the older
+            // EotS mission planner below remains a disabled fallback.
+            if (RTG_BgObjectiveBrainEnabledFor(bot))
+            {
+                RTGBgObjectiveAssignment assignment;
+                if (RTG_SelectBattlegroundObjective(botAI, assignment))
+                {
+                    posMap["bg objective"] = assignment.destination;
+                    return true;
+                }
+            }
+
             BattlegroundEY* eyeOfTheStormBG = static_cast<BattlegroundEY*>(bg);
             if (!eyeOfTheStormBG)
                 return false;
@@ -4878,6 +4856,14 @@ bool BGTactics::moveToObjective(bool ignoreDist)
 
         float const distToObjective = bot->GetDistance(pos.x, pos.y, pos.z);
 
+        if (RTG_ShouldHoldBattlegroundObjective(botAI, pos))
+        {
+            if (bot->isMoving())
+                bot->StopMoving();
+
+            return true;
+        }
+
         // EotS towers are capture areas, not normal click-and-reset objectives.
         // When a bot reaches a tower assignment, hold the circle long enough for
         // natural capture pressure instead of instantly clearing the objective and
@@ -5360,6 +5346,21 @@ bool BGTactics::recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo co
     if (bgType != BATTLEGROUND_WS && bgType != BATTLEGROUND_EY)
         return false;
 
+    if (RTG_BgObjectiveBrainEnabledFor(bot))
+    {
+        RTGBgObjectiveAssignment recovery;
+        if (RTG_UpdateBattlegroundObjectiveStuck(botAI, pos, recovery))
+        {
+            PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
+            posMap["bg objective"] = recovery.destination;
+            bot->StopMoving();
+            bot->GetMotionMaster()->Clear();
+            return true;
+        }
+
+        return false;
+    }
+
     uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
 
     struct BgObjectiveProgress
@@ -5657,8 +5658,12 @@ bool BGTactics::resetObjective()
     // Adjust role-change chance based on battleground type
     uint32 oddsToChangeRole = 1;  // default low
     BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
 
-    if (bgType == BATTLEGROUND_WS)
+    if ((bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY) && RTG_BgObjectiveBrainEnabledFor(bot))
+        oddsToChangeRole = 0;
+    else if (bgType == BATTLEGROUND_WS)
         oddsToChangeRole = 2;
     else if (bgType == BATTLEGROUND_EY)
         oddsToChangeRole = 0;
@@ -5707,6 +5712,14 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
         if (bgType == BATTLEGROUND_EY && bot->IsAlive() && !inCombat)
         {
             PositionInfo pos = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
+            if (RTG_ShouldHoldBattlegroundObjective(botAI, pos))
+            {
+                if (bot->isMoving())
+                    bot->StopMoving();
+
+                return true;
+            }
+
             if (RTG_EotsShouldHoldTowerMission(bot, bg, pos))
                 return true;
 

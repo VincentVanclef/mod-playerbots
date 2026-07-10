@@ -9,27 +9,14 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundWS.h"
 #include "Playerbots.h"
+#include "RTGBattlegroundObjectiveBrain.h"
 #include "ServerFacade.h"
 
 namespace
 {
 TeamId RTG_ValueEffectiveBgTeamId(Player* player)
 {
-    if (!player)
-        return TEAM_NEUTRAL;
-
-    if (player->InBattleground())
-    {
-        TeamId const bgTeam = player->GetBgTeamId();
-        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
-            return bgTeam;
-    }
-
-    TeamId const team = player->GetTeamId();
-    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
-        return team;
-
-    return TEAM_NEUTRAL;
+    return RTG_GetEffectiveBgTeam(player);
 }
 }
 

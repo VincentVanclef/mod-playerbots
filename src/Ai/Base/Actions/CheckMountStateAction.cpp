@@ -13,6 +13,7 @@
 #include "PlayerbotAI.h"
 #include "PlayerbotAIConfig.h"
 #include "Playerbots.h"
+#include "RTGBattlegroundObjectiveBrain.h"
 #include "ServerFacade.h"
 #include "SpellAuraEffects.h"
 #include "IVMapMgr.h"
@@ -25,9 +26,10 @@ static bool RTG_EotsShouldBlockMountOnStartRock(Player* bot)
     if (!bot || bot->GetMapId() != 566)
         return false;
 
-    float const startX = bot->GetTeamId() == TEAM_HORDE ? 1809.102f : 2523.827f;
-    float const startY = bot->GetTeamId() == TEAM_HORDE ? 1540.854f : 1596.915f;
-    float const startZ = bot->GetTeamId() == TEAM_HORDE ? 1267.142f : 1270.204f;
+    TeamId const team = RTG_GetEffectiveBgTeam(bot);
+    float const startX = team == TEAM_HORDE ? 1809.102f : 2523.827f;
+    float const startY = team == TEAM_HORDE ? 1540.854f : 1596.915f;
+    float const startZ = team == TEAM_HORDE ? 1267.142f : 1270.204f;
 
     if (bot->GetDistance(startX, startY, startZ) > 305.0f)
         return false;
@@ -35,7 +37,7 @@ static bool RTG_EotsShouldBlockMountOnStartRock(Player* bot)
     // Same thresholds as the EotS rock-exit helper in BattleGroundTactics.cpp.
     // Do not let mount casting StopMoving() while bots are still on the shelf,
     // lower lip, or the side rock. Mounts are fine after the field crossroad.
-    if (bot->GetTeamId() == TEAM_HORDE)
+    if (team == TEAM_HORDE)
     {
         if (bot->GetPositionX() >= 1932.0f && bot->GetPositionZ() <= 1186.0f)
             return false;

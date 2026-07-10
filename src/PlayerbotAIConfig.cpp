@@ -73,8 +73,15 @@ bool PlayerbotAIConfig::Initialize()
     maxWaitForMove = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxWaitForMove", 5000);
     disableMoveSplinePath = sConfigMgr->GetOption<int32>("AiPlayerbot.DisableMoveSplinePath", 0);
     maxMovementSearchTime = sConfigMgr->GetOption<int32>("AiPlayerbot.MaxMovementSearchTime", 3);
-    rtgPlayerbotsBgEotsObjectiveAI = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.EOTS.EnableObjectiveAI", true);
-    rtgPlayerbotsBgEotsDebug = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.EOTS.Debug", false);
+    bool const deprecatedEotsObjectiveAI = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.EOTS.EnableObjectiveAI", true);
+    bool const deprecatedEotsDebug = sConfigMgr->GetOption<bool>("RTG.Playerbots.BG.EOTS.Debug", false);
+    rtgBgObjectiveBrain = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.BG.ObjectiveBrain", deprecatedEotsObjectiveAI);
+    rtgBgDebugObjectiveBrain = sConfigMgr->GetOption<bool>("AiPlayerbot.RTG.BG.DebugObjectiveBrain", deprecatedEotsDebug);
+    rtgBgWsgCommitMs = std::max<uint32>(5000, sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.BG.WSG.CommitMs", 18000));
+    rtgBgEotsCommitMs = std::max<uint32>(5000, sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.BG.EOTS.CommitMs", 20000));
+    rtgBgStuckRecoverMs = std::max<uint32>(5000, sConfigMgr->GetOption<uint32>("AiPlayerbot.RTG.BG.StuckRecoverMs", 10000));
+    rtgPlayerbotsBgEotsObjectiveAI = !rtgBgObjectiveBrain && deprecatedEotsObjectiveAI;
+    rtgPlayerbotsBgEotsDebug = rtgBgDebugObjectiveBrain;
     rtgPlayerbotsBgEotsCenterFlagChance = std::min<uint32>(100, sConfigMgr->GetOption<uint32>("RTG.Playerbots.BG.EOTS.CenterFlagChance", 35));
     rtgPlayerbotsBgEotsDebugThrottleMs = sConfigMgr->GetOption<uint32>("RTG.Playerbots.BG.EOTS.DebugThrottleMs", 5000);
     expireActionTime = sConfigMgr->GetOption<int32>("AiPlayerbot.ExpireActionTime", 5000);

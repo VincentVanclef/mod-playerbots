@@ -1272,10 +1272,18 @@ AiPlayerbot.AutoTeleportForLevel = 0
 # BATTLEGROUNDS & ARENAS & PVP
 #
 
-# RTG Eye of the Storm objective assist.
-# Narrow EotS-only strategy layer for tower assignments, center flag pressure,
-# carrier turn-ins, and debug logging. Set Debug=1 temporarily if EotS hangs or
-# bots pick strange objectives so the selected objective appears in the playerbots log.
+# RTG battleground objective brain.
+# Small WSG/EotS planning layer for objective roles, destinations, commitment,
+# emergency flag/carrier overrides, and lightweight stuck recovery.
+AiPlayerbot.RTG.BG.ObjectiveBrain = 1
+AiPlayerbot.RTG.BG.DebugObjectiveBrain = 0
+AiPlayerbot.RTG.BG.WSG.CommitMs = 18000
+AiPlayerbot.RTG.BG.EOTS.CommitMs = 20000
+AiPlayerbot.RTG.BG.StuckRecoverMs = 10000
+
+# Deprecated RTG EotS-only objective keys.
+# These are ignored while AiPlayerbot.RTG.BG.ObjectiveBrain is enabled. They are
+# left here only so older local configs have an obvious migration note.
 RTG.Playerbots.BG.EOTS.EnableObjectiveAI = 1
 RTG.Playerbots.BG.EOTS.CenterFlagChance = 35
 RTG.Playerbots.BG.EOTS.Debug = 0

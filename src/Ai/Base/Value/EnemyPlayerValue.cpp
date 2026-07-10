@@ -7,6 +7,7 @@
 
 #include "CombatManager.h"
 #include "Playerbots.h"
+#include "RTGBattlegroundObjectiveBrain.h"
 #include "ServerFacade.h"
 #include "Vehicle.h"
 
@@ -14,21 +15,7 @@ namespace
 {
 TeamId RTG_EnemyPlayerEffectiveBgTeamId(Player* player)
 {
-    if (!player)
-        return TEAM_NEUTRAL;
-
-    if (player->InBattleground())
-    {
-        TeamId const bgTeam = player->GetBgTeamId();
-        if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
-            return bgTeam;
-    }
-
-    TeamId const team = player->GetTeamId();
-    if (team == TEAM_ALLIANCE || team == TEAM_HORDE)
-        return team;
-
-    return TEAM_NEUTRAL;
+    return RTG_GetEffectiveBgTeam(player);
 }
 }
 
@@ -40,7 +27,10 @@ bool NearestEnemyPlayersValue::AcceptUnit(Unit* unit)
 
     bool inCannon = botAI->IsInVehicle(false, true);
     Player* enemy = dynamic_cast<Player*>(unit);
-    if (enemy && botAI->IsOpposing(enemy) && enemy->IsPvP() &&
+    bool const isEnemy = enemy && bot->InBattleground() && enemy->InBattleground()
+        ? RTG_IsEnemyEffectiveBgTeam(bot, enemy)
+        : enemy && botAI->IsOpposing(enemy);
+    if (enemy && isEnemy && enemy->IsPvP() &&
         !sPlayerbotAIConfig.IsPvpProhibited(enemy->GetZoneId(), enemy->GetAreaId()) &&
         !enemy->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NON_ATTACKABLE_2) &&
         ((inCannon || !enemy->HasFlag(UNIT_FIELD_FLAGS, UNIT_FLAG_NOT_SELECTABLE))) &&

@@ -93,7 +93,9 @@ public:
     bool randomBotGuildNearby, randomBotInvitePlayer, inviteChat;
     uint32 globalCoolDown, reactDelay, maxWaitForMove, disableMoveSplinePath, maxMovementSearchTime, expireActionTime,
         dispelAuraDuration, passiveDelay, repeatDelay, errorDelay, rpgDelay, sitDelay, returnDelay, lootDelay;
+    bool rtgBgObjectiveBrain, rtgBgDebugObjectiveBrain;
     bool rtgPlayerbotsBgEotsObjectiveAI, rtgPlayerbotsBgEotsDebug;
+    uint32 rtgBgWsgCommitMs, rtgBgEotsCommitMs, rtgBgStuckRecoverMs;
     uint32 rtgPlayerbotsBgEotsCenterFlagChance, rtgPlayerbotsBgEotsDebugThrottleMs;
     bool dynamicReactDelay;
     float sightDistance, spellDistance, reactDistance, grindDistance, lootDistance, shootDistance, fleeDistance,
