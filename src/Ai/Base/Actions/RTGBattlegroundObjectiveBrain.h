@@ -28,6 +28,7 @@ enum class RTGBgObjectiveRole : uint8
     DefendTower,
     MidfieldPressure,
     CarrierTurnIn,
+    ExitSpawn,
     StuckRecover
 };
 

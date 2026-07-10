@@ -120,7 +120,6 @@ private:
     bool moveToObjective(bool ignoreDist);
     bool recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo const& pos);
     bool rtgEotsMoveFlagCarrier();
-    bool rtgEotsMoveOpeningHomeTower();
     bool rtgEotsMoveToObjectiveRoute();
     bool rtgWsgMoveFlagCarrier();
     bool rtgWsgMoveToEnemyFlagObjective();

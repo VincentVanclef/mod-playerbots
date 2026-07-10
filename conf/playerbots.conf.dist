@@ -1281,14 +1281,6 @@ AiPlayerbot.RTG.BG.WSG.CommitMs = 18000
 AiPlayerbot.RTG.BG.EOTS.CommitMs = 20000
 AiPlayerbot.RTG.BG.StuckRecoverMs = 10000
 
-# Deprecated RTG EotS-only objective keys.
-# These are ignored while AiPlayerbot.RTG.BG.ObjectiveBrain is enabled. They are
-# left here only so older local configs have an obvious migration note.
-RTG.Playerbots.BG.EOTS.EnableObjectiveAI = 1
-RTG.Playerbots.BG.EOTS.CenterFlagChance = 35
-RTG.Playerbots.BG.EOTS.Debug = 0
-RTG.Playerbots.BG.EOTS.DebugThrottleMs = 5000
-
 # Enable battlegrounds/arenas for randombots
 AiPlayerbot.RandomBotJoinBG = 1
 

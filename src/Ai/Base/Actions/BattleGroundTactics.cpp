@@ -1301,23 +1301,6 @@ static TeamId RTG_BgEffectiveTeamId(Player* bot)
     return RTG_GetEffectiveBgTeam(bot);
 }
 
-static char const* RTG_EotsStrategyName(EYBotStrategy strategy)
-{
-    switch (strategy)
-    {
-        case EY_STRATEGY_BALANCED:
-            return "balanced";
-        case EY_STRATEGY_FRONT_FOCUS:
-            return "front";
-        case EY_STRATEGY_BACK_FOCUS:
-            return "back";
-        case EY_STRATEGY_FLAG_FOCUS:
-            return "flag";
-        default:
-            return "unknown";
-    }
-}
-
 static bool RTG_EotsUnitValidForObjective(Player* bot, Unit* unit)
 {
     return bot && unit && unit->IsInWorld() && unit->IsAlive() && unit->GetMapId() == bot->GetMapId();
@@ -1425,52 +1408,6 @@ static bool RTG_EotsIsHomeNode(TeamId team, uint32 nodeId)
 static bool RTG_EotsIsEnemySideNode(TeamId team, uint32 nodeId)
 {
     return !RTG_EotsIsHomeNode(team, nodeId);
-}
-
-static uint32 RTG_EotsMandatoryOpeningHomeNode(BattlegroundEY* eyeBg, TeamId team)
-{
-    if (!eyeBg)
-        return 0;
-
-    auto NeedsCapture = [&](uint32 nodeId) -> bool
-    {
-        return eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId != team;
-    };
-
-    if (team == TEAM_HORDE)
-    {
-        if (NeedsCapture(POINT_FEL_REAVER))
-            return POINT_FEL_REAVER;
-        if (NeedsCapture(POINT_BLOOD_ELF))
-            return POINT_BLOOD_ELF;
-        return 0;
-    }
-
-    if (team == TEAM_ALLIANCE)
-    {
-        if (NeedsCapture(POINT_MAGE_TOWER))
-            return POINT_MAGE_TOWER;
-        if (NeedsCapture(POINT_DRAENEI_RUINS))
-            return POINT_DRAENEI_RUINS;
-        return 0;
-    }
-
-    return 0;
-}
-
-static uint32 RTG_EotsAssignedHomeNode(TeamId team, uint32 role, uint32 botGuid)
-{
-    // Keep the home split deterministic, but do not use low-bit parity. stableRole
-    // already includes guid % 10, and mixing that with guid % 2 cancels out for
-    // same-role waves. Use a higher hash bit so Horde cannot all roll Blood Elf
-    // and leave Fel Reaver Ruins empty.
-    uint32 const seed = botGuid * 1103515245u + role * 12345u + 0x9E3779B9u;
-    bool const firstHalf = ((seed >> 16) & 1u) == 0u;
-
-    if (team == TEAM_HORDE)
-        return firstHalf ? POINT_FEL_REAVER : POINT_BLOOD_ELF;
-
-    return firstHalf ? POINT_MAGE_TOWER : POINT_DRAENEI_RUINS;
 }
 
 static uint32 RTG_EotsAssignedEnemySideNode(TeamId team, uint32 role, uint32 botGuid)
@@ -1640,16 +1577,6 @@ static bool RTG_EotsGetRouteStepFromRoute(Player* bot, std::vector<Position>& ro
     return true;
 }
 
-static bool RTG_EotsGetOpeningHomeRouteStep(Player* bot, TeamId team, uint32 nodeId,
-                                            Position const& finalTarget, Position& step)
-{
-    if (!bot || !nodeId)
-        return false;
-
-    std::vector<Position> route = RTG_EotsBuildOpeningHomeRoute(team, nodeId);
-    return RTG_EotsGetRouteStepFromRoute(bot, route, finalTarget, step);
-}
-
 static bool RTG_EotsIsCenterObjective(PositionInfo const& pos)
 {
     if (!pos.valueSet)
@@ -1796,13 +1723,13 @@ static bool RTG_EotsIsNearStartRock(Player* bot)
 
 static void RTG_EotsDebugRaw(Player* bot, Battleground* bg, char const* phase, char const* reason, uint32 nodeId = 0, uint32 triggerId = 0)
 {
-    if (!sPlayerbotAIConfig.rtgPlayerbotsBgEotsDebug || !bot || !bg)
+    if (!sPlayerbotAIConfig.rtgBgDebugObjectiveBrain || !bot || !bg)
         return;
 
     static std::unordered_map<uint64, uint32> lastLogMs;
     uint64 const key = (uint64(bot->GetGUID().GetCounter()) << 16) ^ uint64(nodeId) ^ (uint64(triggerId) << 32);
     uint32 const now = getMSTime();
-    uint32 const throttleMs = std::max<uint32>(1000, sPlayerbotAIConfig.rtgPlayerbotsBgEotsDebugThrottleMs);
+    uint32 constexpr throttleMs = 5000;
 
     auto itr = lastLogMs.find(key);
     if (itr != lastLogMs.end() && getMSTimeDiff(itr->second, now) < throttleMs)
@@ -1815,56 +1742,6 @@ static void RTG_EotsDebugRaw(Player* bot, Battleground* bg, char const* phase, c
              phase ? phase : "?", bot->GetName(), bot->GetGUID().GetCounter(), bg->GetInstanceID(),
              uint32(RTG_EotsEffectiveTeamId(bot, bg)), uint32(bot->GetTeamId()), bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL), reason ? reason : "?",
              nodeId, triggerId, bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ());
-}
-
-static bool RTG_EotsAllowObjectivePulse(Player* bot, Battleground* bg)
-{
-    if (!bot || !bg || bg->GetBgTypeID() != BATTLEGROUND_EY)
-        return true;
-
-    // The shared battleground strategy fires "bg check objective" very often.
-    // On EotS that became expensive and unstable because every pulse could clear
-    // movement and select a different tower/flag target. Keep EotS decisions
-    // stable, while still letting carriers refresh more often so turn-ins happen.
-    static std::unordered_map<uint32, uint32> lastPulseMsByBot;
-    uint32 const botGuid = bot->GetGUID().GetCounter();
-    uint32 const now = getMSTime();
-    uint32 const minPulseMs = bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) ? 2500u : 18000u;
-
-    auto itr = lastPulseMsByBot.find(botGuid);
-    if (itr != lastPulseMsByBot.end() && getMSTimeDiff(itr->second, now) < minPulseMs)
-        return false;
-
-    lastPulseMsByBot[botGuid] = now;
-    return true;
-}
-
-static bool RTG_WsgAllowObjectivePulse(Player* bot, Battleground* bg)
-{
-    if (!bot || !bg || bg->GetBgTypeID() != BATTLEGROUND_WS)
-        return true;
-
-    // WSG objectives were being reset on every "often" trigger and again by the
-    // WSG timer trigger. That made carriers roll a new hide/base target and made
-    // escorts/chasers abandon their assignment before they got there.
-    static std::unordered_map<uint32, uint32> lastPulseMsByBot;
-    uint32 const botGuid = bot->GetGUID().GetCounter();
-    uint32 const now = getMSTime();
-    bool const carryingFlag = bot->HasAura(BG_WS_SPELL_WARSONG_FLAG) || bot->HasAura(BG_WS_SPELL_SILVERWING_FLAG);
-    bool const flagGameUrgent = carryingFlag || PlayerHasFlag::IsCapturingFlag(bot);
-
-    // Non-carriers were visibly changing their mind at the exact cadence of this
-    // throttle near WSG graveyards. Let normal bots commit to offense/defense long
-    // enough to actually reach a flag room. Carriers still refresh fast so cap/hide
-    // state changes remain responsive.
-    uint32 const minPulseMs = flagGameUrgent ? 2500u : 22000u;
-
-    auto itr = lastPulseMsByBot.find(botGuid);
-    if (itr != lastPulseMsByBot.end() && getMSTimeDiff(itr->second, now) < minPulseMs)
-        return false;
-
-    lastPulseMsByBot[botGuid] = now;
-    return true;
 }
 
 static uint32 RTG_WsgStableRole(Player* bot, uint32 role)
@@ -2084,59 +1961,6 @@ static bool RTG_WsgEnemyThreatNearby(Player* bot, Unit* enemy, float range = 35.
     return RTG_EotsUnitValidForObjective(bot, enemy) && bot->GetDistance(enemy) <= range;
 }
 
-static Position RTG_WsgStrategicFallback(Player* bot, BattlegroundWS* wsBg, uint32 stableRole, Unit* enemyFC, Unit* teamFC)
-{
-    TeamId const team = bot ? RTG_BgEffectiveTeamId(bot) : TEAM_NEUTRAL;
-    Position const& ownFlagRoom = RTG_WsgOwnFlagRoom(team);
-    Position const enemyFlagObjective = RTG_WsgEnemyFlagObjective(wsBg, team);
-
-    if (!bot || !wsBg)
-        return WS_ROAM_POS;
-
-    // If our flag is taken, recover it first. If their flag is loose/home, pressure
-    // their room. Defenders return home; everyone else leaves the graveyard area.
-    if (RTG_EotsUnitValidForObjective(bot, enemyFC))
-        return enemyFC->GetPosition();
-
-    if (RTG_EotsUnitValidForObjective(bot, teamFC) && RTG_WsgShouldEscortCarrier(stableRole))
-        return teamFC->GetPosition();
-
-    bool const ownFlagTaken = !wsBg->GetFlagPickerGUID(team).IsEmpty();
-    if (ownFlagTaken)
-    {
-        if (stableRole <= 1)
-            return ownFlagRoom;
-
-        return WS_ROAM_POS;
-    }
-
-    if (stableRole <= 1)
-        return ownFlagRoom;
-
-    return enemyFlagObjective;
-}
-
-static void RTG_WsgClampInvalidUpperBaseTarget(Position& target)
-{
-    if (!target.IsPositionValid())
-        return;
-
-    float const x = target.GetPositionX();
-    float const y = target.GetPositionY();
-    float const z = target.GetPositionZ();
-
-    // RTG WSG has had bots walk up base walls/upper floors that should be inaccessible.
-    // Keep objectives inside the playable lower flag room/tunnel layer instead of letting
-    // MoveNear/MoveTo try to solve a high-Z wall target.
-    bool const hordeBaseUpperWall = x < 1040.0f && y > 1390.0f && y < 1535.0f && z > 351.0f;
-    bool const allianceBaseUpperWall = x > 1450.0f && y > 1380.0f && y < 1510.0f && z > 360.0f;
-
-    if (hordeBaseUpperWall)
-        target.Relocate(WS_FLAG_POS_HORDE);
-    else if (allianceBaseUpperWall)
-        target.Relocate(WS_FLAG_POS_ALLIANCE);
-}
-
 static bool RTG_WsgIsEnemyFlagRoomObjective(TeamId team, Position const& target)
 {
     if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
@@ -2285,290 +2109,12 @@ static uint32 RTG_EotsStableRole(Player* bot, uint32 role)
     return (role + (bot->GetGUID().GetCounter() % 10)) % 10;
 }
 
-static Position RTG_EotsObjectiveAnchor(uint32 nodeId, uint32 seed, bool exact = false)
-{
-    Position out;
-    if (!RTG_EotsGetNodePosition(nodeId, out) || exact)
-        return out;
-
-    // Small deterministic spread inside the capture area. This avoids 8+ bots
-    // stacking on the exact same coordinate without making them miss the base.
-    float const angle = float((seed % 628u)) / 100.0f;
-    float const radius = 4.0f + float(seed % 5u);
-    out.Relocate(out.GetPositionX() + std::cos(angle) * radius,
-                 out.GetPositionY() + std::sin(angle) * radius,
-                 out.GetPositionZ(), out.GetOrientation());
-    return out;
-}
-
-// RTG EotS mission brain ----------------------------------------------------
-//
-// The stock BG action stores only one position named "bg objective". That is
-// not enough for Eye of the Storm: when a bot reaches the edge of a tower it
-// would reset, pick another nearby lane, and bounce back to the fork.  Keep a
-// small durable mission beside that position so reset/check pulses rebuild the
-// same assignment instead of changing the bot's mind every few seconds.
 // RTG: do not treat the outer tower approach/perimeter as "arrived".
 // EotS capture credit requires bots to keep walking into the actual tower
 // capture area.  A larger value here caused bots to stop 20-40 yards short,
 // look like they were defending, and never apply capture pressure.
 static float constexpr RTG_EOTS_TOWER_ARRIVE_RADIUS_2D = 7.5f;
 static float constexpr RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF = 8.0f;
-static uint32 constexpr RTG_EOTS_CAPTURE_MISSION_MS = 70000;
-static uint32 constexpr RTG_EOTS_CAPTURE_HOLD_MS = 22000;
-static uint32 constexpr RTG_EOTS_HOLD_MISSION_MS = 38000;
-static uint32 constexpr RTG_EOTS_ASSAULT_MISSION_MS = 55000;
-static uint32 constexpr RTG_EOTS_FLAG_MISSION_MS = 18000;
-static uint32 constexpr RTG_EOTS_CARRIER_MISSION_MS = 7000;
-static uint32 constexpr RTG_EOTS_PVP_MISSION_MS = 9000;
-
-namespace
-{
-
-enum RtgEotsMissionType : uint8
-{
-    RTG_EOTS_MISSION_NONE = 0,
-    RTG_EOTS_MISSION_EXIT_SPAWN,
-    RTG_EOTS_MISSION_CAPTURE_TOWER,
-    RTG_EOTS_MISSION_HOLD_TOWER,
-    RTG_EOTS_MISSION_ASSAULT_TOWER,
-    RTG_EOTS_MISSION_RUN_CENTER_FLAG,
-    RTG_EOTS_MISSION_ESCORT_CARRIER,
-    RTG_EOTS_MISSION_INTERCEPT_CARRIER,
-    RTG_EOTS_MISSION_MID_PRESSURE,
-    RTG_EOTS_MISSION_CARRIER_TURNIN
-};
-
-struct RtgEotsMission
-{
-    RtgEotsMissionType type = RTG_EOTS_MISSION_NONE;
-    uint32 bgInstance = 0;
-    uint32 teamId = 0;
-    uint32 targetNode = 0;
-    float targetX = 0.0f;
-    float targetY = 0.0f;
-    float targetZ = 0.0f;
-    uint32 assignedMs = 0;
-    uint32 durationMs = 0;
-    uint32 holdMs = 0;
-    bool initialized = false;
-};
-
-static std::unordered_map<uint64, RtgEotsMission> RTG_EotsMissionByBot;
-
-static uint64 RTG_EotsMissionKey(Player* bot, Battleground* bg)
-{
-    if (!bot || !bg)
-        return 0;
-
-    return (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
-}
-
-static char const* RTG_EotsMissionName(RtgEotsMissionType type)
-{
-    switch (type)
-    {
-        case RTG_EOTS_MISSION_EXIT_SPAWN:
-            return "exit_spawn";
-        case RTG_EOTS_MISSION_CAPTURE_TOWER:
-            return "capture_tower";
-        case RTG_EOTS_MISSION_HOLD_TOWER:
-            return "hold_tower";
-        case RTG_EOTS_MISSION_ASSAULT_TOWER:
-            return "assault_tower";
-        case RTG_EOTS_MISSION_RUN_CENTER_FLAG:
-            return "run_center_flag";
-        case RTG_EOTS_MISSION_ESCORT_CARRIER:
-            return "escort_carrier";
-        case RTG_EOTS_MISSION_INTERCEPT_CARRIER:
-            return "intercept_carrier";
-        case RTG_EOTS_MISSION_MID_PRESSURE:
-            return "mid_pressure";
-        case RTG_EOTS_MISSION_CARRIER_TURNIN:
-            return "carrier_turnin";
-        default:
-            return "none";
-    }
-}
-
-static bool RTG_EotsMissionIsTower(RtgEotsMissionType type)
-{
-    return type == RTG_EOTS_MISSION_CAPTURE_TOWER ||
-           type == RTG_EOTS_MISSION_HOLD_TOWER ||
-           type == RTG_EOTS_MISSION_ASSAULT_TOWER;
-}
-
-static void RTG_EotsClearMission(Player* bot, Battleground* bg)
-{
-    uint64 const key = RTG_EotsMissionKey(bot, bg);
-    if (key)
-        RTG_EotsMissionByBot.erase(key);
-}
-
-static RtgEotsMission* RTG_EotsGetMission(Player* bot, Battleground* bg)
-{
-    uint64 const key = RTG_EotsMissionKey(bot, bg);
-    if (!key)
-        return nullptr;
-
-    auto itr = RTG_EotsMissionByBot.find(key);
-    if (itr == RTG_EotsMissionByBot.end())
-        return nullptr;
-
-    return &itr->second;
-}
-
-static bool RTG_EotsNodeOwnedByTeam(BattlegroundEY* eyeBg, uint32 nodeId, TeamId team)
-{
-    return eyeBg && nodeId && eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId == team;
-}
-
-static RtgEotsMission& RTG_EotsSetMission(Player* bot, Battleground* bg, RtgEotsMissionType type, uint32 targetNode,
-                                          Position const& target, uint32 durationMs, uint32 holdMs)
-{
-    uint64 const key = RTG_EotsMissionKey(bot, bg);
-    RtgEotsMission& mission = RTG_EotsMissionByBot[key];
-    mission.type = type;
-    mission.bgInstance = bg ? bg->GetInstanceID() : 0;
-    mission.teamId = bot ? uint32(RTG_EotsEffectiveTeamId(bot, bg)) : 0;
-    mission.targetNode = targetNode;
-    mission.targetX = target.GetPositionX();
-    mission.targetY = target.GetPositionY();
-    mission.targetZ = target.GetPositionZ();
-    mission.assignedMs = getMSTime();
-    mission.durationMs = durationMs;
-    mission.holdMs = holdMs;
-    mission.initialized = true;
-    return mission;
-}
-
-static bool RTG_EotsMissionStillValid(Player* bot, Battleground* bg, BattlegroundEY* eyeBg, RtgEotsMission const& mission)
-{
-    if (!bot || !bg || !eyeBg || !mission.initialized || mission.type == RTG_EOTS_MISSION_NONE)
-        return false;
-
-    if (mission.bgInstance != bg->GetInstanceID() || mission.teamId != uint32(RTG_EotsEffectiveTeamId(bot, bg)))
-        return false;
-
-    bool const carryingFlag = bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
-    if (mission.type == RTG_EOTS_MISSION_CARRIER_TURNIN)
-        return carryingFlag && getMSTimeDiff(mission.assignedMs, getMSTime()) <= mission.durationMs;
-
-    if (carryingFlag)
-        return false;
-
-    uint32 const elapsed = getMSTimeDiff(mission.assignedMs, getMSTime());
-    if (elapsed > mission.durationMs)
-        return false;
-
-    if (!RTG_EotsMissionIsTower(mission.type))
-        return true;
-
-    if (!mission.targetNode)
-        return true;
-
-    bool const owned = RTG_EotsNodeOwnedByTeam(eyeBg, mission.targetNode, RTG_EotsEffectiveTeamId(bot, bg));
-
-    // A hold mission is only meaningful while the team owns the tower. If the
-    // tower becomes neutral/enemy again, force a replanning pass.
-    if (mission.type == RTG_EOTS_MISSION_HOLD_TOWER)
-        return owned;
-
-    // Capture/assault missions stay valid while not owned. Once the tower flips,
-    // keep the bot there for a short hold window so the team does not instantly
-    // abandon the base and lose the capture pressure.
-    if (owned && elapsed > mission.holdMs)
-        return false;
-
-    return true;
-}
-
-static bool RTG_EotsApplyMissionToObjective(Player* bot, Battleground* bg, BattlegroundEY* eyeBg,
-                                            PositionInfo& pos, char const*& reason)
-{
-    RtgEotsMission* mission = RTG_EotsGetMission(bot, bg);
-    if (!mission)
-        return false;
-
-    if (!RTG_EotsMissionStillValid(bot, bg, eyeBg, *mission))
-    {
-        RTG_EotsClearMission(bot, bg);
-        return false;
-    }
-
-    pos.Set(mission->targetX, mission->targetY, mission->targetZ, bot->GetMapId());
-    reason = RTG_EotsMissionName(mission->type);
-    return true;
-}
-
-static bool RTG_EotsShouldHoldTowerMission(Player* bot, Battleground* bg, PositionInfo const& pos)
-{
-    if (!bot || !bg || !pos.valueSet || !bot->IsAlive())
-        return false;
-
-    BattlegroundTypeId bgType = bg->GetBgTypeID();
-    if (bgType == BATTLEGROUND_RB)
-        bgType = bg->GetBgTypeID(true);
-
-    if (bgType != BATTLEGROUND_EY)
-        return false;
-
-    RtgEotsMission* mission = RTG_EotsGetMission(bot, bg);
-    if (!mission || !RTG_EotsMissionIsTower(mission->type))
-        return false;
-
-    BattlegroundEY* eyeBg = static_cast<BattlegroundEY*>(bg);
-    if (!RTG_EotsMissionStillValid(bot, bg, eyeBg, *mission))
-    {
-        RTG_EotsClearMission(bot, bg);
-        return false;
-    }
-
-    uint32 nodeId = mission->targetNode;
-    if (!nodeId)
-        RTG_EotsIsTowerObjective(pos, &nodeId);
-
-    Position nodePos;
-    if (!nodeId || !RTG_EotsGetNodePosition(nodeId, nodePos))
-        return false;
-
-    // Hold only after the bot reaches its mission anchor, not merely the
-    // broad tower perimeter.  The first mission patch used the node center
-    // with a very large radius, which made bots stop on the approach road
-    // before they were actually inside the capture area.
-    float const distToTarget2d = bot->GetExactDist2d(mission->targetX, mission->targetY);
-    float const zDiff = std::fabs(bot->GetPositionZ() - mission->targetZ);
-    if (distToTarget2d > RTG_EOTS_TOWER_ARRIVE_RADIUS_2D || zDiff > RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
-    {
-        RTG_EotsDebugRaw(bot, bg, "mission_approach", RTG_EotsMissionName(mission->type), nodeId);
-        return false;
-    }
-
-    if (bot->isMoving())
-        bot->StopMoving();
-
-    RTG_EotsDebugRaw(bot, bg, "mission_hold", RTG_EotsMissionName(mission->type), nodeId);
-    return true;
-}
-
-static bool RTG_EotsCurrentMissionIsStable(Player* bot, Battleground* bg)
-{
-    if (!bot || !bg)
-        return false;
-
-    BattlegroundTypeId bgType = bg->GetBgTypeID();
-    if (bgType == BATTLEGROUND_RB)
-        bgType = bg->GetBgTypeID(true);
-
-    if (bgType != BATTLEGROUND_EY)
-        return false;
-
-    BattlegroundEY* eyeBg = static_cast<BattlegroundEY*>(bg);
-    RtgEotsMission* mission = RTG_EotsGetMission(bot, bg);
-    return mission && RTG_EotsMissionStillValid(bot, bg, eyeBg, *mission);
-}
-
-} // namespace
 
 static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, BattlegroundEY* eyeBg, Battleground* bg)
 {
@@ -2653,30 +2199,6 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     bot->GetSession()->HandleAreaTriggerOpcode(data);
     botAI->SetNextCheckDelay(250);
     return true;
-}
-
-static void RTG_EotsDebug(Player* bot, Battleground* bg, char const* phase, char const* reason, uint32 role,
-                          EYBotStrategy strategy, uint32 ownedCount, PositionInfo const& pos)
-{
-    if (!sPlayerbotAIConfig.rtgPlayerbotsBgEotsDebug || !bot || !bg)
-        return;
-
-    static std::unordered_map<uint32, uint32> lastLogMsByBot;
-    uint32 const botGuid = bot->GetGUID().GetCounter();
-    uint32 const now = getMSTime();
-    uint32 const throttleMs = std::max<uint32>(1000, sPlayerbotAIConfig.rtgPlayerbotsBgEotsDebugThrottleMs);
-
-    auto itr = lastLogMsByBot.find(botGuid);
-    if (itr != lastLogMsByBot.end() && getMSTimeDiff(itr->second, now) < throttleMs)
-        return;
-
-    lastLogMsByBot[botGuid] = now;
-
-    LOG_INFO("playerbots",
-             "RTG EOTS {} bot={} guid={} bgInstance={} bgTeam={} rawTeam={} role={} strategy={} owned={} hasFlag={} reason={} posSet={} pos={:.2f},{:.2f},{:.2f}",
-             phase ? phase : "?", bot->GetName(), botGuid, bg->GetInstanceID(), uint32(RTG_EotsEffectiveTeamId(bot, bg)),
-             uint32(bot->GetTeamId()), role, RTG_EotsStrategyName(strategy), ownedCount,
-             bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL), reason ? reason : "?", pos.valueSet, pos.x, pos.y, pos.z);
 }
 
 static std::pair<uint32, uint32> IC_AttackObjectives[] = {
@@ -3168,18 +2690,6 @@ bool BGTactics::Execute(Event /*event*/)
     if (getName() == "move to start")
         return moveToStart();
 
-    // RTG EotS: while a bot is still on the start/rez rock, every BG tactics
-    // pulse should be treated as an exit pulse.  This prevents select/check/
-    // protect logic from sending bots into chase/evasive behavior on the shelf
-    // before they have reached the actual field path network.
-    if (bgType == BATTLEGROUND_EY && bg->GetStatus() == STATUS_IN_PROGRESS && RTG_EotsNeedsStartExit(bot))
-    {
-        if (getName() == "move to objective" || getName() == "select objective" ||
-            getName() == "check objective" || getName() == "check flag" ||
-            getName() == "protect fc" || getName() == "reset objective force")
-            return eyJumpDown();
-    }
-
     if (getName() == "reset objective force")
     {
         bool isCarryingFlag =
@@ -3189,12 +2699,6 @@ bool BGTactics::Execute(Event /*event*/)
         {
             if ((bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY) && RTG_BgObjectiveBrainEnabledFor(bot))
                 return resetObjective();
-
-            if (bgType == BATTLEGROUND_EY && bot->IsAlive() && !RTG_EotsAllowObjectivePulse(bot, bg))
-                return false;
-
-            if (bgType == BATTLEGROUND_WS && bot->IsAlive() && !RTG_WsgAllowObjectivePulse(bot, bg))
-                return false;
 
             bot->StopMoving();
             bot->GetMotionMaster()->Clear();
@@ -3236,14 +2740,6 @@ bool BGTactics::Execute(Event /*event*/)
                 return true;
         }
 
-        // RTG cleanup: the shared objective brain owns non-carrier EotS assignments.
-        // Keep the older EotS mission layer as a fallback only when the new brain is disabled.
-        if (bgType == BATTLEGROUND_EY && !RTG_BgObjectiveBrainEnabledFor(bot))
-        {
-            if (rtgEotsMoveOpeningHomeTower())
-                return true;
-        }
-
         if (bgType == BATTLEGROUND_WS && RTG_WsgHasFlag(bot))
         {
             if (rtgWsgMoveFlagCarrier())
@@ -3251,9 +2747,6 @@ bool BGTactics::Execute(Event /*event*/)
         }
 
         PositionInfo currentObjective = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
-        if (bgType == BATTLEGROUND_EY && RTG_EotsShouldHoldTowerMission(bot, bg, currentObjective))
-            return true;
-
         if (recoverStuckObjective(bgType, currentObjective))
             return true;
 
@@ -3373,18 +2866,6 @@ bool BGTactics::Execute(Event /*event*/)
     {
         if ((bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY) && RTG_BgObjectiveBrainEnabledFor(bot))
             return resetObjective();
-
-        if (bgType == BATTLEGROUND_EY)
-        {
-            if (RTG_EotsCurrentMissionIsStable(bot, bg))
-                return false;
-
-            if (!RTG_EotsAllowObjectivePulse(bot, bg))
-                return false;
-        }
-
-        if (bgType == BATTLEGROUND_WS && !RTG_WsgAllowObjectivePulse(bot, bg))
-            return false;
 
         return resetObjective();
     }
@@ -3820,12 +3301,10 @@ bool BGTactics::selectObjective(bool reset)
         }
         case BATTLEGROUND_WS:
         {
-            // RTG cleanup: prefer the shared WSG/EotS objective brain; the legacy
-            // WSG block below remains a disabled fallback for local troubleshooting.
             if (RTG_BgObjectiveBrainEnabledFor(bot))
             {
                 RTGBgObjectiveAssignment assignment;
-                if (RTG_SelectBattlegroundObjective(botAI, assignment))
+                if (RTG_SelectBattlegroundObjective(botAI, assignment) && assignment.valid)
                 {
                     if (!assignment.targetGuid.IsEmpty() &&
                         (assignment.role == RTGBgObjectiveRole::KillEnemyFlagCarrier ||
@@ -3841,209 +3320,7 @@ bool BGTactics::selectObjective(bool reset)
                 }
             }
 
-            Position target;
-            TeamId team = RTG_BgEffectiveTeamId(bot);
-            uint32 const botSeed = bot->GetGUID().GetCounter();
-
-            auto SetSafePos = [&](Position const& origin, float radius = 0.0f) -> void
-            {
-                if (radius <= 0.0f)
-                {
-                    target.Relocate(origin);
-                    return;
-                }
-
-                float rx = origin.GetPositionX();
-                float ry = origin.GetPositionY();
-                float rz = origin.GetPositionZ();
-                bot->GetRandomPoint(origin, radius, rx, ry, rz);
-
-                // Previous logic was inverted: it used the random point only when
-                // the sampled Z was invalid. That could hand movement a bad target
-                // and made WSG defenders/FCs look AFK or wander off-task.
-                if (!std::isfinite(rx) || !std::isfinite(ry) || !std::isfinite(rz) || rz == VMAP_INVALID_HEIGHT_VALUE)
-                    target.Relocate(origin);
-                else
-                    target.Relocate(rx, ry, rz, origin.GetOrientation());
-
-                if (!target.IsPositionValid())
-                    target.Relocate(origin);
-            };
-
-            auto SetUnitObjective = [&](Unit* unit) -> bool
-            {
-                if (!RTG_EotsUnitValidForObjective(bot, unit))
-                    return false;
-
-                target.Relocate(unit->GetPositionX(), unit->GetPositionY(), unit->GetPositionZ());
-                return true;
-            };
-
-            bool const hasFlag = RTG_WsgHasFlag(bot);
-
-            uint32 role = context->GetValue<uint32>("bg role")->Get();
-            uint32 stableRole = RTG_WsgStableRole(bot, role);
-            WSBotStrategy strategyHorde = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_HORDE));
-            WSBotStrategy strategyAlliance = static_cast<WSBotStrategy>(GetBotStrategyForTeam(bg, TEAM_ALLIANCE));
-            WSBotStrategy strategy = (team == TEAM_ALLIANCE) ? strategyAlliance : strategyHorde;
-            WSBotStrategy enemyStrategy = (team == TEAM_ALLIANCE) ? strategyHorde : strategyAlliance;
-
-            uint8 defendersProhab = 3;
-            switch (strategy)
-            {
-                case WS_STRATEGY_OFFENSIVE:
-                    defendersProhab = 1;
-                    break;
-                case WS_STRATEGY_DEFENSIVE:
-                    defendersProhab = 5;
-                    break;
-                case WS_STRATEGY_BALANCED:
-                default:
-                    defendersProhab = 3;
-                    break;
-            }
-
-            if (enemyStrategy == WS_STRATEGY_DEFENSIVE)
-                defendersProhab = std::max<uint8>(uint8(2), defendersProhab);
-
-            // RTG WSG: keep defense small and purposeful. Too many defenders/escorts
-            // caused graveyard/tree stacks where nobody recovered EFC or advanced the flag.
-            defendersProhab = std::min<uint8>(defendersProhab, uint8(2));
-
-            bool const isDefender = stableRole < defendersProhab;
-            bool const escortRole = RTG_WsgShouldEscortCarrier(stableRole);
-            bool const interceptorRole = (stableRole % 4) != 0;
-
-            Unit* enemyFC = AI_VALUE(Unit*, "enemy flag carrier");
-            Unit* teamFC = AI_VALUE(Unit*, "team flag carrier");
-
-            uint8 allianceScore = bg->GetTeamScore(TEAM_ALLIANCE);
-            uint8 hordeScore = bg->GetTeamScore(TEAM_HORDE);
-            bool const winningHard = (team == TEAM_ALLIANCE && allianceScore == 2 && hordeScore == 0) ||
-                                     (team == TEAM_HORDE && hordeScore == 2 && allianceScore == 0);
-
-            BattlegroundWS* wsBg = static_cast<BattlegroundWS*>(bg);
-            Position const& ownFlagRoom = RTG_WsgOwnFlagRoom(team);
-            Position const enemyFlagObjective = RTG_WsgEnemyFlagObjective(wsBg, team);
-
-            if (hasFlag)
-            {
-                // A WSG carrier must never choose the graveyard/hut/front-yard as a
-                // holding point. If our flag is away, first get the carrier safely
-                // back into the flag-room/roof layer, then hold a small spread spot
-                // there. If our flag is home, go straight for the cap trigger.
-                if (teamFlagTaken())
-                {
-                    if (!RTG_WsgIsInsideOwnFlagRoom(bot, team))
-                        SetSafePos(ownFlagRoom);
-                    else
-                        SetSafePos(RTG_WsgStableHideSpot(team, stableRole, botSeed), 2.0f);
-                }
-                else
-                    SetSafePos(ownFlagRoom);
-            }
-            else if (RTG_EotsUnitValidForObjective(bot, enemyFC) && RTG_EotsUnitValidForObjective(bot, teamFC))
-            {
-                // Both flags are out: do NOT dogpile our carrier. One assigned escort
-                // may support from a short distance; every other bot must recover our
-                // flag by pressuring the enemy carrier.
-                if (escortRole)
-                {
-                    if (bot->GetDistance(teamFC) < 8.0f)
-                    {
-                        float const angle = teamFC->GetAngle(bot);
-                        target.Relocate(teamFC->GetPositionX() + std::cos(angle) * 10.0f,
-                                        teamFC->GetPositionY() + std::sin(angle) * 10.0f,
-                                        teamFC->GetPositionZ());
-                    }
-                    else
-                        SetUnitObjective(teamFC);
-                }
-                else
-                    SetUnitObjective(enemyFC);
-            }
-            else if (RTG_EotsUnitValidForObjective(bot, enemyFC))
-            {
-                bool const closeToEnemyFC = bot->GetDistance(enemyFC) < 150.0f;
-                if (!isDefender || interceptorRole || closeToEnemyFC)
-                    SetUnitObjective(enemyFC);
-                else
-                    SetSafePos(ownFlagRoom, 7.0f);
-            }
-            else if (RTG_EotsUnitValidForObjective(bot, teamFC))
-            {
-                // Friendly FC only: stop proximity-based escorting. That was the
-                // main WSG pile-up trigger. One escort supports; defenders hold home;
-                // offense keeps pressure so the team does not freeze around the FC.
-                if (escortRole)
-                {
-                    if (bot->GetDistance(teamFC) < 8.0f)
-                    {
-                        float const angle = teamFC->GetAngle(bot);
-                        target.Relocate(teamFC->GetPositionX() + std::cos(angle) * 10.0f,
-                                        teamFC->GetPositionY() + std::sin(angle) * 10.0f,
-                                        teamFC->GetPositionZ());
-                    }
-                    else
-                        SetUnitObjective(teamFC);
-                }
-                else if (isDefender)
-                    SetSafePos(ownFlagRoom, 7.0f);
-                else
-                    SetSafePos(enemyFlagObjective, 3.0f);
-            }
-            else if (winningHard && stableRole == 7)
-            {
-                // Do not camp graveyards on RTG. It looked like bots were stuck
-                // and also removed bodies from the flag game. Keep the snowball role
-                // in midfield where it can help with EFC/FC transitions.
-                SetSafePos(WS_ROAM_POS, 18.0f);
-            }
-            else if (isDefender)
-            {
-                // Stable defense: keep defenders in/around the flag room instead
-                // of bouncing between midfield and random hide spots.
-                if ((stableRole % 3) == 0)
-                    SetSafePos(RTG_WsgStableHideSpot(team, stableRole, botSeed), 4.0f);
-                else
-                    SetSafePos(ownFlagRoom, 7.0f);
-            }
-            else
-            {
-                // Stable offense: go get the enemy flag. One roaming role keeps
-                // midfield pressure without making the whole team wander.
-                if (stableRole == 9)
-                    SetSafePos(WS_ROAM_POS, 35.0f);
-                else
-                    SetSafePos(enemyFlagObjective, 2.0f);
-            }
-
-            if (target.IsPositionValid())
-            {
-                RTG_WsgClampInvalidUpperBaseTarget(target);
-
-                // If a bot is sitting around either graveyard and its selected target is
-                // still local/defensive, force a real flag-game destination. This catches
-                // the common WSG failure case where several bots idle by the tree/GY until
-                // an enemy walks into aggro range.
-                if (!hasFlag && RTG_WsgIsNearGraveyard(bot, 85.0f) && !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
-                {
-                    Position fallback = RTG_WsgStrategicFallback(bot, static_cast<BattlegroundWS*>(bg), stableRole, enemyFC, teamFC);
-                    if (fallback.IsPositionValid() && bot->GetDistance(fallback) > 25.0f)
-                        target.Relocate(fallback);
-                }
-
-                Position escapeTarget;
-                if (RTG_WsgChooseGraveyardEscapeTarget(bot, team, target, escapeTarget) &&
-                    !RTG_WsgEnemyThreatNearby(bot, AI_VALUE(Unit*, "enemy player target")))
-                    target.Relocate(escapeTarget);
-
-                pos.Set(target.GetPositionX(), target.GetPositionY(), target.GetPositionZ(), bot->GetMapId());
-                posMap["bg objective"] = pos;
-                return true;
-            }
-
-            break;
+            return false;
         }
         case BATTLEGROUND_AB:
         {
@@ -4225,12 +3502,10 @@ bool BGTactics::selectObjective(bool reset)
         }
         case BATTLEGROUND_EY:
         {
-            // RTG cleanup: prefer the shared WSG/EotS objective brain; the older
-            // EotS mission planner below remains a disabled fallback.
             if (RTG_BgObjectiveBrainEnabledFor(bot))
             {
                 RTGBgObjectiveAssignment assignment;
-                if (RTG_SelectBattlegroundObjective(botAI, assignment))
+                if (RTG_SelectBattlegroundObjective(botAI, assignment) && assignment.valid)
                 {
                     if (!assignment.targetGuid.IsEmpty() &&
                         (assignment.role == RTGBgObjectiveRole::KillEnemyFlagCarrier ||
@@ -4246,412 +3521,7 @@ bool BGTactics::selectObjective(bool reset)
                 }
             }
 
-            BattlegroundEY* eyeOfTheStormBG = static_cast<BattlegroundEY*>(bg);
-            if (!eyeOfTheStormBG)
-                return false;
-
-            TeamId team = RTG_EotsEffectiveTeamId(bot, bg);
-            uint32 role = context->GetValue<uint32>("bg role")->Get();
-            uint32 stableRole = RTG_EotsStableRole(bot, role);
-            uint32 const botSeed = bot->GetGUID().GetCounter();
-
-            EYBotStrategy strategyHorde = static_cast<EYBotStrategy>(GetBotStrategyForTeam(bg, TEAM_HORDE));
-            EYBotStrategy strategyAlliance = static_cast<EYBotStrategy>(GetBotStrategyForTeam(bg, TEAM_ALLIANCE));
-            EYBotStrategy strategy = (team == TEAM_ALLIANCE) ? strategyAlliance : strategyHorde;
-
-            auto IsOwned = [&](uint32 nodeId) -> bool
-            {
-                return eyeOfTheStormBG->GetCapturePointInfo(nodeId)._ownerTeamId == team;
-            };
-
-            auto IsNotOwned = [&](uint32 nodeId) -> bool
-            {
-                return eyeOfTheStormBG->GetCapturePointInfo(nodeId)._ownerTeamId != team;
-            };
-
-            uint32 ownedCount = 0;
-            for (auto const& objective : EY_AttackObjectives)
-            {
-                uint32 const nodeId = std::get<0>(objective);
-                if (IsOwned(nodeId))
-                    ++ownedCount;
-            }
-
-            bool foundObjective = false;
-            char const* reason = "none";
-
-            auto SetObjective = [&](Position const& target, char const* why) -> bool
-            {
-                pos.Set(target.GetPositionX(), target.GetPositionY(), target.GetPositionZ(), bot->GetMapId());
-                foundObjective = true;
-                reason = why;
-                return true;
-            };
-
-            auto FindNearestNode = [&](bool ownedOnly, bool notOwnedOnly, uint32& outNodeId, Position& outPos) -> bool
-            {
-                outNodeId = 0;
-                float bestDist = FLT_MAX;
-
-                for (auto const& objective : EY_AttackObjectives)
-                {
-                    uint32 const nodeId = std::get<0>(objective);
-                    if (ownedOnly && !IsOwned(nodeId))
-                        continue;
-                    if (notOwnedOnly && !IsNotOwned(nodeId))
-                        continue;
-
-                    Position nodePos;
-                    if (!RTG_EotsGetNodePosition(nodeId, nodePos))
-                        continue;
-
-                    float const dist = bot->GetDistance(nodePos);
-                    if (dist < bestDist)
-                    {
-                        bestDist = dist;
-                        outNodeId = nodeId;
-                        outPos = nodePos;
-                    }
-                }
-
-                return outNodeId != 0;
-            };
-
-            bool centerFlagSpawned = false;
-            Position centerPos;
-            RTG_EotsGetCenterFlagPosition(bg, centerPos, &centerFlagSpawned);
-
-            auto FindNearestOwnedNode = [&](uint32& outNodeId, Position& outPos) -> bool
-            {
-                return FindNearestNode(true, false, outNodeId, outPos);
-            };
-
-            auto FindNearestAttackableNode = [&](uint32& outNodeId, Position& outPos) -> bool
-            {
-                return FindNearestNode(false, true, outNodeId, outPos);
-            };
-
-            uint32 homeOwnedCount = 0;
-            for (auto const& objective : EY_AttackObjectives)
-            {
-                uint32 const nodeId = std::get<0>(objective);
-                if (RTG_EotsIsHomeNode(team, nodeId) && IsOwned(nodeId))
-                    ++homeOwnedCount;
-            }
-
-            // RTG EotS mission planner.
-            //
-            // Phase 2/3/4 direction: hold a durable mission first, then choose a
-            // simple team role.  reset/check pulses are allowed to run, but a
-            // still-valid mission rewrites the same objective instead of bouncing
-            // the bot back to the fork and making it choose another base.
-            auto AssignMission = [&](RtgEotsMissionType type, uint32 nodeId, Position const& target,
-                                     char const* why, uint32 durationMs, uint32 holdMs = 0) -> bool
-            {
-                RTG_EotsSetMission(bot, bg, type, nodeId, target, durationMs, holdMs);
-                return SetObjective(target, why);
-            };
-
-            auto AssignNodeMission = [&](RtgEotsMissionType type, uint32 nodeId, char const* why,
-                                         uint32 durationMs, uint32 holdMs = 0, bool exact = false) -> bool
-            {
-                if (!nodeId)
-                    return false;
-
-                Position target = RTG_EotsObjectiveAnchor(nodeId, botSeed + stableRole, exact);
-                return AssignMission(type, nodeId, target, why, durationMs, holdMs);
-            };
-
-            auto FindAssignedOwnedDefenseNode = [&]() -> uint32
-            {
-                uint32 const home = RTG_EotsAssignedHomeNode(team, stableRole, botSeed);
-                if (IsOwned(home))
-                    return home;
-
-                uint32 const enemySide = RTG_EotsAssignedEnemySideNode(team, stableRole, botSeed);
-                if (IsOwned(enemySide))
-                    return enemySide;
-
-                uint32 nodeId = 0;
-                Position nodePos;
-                if (FindNearestOwnedNode(nodeId, nodePos))
-                    return nodeId;
-
-                return 0;
-            };
-
-            auto FindOtherHomeAttackNode = [&]() -> uint32
-            {
-                // Home towers are mandatory before enemy-side pressure. Be extra
-                // explicit here so a wrong/stale enemy-side mission cannot keep
-                // Horde marching to Mage Tower while Fel Reaver Ruins is still open.
-                if (team == TEAM_HORDE)
-                {
-                    if (IsNotOwned(POINT_FEL_REAVER))
-                        return POINT_FEL_REAVER;
-                    if (IsNotOwned(POINT_BLOOD_ELF))
-                        return POINT_BLOOD_ELF;
-                    return 0;
-                }
-
-                if (team == TEAM_ALLIANCE)
-                {
-                    if (IsNotOwned(POINT_MAGE_TOWER))
-                        return POINT_MAGE_TOWER;
-                    if (IsNotOwned(POINT_DRAENEI_RUINS))
-                        return POINT_DRAENEI_RUINS;
-                    return 0;
-                }
-
-                uint32 const assigned = RTG_EotsAssignedHomeNode(team, stableRole, botSeed);
-                if (IsNotOwned(assigned))
-                    return assigned;
-
-                for (auto const& objective : EY_AttackObjectives)
-                {
-                    uint32 const nodeId = std::get<0>(objective);
-                    if (RTG_EotsIsHomeNode(team, nodeId) && IsNotOwned(nodeId))
-                        return nodeId;
-                }
-
-                return 0;
-            };
-
-            auto FindAssignedHomeAttackNode = [&]() -> uint32
-            {
-                if (uint32 const mandatory = RTG_EotsMandatoryOpeningHomeNode(eyeOfTheStormBG, team))
-                    return mandatory;
-
-                uint32 const assigned = RTG_EotsAssignedHomeNode(team, stableRole, botSeed);
-                if (assigned && IsNotOwned(assigned))
-                    return assigned;
-
-                return FindOtherHomeAttackNode();
-            };
-
-            auto FindAssignedEnemyAttackNode = [&]() -> uint32
-            {
-                uint32 const assigned = RTG_EotsAssignedEnemySideNode(team, stableRole, botSeed);
-                if (IsNotOwned(assigned))
-                    return assigned;
-
-                for (auto const& objective : EY_AttackObjectives)
-                {
-                    uint32 const nodeId = std::get<0>(objective);
-                    if (RTG_EotsIsEnemySideNode(team, nodeId) && IsNotOwned(nodeId))
-                        return nodeId;
-                }
-
-                uint32 nodeId = 0;
-                Position nodePos;
-                if (FindNearestAttackableNode(nodeId, nodePos))
-                    return nodeId;
-
-                return 0;
-            };
-
-            if (sPlayerbotAIConfig.rtgPlayerbotsBgEotsObjectiveAI)
-            {
-                // Carriers are the only bots allowed to break mission immediately.
-                // They get a short mission so the area-trigger turn-in helper can
-                // constantly refresh the nearest owned tower.
-                if (bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
-                {
-                    uint32 nodeId = 0;
-                    Position nodePos;
-                    if (FindNearestOwnedNode(nodeId, nodePos))
-                        AssignMission(RTG_EOTS_MISSION_CARRIER_TURNIN, nodeId, nodePos,
-                                      "carrier_turnin_owned_tower", RTG_EOTS_CARRIER_MISSION_MS);
-                    else if ((nodeId = FindAssignedHomeAttackNode()) != 0)
-                        AssignNodeMission(RTG_EOTS_MISSION_CAPTURE_TOWER, nodeId,
-                                          "carrier_help_home_tower", RTG_EOTS_CAPTURE_MISSION_MS,
-                                          RTG_EOTS_CAPTURE_HOLD_MS, true);
-                    else if ((nodeId = FindAssignedEnemyAttackNode()) != 0)
-                        AssignNodeMission(RTG_EOTS_MISSION_ASSAULT_TOWER, nodeId,
-                                          "carrier_wait_attackable_tower", RTG_EOTS_ASSAULT_MISSION_MS,
-                                          RTG_EOTS_CAPTURE_HOLD_MS, true);
-                    else
-                        AssignMission(RTG_EOTS_MISSION_MID_PRESSURE, 0, centerPos,
-                                      "carrier_hold_center", RTG_EOTS_FLAG_MISSION_MS);
-                }
-
-                // If either home tower is still missing, home split beats stale
-                // mid/flag/PvP/enemy-side missions. This prevents Horde from keeping
-                // Mage Tower or center pressure while Fel Reaver Ruins is uncapped.
-                // Keep bots already capturing an uncapped home tower, and leave only
-                // a small guard role on a captured home tower.
-                if (!foundObjective && homeOwnedCount < 2)
-                {
-                    uint32 const missingHomeNode = FindOtherHomeAttackNode();
-                    uint32 const mandatoryHomeNode = RTG_EotsMandatoryOpeningHomeNode(eyeOfTheStormBG, team);
-                    if (RtgEotsMission* currentMission = RTG_EotsGetMission(bot, bg))
-                    {
-                        bool const towerMission = RTG_EotsMissionIsTower(currentMission->type) && currentMission->targetNode;
-                        bool const homeTowerMission = towerMission && RTG_EotsIsHomeNode(team, currentMission->targetNode);
-                        bool const capturingMissingHome = homeTowerMission && IsNotOwned(currentMission->targetNode) &&
-                            (!mandatoryHomeNode || currentMission->targetNode == mandatoryHomeNode);
-                        bool const assignedTinyGuard = (stableRole % 5u) == 0u;
-                        bool const guardingOwnedHome = !mandatoryHomeNode && homeTowerMission &&
-                            IsOwned(currentMission->targetNode) && missingHomeNode &&
-                            currentMission->targetNode != missingHomeNode && assignedTinyGuard;
-
-                        if (!capturingMissingHome && !guardingOwnedHome)
-                            RTG_EotsClearMission(bot, bg);
-                    }
-                }
-
-                // Preserve a non-carrier mission if it still makes sense. This is
-                // the main anti-loop behavior: a check/reset pulse cannot make the
-                // bot leave a tower just because it reached the tower perimeter.
-                if (!foundObjective && RTG_EotsApplyMissionToObjective(bot, bg, eyeOfTheStormBG, pos, reason))
-                    foundObjective = true;
-
-                // Opening planner: until both home towers are controlled, commit
-                // nearly everyone to the home split. Bots whose assigned home just
-                // flipped either help the other home tower or briefly defend the
-                // tower they captured so the team does not instantly walk away.
-                if (!foundObjective && homeOwnedCount < 2)
-                {
-                    uint32 nodeId = FindAssignedHomeAttackNode();
-                    if (nodeId)
-                        AssignNodeMission(RTG_EOTS_MISSION_CAPTURE_TOWER, nodeId,
-                                          "opening_capture_home_tower", RTG_EOTS_CAPTURE_MISSION_MS,
-                                          RTG_EOTS_CAPTURE_HOLD_MS, true);
-                    else if ((nodeId = FindAssignedOwnedDefenseNode()) != 0)
-                        AssignNodeMission(RTG_EOTS_MISSION_HOLD_TOWER, nodeId,
-                                          "opening_hold_captured_home", RTG_EOTS_HOLD_MISSION_MS,
-                                          RTG_EOTS_HOLD_MISSION_MS);
-                }
-
-                // Enemy flag carrier: only nearby bots and a small deterministic
-                // interceptor group peel off; everyone else keeps base pressure.
-                if (!foundObjective)
-                {
-                    Unit* enemyFC = AI_VALUE(Unit*, "enemy flag carrier");
-                    if (RTG_EotsUnitValidForObjective(bot, enemyFC))
-                    {
-                        bool const nearEnemyFC = bot->GetDistance(enemyFC) < 155.0f;
-                        bool const interceptor = (stableRole % 4) == 1;
-                        if (nearEnemyFC || interceptor)
-                            AssignMission(RTG_EOTS_MISSION_INTERCEPT_CARRIER, 0, enemyFC->GetPosition(),
-                                          "enemy_flag_carrier_intercept", RTG_EOTS_PVP_MISSION_MS);
-                    }
-                }
-
-                // Friendly carrier escort: small group only.
-                if (!foundObjective)
-                {
-                    Unit* friendlyFC = AI_VALUE(Unit*, "team flag carrier");
-                    if (RTG_EotsUnitValidForObjective(bot, friendlyFC))
-                    {
-                        bool const carrierScoring = RTG_EotsCarrierAtOwnedTower(eyeOfTheStormBG, team, friendlyFC);
-                        bool const assignedSupport = (stableRole % 8) == 0;
-                        bool const closeSupport = assignedSupport && bot->GetDistance(friendlyFC) < 80.0f;
-                        if (!carrierScoring && closeSupport)
-                            AssignMission(RTG_EOTS_MISSION_ESCORT_CARRIER, 0, friendlyFC->GetPosition(),
-                                          "support_friendly_carrier", RTG_EOTS_PVP_MISSION_MS);
-                    }
-                }
-
-                // Dedicated guards after the opening. These bots should actually
-                // sit in the capture zone for a while instead of joining the base
-                // carousel.
-                if (!foundObjective && ownedCount > 0 && (stableRole % 5) == 0)
-                {
-                    uint32 const nodeId = FindAssignedOwnedDefenseNode();
-                    if (nodeId)
-                        AssignNodeMission(RTG_EOTS_MISSION_HOLD_TOWER, nodeId,
-                                          "assigned_owned_tower_defense", RTG_EOTS_HOLD_MISSION_MS,
-                                          RTG_EOTS_HOLD_MISSION_MS);
-                }
-
-                // Controlled center flag group. Keep this smaller than the tower
-                // group until base play is proven stable.
-                if (!foundObjective && ownedCount >= 1 && (centerFlagSpawned || ownedCount >= 2))
-                {
-                    uint32 stableFlagPct = sPlayerbotAIConfig.rtgPlayerbotsBgEotsCenterFlagChance;
-                    stableFlagPct = ownedCount >= 2 ? std::max<uint32>(25, std::min<uint32>(55, stableFlagPct))
-                                                    : std::max<uint32>(10, std::min<uint32>(25, stableFlagPct / 2));
-                    bool const flagRole = strategy == EY_STRATEGY_FLAG_FOCUS ||
-                                          (botSeed % 100u) < stableFlagPct ||
-                                          (stableRole % 7) == 2;
-                    if (flagRole)
-                        AssignMission(RTG_EOTS_MISSION_RUN_CENTER_FLAG, 0, centerPos,
-                                      "center_flag_runner", RTG_EOTS_FLAG_MISSION_MS);
-                }
-
-                // Main pressure: split enemy-side tower assignments. This is the
-                // believable post-opening loop: defend some, run some mid, and
-                // pressure enemy towers with stable assignments. Add a small hard bias
-                // toward Fel Reaver Ruins when it is not ours, because that tower was
-                // repeatedly being skipped in bot-only EotS tests.
-                if (!foundObjective)
-                {
-                    uint32 nodeId = 0;
-                    if (homeOwnedCount >= 2 && IsNotOwned(POINT_FEL_REAVER) && (stableRole % 3u) == 0u)
-                        nodeId = POINT_FEL_REAVER;
-                    else
-                        nodeId = FindAssignedEnemyAttackNode();
-
-                    if (nodeId)
-                        AssignNodeMission(RTG_EOTS_MISSION_ASSAULT_TOWER, nodeId,
-                                          nodeId == POINT_FEL_REAVER ? "assigned_fel_reaver_pressure" : "assigned_enemy_side_tower",
-                                          RTG_EOTS_ASSAULT_MISSION_MS, RTG_EOTS_CAPTURE_HOLD_MS);
-                }
-
-                // Opportunistic PvP only after tower/flag responsibilities were
-                // considered. This avoids dragging the whole team away from bases.
-                if (!foundObjective)
-                {
-                    Unit* enemy = AI_VALUE(Unit*, "enemy player target");
-                    if (RTG_EotsUnitValidForObjective(bot, enemy) && bot->GetDistance(enemy) < 120.0f && (stableRole % 4) != 0)
-                        AssignMission(RTG_EOTS_MISSION_MID_PRESSURE, 0, enemy->GetPosition(),
-                                      "nearby_enemy_pressure", RTG_EOTS_PVP_MISSION_MS);
-                }
-
-                if (!foundObjective && ownedCount > 0)
-                    AssignMission(RTG_EOTS_MISSION_MID_PRESSURE, 0, centerPos,
-                                  centerFlagSpawned ? "active_mid_pressure" : "active_mid_control",
-                                  RTG_EOTS_FLAG_MISSION_MS);
-
-                if (!foundObjective)
-                {
-                    uint32 const nodeId = FindAssignedOwnedDefenseNode();
-                    if (nodeId)
-                        AssignNodeMission(RTG_EOTS_MISSION_HOLD_TOWER, nodeId,
-                                          "fallback_owned_tower_defense", RTG_EOTS_HOLD_MISSION_MS,
-                                          RTG_EOTS_HOLD_MISSION_MS);
-                }
-
-                // Last resort: center anchor. Never choose EotS start/retreat positions here.
-                if (!foundObjective)
-                    AssignMission(RTG_EOTS_MISSION_MID_PRESSURE, 0, centerPos,
-                                  "fallback_hold_center", RTG_EOTS_FLAG_MISSION_MS);
-            }
-            else
-            {
-                RTG_EotsClearMission(bot, bg);
-                uint32 nodeId = 0;
-                Position nodePos;
-                if (bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) && FindNearestOwnedNode(nodeId, nodePos))
-                    SetObjective(nodePos, "disabled_carrier_owned_tower");
-                else if (FindNearestAttackableNode(nodeId, nodePos))
-                    SetObjective(nodePos, "disabled_nearest_attackable_tower");
-                else if (FindNearestOwnedNode(nodeId, nodePos))
-                    SetObjective(nodePos, "disabled_nearest_owned_tower");
-                else
-                    SetObjective(centerPos, "disabled_hold_center");
-            }
-
-            if (foundObjective)
-            {
-                posMap["bg objective"] = pos;
-                RTG_EotsDebug(bot, bg, "select", reason, stableRole, strategy, ownedCount, pos);
-            }
-            else
-                RTG_EotsDebug(bot, bg, "select_failed", reason, stableRole, strategy, ownedCount, pos);
-
-            return foundObjective;
+            return false;
         }
         case BATTLEGROUND_IC:
         {
@@ -5032,23 +3902,10 @@ bool BGTactics::moveToObjective(bool ignoreDist)
             return true;
         }
 
-        // EotS towers are capture areas, not normal click-and-reset objectives.
-        // When a bot reaches a tower assignment, hold the circle long enough for
-        // natural capture pressure instead of instantly clearing the objective and
-        // bouncing back to a road fork.
-        if (bgType == BATTLEGROUND_EY && RTG_EotsShouldHoldTowerMission(bot, bg, pos))
-            return true;
-
         if (bgType == BATTLEGROUND_EY && RTG_EotsIsTowerObjective(pos) &&
             bot->GetExactDist2d(pos.x, pos.y) < RTG_EOTS_TOWER_ARRIVE_RADIUS_2D &&
             std::fabs(bot->GetPositionZ() - pos.z) <= RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
         {
-            if (sPlayerbotAIConfig.rtgPlayerbotsBgEotsObjectiveAI)
-            {
-                resetObjective();
-                return true;
-            }
-
             if (bot->isMoving())
                 bot->StopMoving();
 
@@ -5074,109 +3931,6 @@ bool BGTactics::moveToObjective(bool ignoreDist)
         return MoveNear(bot->GetMapId(), pos.x, pos.y, pos.z, isEyCenterObjective ? 1.0f : 1.5f);
     }
     return false;
-}
-
-bool BGTactics::rtgEotsMoveOpeningHomeTower()
-{
-    Battleground* bg = bot->GetBattleground();
-    if (!bg)
-        return false;
-
-    BattlegroundTypeId bgType = bg->GetBgTypeID();
-    if (bgType == BATTLEGROUND_RB)
-        bgType = bg->GetBgTypeID(true);
-
-    if (bgType != BATTLEGROUND_EY || !bot->IsAlive() || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
-        return false;
-
-    BattlegroundEY* eyeBg = static_cast<BattlegroundEY*>(bg);
-    TeamId const team = RTG_EotsEffectiveTeamId(bot, bg);
-    uint32 role = context->GetValue<uint32>("bg role")->Get();
-    uint32 stableRole = RTG_EotsStableRole(bot, role);
-    uint32 const botSeed = bot->GetGUID().GetCounter();
-
-    uint32 nodeId = RTG_EotsMandatoryOpeningHomeNode(eyeBg, team);
-    bool homeStackCoverage = false;
-
-    if (!nodeId && team == TEAM_HORDE)
-    {
-        Position felReaverPos;
-        Position bloodElfPos;
-        if (RTG_EotsGetNodePosition(POINT_FEL_REAVER, felReaverPos) &&
-            RTG_EotsGetNodePosition(POINT_BLOOD_ELF, bloodElfPos))
-        {
-            uint32 const bloodElfCount = getPlayersInArea(team, bloodElfPos, 55.0f, false);
-            uint32 const felReaverCount = getPlayersInArea(team, felReaverPos, 55.0f, false);
-            bool const parkedAtBloodElf = bot->GetDistance(bloodElfPos) <= 65.0f;
-
-            if (parkedAtBloodElf && bloodElfCount >= 3 && felReaverCount < 2 && (stableRole % 3u) != 0u)
-            {
-                nodeId = POINT_FEL_REAVER;
-                homeStackCoverage = true;
-            }
-        }
-    }
-
-    if (!nodeId)
-        return false;
-
-    bool const inCombat = bot->GetVehicle() ? (bool)AI_VALUE(Unit*, "enemy player target") : bot->IsInCombat();
-    if (inCombat && !PlayerHasFlag::IsCapturingFlag(bot))
-        return false;
-
-    Position const destination = RTG_EotsObjectiveAnchor(nodeId, botSeed + stableRole, true);
-    RTG_EotsSetMission(bot, bg, homeStackCoverage ? RTG_EOTS_MISSION_HOLD_TOWER : RTG_EOTS_MISSION_CAPTURE_TOWER,
-                       nodeId, destination, homeStackCoverage ? RTG_EOTS_HOLD_MISSION_MS : RTG_EOTS_CAPTURE_MISSION_MS,
-                       RTG_EOTS_CAPTURE_HOLD_MS);
-
-    PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
-    PositionInfo pos = posMap["bg objective"];
-    bool const objectiveChanged = !pos.isSet() ||
-        Position(pos.x, pos.y, pos.z, 0.0f).GetExactDist(destination.GetPositionX(),
-                                                        destination.GetPositionY(),
-                                                        destination.GetPositionZ()) > 5.0f;
-
-    pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
-    posMap["bg objective"] = pos;
-
-    if (RTG_EotsShouldHoldTowerMission(bot, bg, pos))
-        return true;
-
-    uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
-    static std::unordered_map<uint64, uint32> openingNodeByBot;
-    bool const nodeChanged = openingNodeByBot[key] != nodeId;
-    openingNodeByBot[key] = nodeId;
-
-    if (bot->isMoving() && !objectiveChanged && !nodeChanged)
-        return true;
-
-    if (objectiveChanged || nodeChanged)
-    {
-        bot->StopMoving();
-        bot->GetMotionMaster()->Clear();
-    }
-
-    Position routeStep;
-    if (!RTG_EotsGetOpeningHomeRouteStep(bot, team, nodeId, destination, routeStep))
-        routeStep.Relocate(destination);
-
-    bool const finalStep = routeStep.GetExactDist(destination.GetPositionX(), destination.GetPositionY(),
-                                                 destination.GetPositionZ()) <= 5.0f;
-
-    RTG_EotsDebugRaw(bot, bg, homeStackCoverage ? "home_stack_break" : "opening_home_forced",
-                     finalStep ? "final" : "route", nodeId);
-
-    if (finalStep)
-    {
-        if (MoveNear(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(),
-                     destination.GetPositionZ(), 1.5f))
-            return true;
-
-        return MoveTo(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(),
-                      destination.GetPositionZ());
-    }
-
-    return MoveTo(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ());
 }
 
 bool BGTactics::rtgEotsMoveToObjectiveRoute()
@@ -5258,85 +4012,18 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
     if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
         return false;
 
-    uint32 bestOwnedNode = 0;
-    Position bestOwnedPos;
-    float bestOwnedDist = FLT_MAX;
-
-    for (auto const& objective : EY_AttackObjectives)
-    {
-        uint32 const nodeId = std::get<0>(objective);
-        if (eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId != team)
-            continue;
-
-        Position nodePos;
-        if (!RTG_EotsGetNodePosition(nodeId, nodePos))
-            continue;
-
-        float const dist = bot->GetDistance(nodePos);
-        if (dist < bestOwnedDist)
-        {
-            bestOwnedDist = dist;
-            bestOwnedNode = nodeId;
-            bestOwnedPos = nodePos;
-        }
-    }
-
-    Position destination;
-    uint32 targetNode = bestOwnedNode;
-    RtgEotsMissionType missionType = RTG_EOTS_MISSION_CARRIER_TURNIN;
-    uint32 missionDuration = RTG_EOTS_CARRIER_MISSION_MS;
-    char const* debugReason = "carrier_direct_owned_tower";
-
-    if (bestOwnedNode)
-        destination = bestOwnedPos;
-    else
-    {
-        uint32 const role = context->GetValue<uint32>("bg role")->Get();
-        uint32 const stableRole = RTG_EotsStableRole(bot, role);
-        uint32 const botSeed = bot->GetGUID().GetCounter();
-
-        uint32 homeNode = RTG_EotsAssignedHomeNode(team, stableRole, botSeed);
-        if (!homeNode || eyeBg->GetCapturePointInfo(homeNode)._ownerTeamId == team)
-        {
-            if (team == TEAM_HORDE)
-                homeNode = eyeBg->GetCapturePointInfo(POINT_FEL_REAVER)._ownerTeamId != team ? POINT_FEL_REAVER
-                                                                                             : POINT_BLOOD_ELF;
-            else
-                homeNode = eyeBg->GetCapturePointInfo(POINT_MAGE_TOWER)._ownerTeamId != team ? POINT_MAGE_TOWER
-                                                                                              : POINT_DRAENEI_RUINS;
-        }
-
-        if (homeNode && eyeBg->GetCapturePointInfo(homeNode)._ownerTeamId != team &&
-            RTG_EotsGetNodePosition(homeNode, destination))
-        {
-            targetNode = homeNode;
-            missionType = RTG_EOTS_MISSION_CAPTURE_TOWER;
-            missionDuration = RTG_EOTS_CAPTURE_MISSION_MS;
-            debugReason = "carrier_help_missing_home_tower";
-        }
-        else
-        {
-            RTG_EotsGetCenterFlagPosition(bg, destination);
-            targetNode = 0;
-            missionType = RTG_EOTS_MISSION_MID_PRESSURE;
-            missionDuration = RTG_EOTS_FLAG_MISSION_MS;
-            debugReason = "carrier_no_owned_tower_center";
-        }
-    }
-
-    RTG_EotsSetMission(bot, bg, missionType, targetNode, destination, missionDuration, RTG_EOTS_CAPTURE_HOLD_MS);
+    RTGBgObjectiveAssignment assignment;
+    if (!RTG_SelectBattlegroundObjective(botAI, assignment) || !assignment.valid || !assignment.destination.valueSet)
+        return false;
 
     PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
-    PositionInfo pos = posMap["bg objective"];
-    pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
-    posMap["bg objective"] = pos;
+    posMap["bg objective"] = assignment.destination;
 
-    Position movementDestination = destination;
+    Position finalDestination(assignment.destination.x, assignment.destination.y, assignment.destination.z, 0.0f);
+    Position movementDestination = finalDestination;
     Position routeStep;
     bool finalRouteStep = true;
-    PositionInfo finalObjective(destination.GetPositionX(), destination.GetPositionY(),
-                                destination.GetPositionZ(), bg->GetMapId());
-    if (RTG_EotsGetObjectiveRouteStep(bot, team, finalObjective, routeStep, finalRouteStep) && !finalRouteStep)
+    if (RTG_EotsGetObjectiveRouteStep(bot, team, assignment.destination, routeStep, finalRouteStep) && !finalRouteStep)
         movementDestination.Relocate(routeStep);
 
     Unit* carrierThreat = context->GetValue<Unit*>("enemy player target")->Get();
@@ -5351,64 +4038,18 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
             context->GetValue<Unit*>("current target")->Set(nullptr);
     }
 
-    RTG_EotsDebugRaw(bot, bg, "carrier_move", debugReason, targetNode);
+    RTG_EotsDebugRaw(bot, bg, "carrier_move", assignment.reason.c_str(), assignment.objectiveId);
 
-    float const dist2d = bot->GetExactDist2d(movementDestination.GetPositionX(), movementDestination.GetPositionY());
-    float const finalDist2d = bot->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
-
-    struct RtgEotsFcProgress
+    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
     {
-        float destX = 0.0f;
-        float destY = 0.0f;
-        float destZ = 0.0f;
-        float lastX = 0.0f;
-        float lastY = 0.0f;
-        uint32 lastProgressMs = 0;
-        bool initialized = false;
-    };
-
-    static std::unordered_map<uint64, RtgEotsFcProgress> progressByCarrier;
-    uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
-    uint32 const now = getMSTime();
-    RtgEotsFcProgress& progress = progressByCarrier[key];
-
-    bool const destinationChanged = !progress.initialized ||
-        std::fabs(progress.destX - movementDestination.GetPositionX()) > 2.0f ||
-        std::fabs(progress.destY - movementDestination.GetPositionY()) > 2.0f ||
-        std::fabs(progress.destZ - movementDestination.GetPositionZ()) > 5.0f;
-
-    float const movedSinceLast = progress.initialized
-        ? std::sqrt(std::pow(bot->GetPositionX() - progress.lastX, 2.0f) +
-                    std::pow(bot->GetPositionY() - progress.lastY, 2.0f))
-        : 999.0f;
-
-    if (!progress.initialized || destinationChanged || movedSinceLast > 1.25f)
-    {
-        progress.initialized = true;
-        progress.destX = movementDestination.GetPositionX();
-        progress.destY = movementDestination.GetPositionY();
-        progress.destZ = movementDestination.GetPositionZ();
-        progress.lastX = bot->GetPositionX();
-        progress.lastY = bot->GetPositionY();
-        progress.lastProgressMs = now;
+        resetObjective();
+        return true;
     }
 
-    bool const appearsStuck = dist2d > 10.0f && progress.initialized &&
-        getMSTimeDiff(progress.lastProgressMs, now) > 6500;
-
-    if (targetNode && missionType == RTG_EOTS_MISSION_CARRIER_TURNIN && bestOwnedDist <= 40.0f)
+    float const finalDist2d = bot->GetExactDist2d(finalDestination.GetPositionX(), finalDestination.GetPositionY());
+    if (finalDist2d <= 6.0f && std::fabs(bot->GetPositionZ() - finalDestination.GetPositionZ()) <= 10.0f)
     {
-        if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
-        {
-            resetObjective();
-            return true;
-        }
-    }
-
-    if (finalDist2d <= 6.0f &&
-        std::fabs(bot->GetPositionZ() - destination.GetPositionZ()) <= 10.0f)
-    {
-        if (missionType == RTG_EOTS_MISSION_CARRIER_TURNIN && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+        if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
         {
             if (!carrierUnderPressure && bot->isMoving())
                 bot->StopMoving();
@@ -5428,14 +4069,37 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         return true;
     }
 
-    if (bot->isMoving() && !destinationChanged && !appearsStuck)
-        return true;
-
-    if (appearsStuck && bot->isMoving())
+    struct RtgEotsCarrierMoveState
     {
-        bot->StopMoving();
-        bot->GetMotionMaster()->Clear();
+        float x = 0.0f;
+        float y = 0.0f;
+        float z = 0.0f;
+        bool initialized = false;
+    };
+
+    static std::unordered_map<uint64, RtgEotsCarrierMoveState> moveStateByCarrier;
+    uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
+    RtgEotsCarrierMoveState& moveState = moveStateByCarrier[key];
+    bool const destinationChanged = !moveState.initialized ||
+        std::fabs(moveState.x - movementDestination.GetPositionX()) > 2.0f ||
+        std::fabs(moveState.y - movementDestination.GetPositionY()) > 2.0f ||
+        std::fabs(moveState.z - movementDestination.GetPositionZ()) > 5.0f;
+
+    if (destinationChanged)
+    {
+        moveState.initialized = true;
+        moveState.x = movementDestination.GetPositionX();
+        moveState.y = movementDestination.GetPositionY();
+        moveState.z = movementDestination.GetPositionZ();
+
+        if (bot->isMoving())
+        {
+            bot->StopMoving();
+            bot->GetMotionMaster()->Clear();
+        }
     }
+    else if (bot->isMoving())
+        return true;
 
     float const approach = finalRouteStep ? 4.0f : 2.0f;
     if (MoveNear(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
@@ -5746,12 +4410,6 @@ bool BGTactics::recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo co
     float const moved = bot->GetExactDist(progress.lastX, progress.lastY, progress.lastZ);
     float const distToObjective = bot->GetExactDist(pos.x, pos.y, pos.z);
 
-    if (bgType == BATTLEGROUND_EY && RTG_EotsShouldHoldTowerMission(bot, bg, pos))
-    {
-        resetProgress();
-        return true;
-    }
-
     // RTG WSG: do not auto-redirect merely because a bot is near a graveyard.
     // Both the normal flag-room route and the lower cross-map route pass through
     // GY-adjacent space. Redirecting here every few seconds made bots visibly
@@ -6025,19 +4683,10 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
                 return true;
             }
 
-            if (RTG_EotsShouldHoldTowerMission(bot, bg, pos))
-                return true;
-
             if (RTG_EotsIsTowerObjective(pos) &&
                 bot->GetExactDist2d(pos.x, pos.y) < RTG_EOTS_TOWER_ARRIVE_RADIUS_2D &&
                 std::fabs(bot->GetPositionZ() - pos.z) <= RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
             {
-                if (sPlayerbotAIConfig.rtgPlayerbotsBgEotsObjectiveAI)
-                {
-                    resetObjective();
-                    return true;
-                }
-
                 if (bot->isMoving())
                     bot->StopMoving();
 

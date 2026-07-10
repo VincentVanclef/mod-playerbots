@@ -722,6 +722,37 @@ bool RTG_EotsShouldDefendTower(uint32 stableRole, uint32 ownedCount, uint32 team
     return (stableRole % 4u) == 0u;
 }
 
+bool RTG_EotsReachedStartExitField(Player* bot, TeamId team)
+{
+    if (!bot)
+        return false;
+
+    if (team == TEAM_HORDE)
+        return bot->GetPositionX() >= 1932.0f;
+
+    if (team == TEAM_ALLIANCE)
+        return bot->GetPositionX() <= 2408.0f;
+
+    return false;
+}
+
+bool RTG_EotsNeedsStartExit(Player* bot, TeamId team)
+{
+    if (!bot || bot->GetMapId() != 566)
+        return false;
+
+    if (RTG_EotsReachedStartExitField(bot, team))
+        return false;
+
+    PositionInfo const& start = team == TEAM_HORDE ? EOTS_HORDE_START : EOTS_ALLIANCE_START;
+    return RTG_Distance3d(bot, start) <= 305.0f;
+}
+
+PositionInfo const& RTG_EotsStartExitDestination(TeamId team)
+{
+    return team == TEAM_HORDE ? EOTS_HORDE_ROAD_FORK : EOTS_ALLIANCE_ROAD_FORK;
+}
+
 bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, RTGBgObjectiveAssignment& out)
 {
     BattlegroundEY* eyeBg = dynamic_cast<BattlegroundEY*>(bg);
@@ -744,6 +775,17 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
     out.assignedAtMs = getMSTime();
     out.minCommitMs = sPlayerbotAIConfig.rtgBgEotsCommitMs;
 
+    if (RTG_EotsNeedsStartExit(bot, team))
+    {
+        out.role = RTGBgObjectiveRole::ExitSpawn;
+        out.objectiveId = 0;
+        RTG_SetDestination(out, RTG_EotsStartExitDestination(team), bg->GetMapId());
+        out.minCommitMs = 12000;
+        out.emergency = true;
+        out.reason = "ExitStartRock";
+        return true;
+    }
+
     if (RTG_IsEotsFlagCarrier(bot, eyeBg))
     {
         uint32 nodeId = 0;
@@ -758,6 +800,26 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             out.reason = "CarrierTurnInOwnedTower";
             return true;
         }
+
+        uint32 const homeNode = RTG_EotsAssignedHomeNode(eyeBg, team, stableRole, seed);
+        if (RTGTowerDef const* tower = RTG_EotsTower(homeNode))
+        {
+            out.role = RTGBgObjectiveRole::CaptureTower;
+            out.objectiveId = homeNode;
+            RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+            out.minCommitMs = 30000;
+            out.emergency = true;
+            out.reason = "CarrierNeedsOwnedTower";
+            return true;
+        }
+
+        out.role = RTGBgObjectiveRole::MidfieldPressure;
+        out.objectiveId = 0;
+        RTG_SetDestination(out, centerPos, bg->GetMapId());
+        out.minCommitMs = 8000;
+        out.emergency = true;
+        out.reason = "CarrierNoOwnedTowerHoldCenter";
+        return true;
     }
 
     Unit* enemyFC = RTG_GetUnitValue(botAI, "enemy flag carrier");
@@ -923,6 +985,9 @@ bool RTG_AssignmentStillValid(PlayerbotAI* botAI, Player* bot, Battleground* bg,
 
         switch (assignment.role)
         {
+            case RTGBgObjectiveRole::ExitSpawn:
+                return RTG_EotsNeedsStartExit(bot, team) &&
+                       elapsed < std::max<uint32>(assignment.minCommitMs, 12000);
             case RTGBgObjectiveRole::CarrierTurnIn:
                 return RTG_IsEotsFlagCarrier(bot, eyeBg) && RTG_EotsOwnedCount(eyeBg, team) > 0;
             case RTGBgObjectiveRole::CaptureEnemyFlag:
@@ -1108,6 +1173,8 @@ char const* RTG_BgObjectiveRoleName(RTGBgObjectiveRole role)
             return "MidfieldPressure";
         case RTGBgObjectiveRole::CarrierTurnIn:
             return "CarrierTurnIn";
+        case RTGBgObjectiveRole::ExitSpawn:
+            return "ExitSpawn";
         case RTGBgObjectiveRole::StuckRecover:
             return "StuckRecover";
         default:
