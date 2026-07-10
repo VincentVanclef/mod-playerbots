@@ -55,27 +55,6 @@ Position const WS_ROAM_POS = {1227.446f, 1476.235f, 307.484f, 1.50f};
 Position const WS_GY_CAMPING_HORDE = {1039.819, 1388.759f, 340.703f, 0.0f};
 Position const WS_GY_CAMPING_ALLIANCE = {1422.320f, 1551.978f, 342.834f, 0.0f};
 
-// RTG WSG: safe breadcrumbs from each team's graveyard/front-yard back into
-// the actual flag-room layer.  Bots were getting stuck by the graveyard huts
-// because direct MoveNear(pathfinder) targets kept resolving through the same
-// bad front-yard spot. These short staged hops follow the known VMangos WSG
-// lane from graveyard -> flag room and are used only as an escape/FC route.
-Position const WS_GY_ESCAPE_HORDE_1 = {1016.42f, 1402.33f, 341.352f, 0.0f};
-Position const WS_GY_ESCAPE_HORDE_2 = {997.806f, 1422.52f, 344.623f, 0.0f};
-Position const WS_GY_ESCAPE_HORDE_3 = {966.691f, 1422.53f, 345.223f, 0.0f};
-Position const WS_GY_ESCAPE_HORDE_4 = {944.859f, 1423.05f, 345.437f, 0.0f};
-Position const WS_GY_ESCAPE_ALLIANCE_1 = {1443.55f, 1533.40f, 343.148f, 0.0f};
-Position const WS_GY_ESCAPE_ALLIANCE_2 = {1443.51f, 1501.75f, 348.317f, 0.0f};
-Position const WS_GY_ESCAPE_ALLIANCE_3 = {1469.79f, 1494.13f, 351.774f, 0.0f};
-Position const WS_GY_ESCAPE_ALLIANCE_4 = {1508.27f, 1493.17f, 352.005f, 0.0f};
-
-std::vector<Position> const WS_GY_ESCAPE_TO_HORDE_ROOM = {WS_GY_ESCAPE_HORDE_1, WS_GY_ESCAPE_HORDE_2,
-                                                          WS_GY_ESCAPE_HORDE_3, WS_GY_ESCAPE_HORDE_4,
-                                                          WS_FLAG_POS_HORDE};
-std::vector<Position> const WS_GY_ESCAPE_TO_ALLIANCE_ROOM = {WS_GY_ESCAPE_ALLIANCE_1, WS_GY_ESCAPE_ALLIANCE_2,
-                                                             WS_GY_ESCAPE_ALLIANCE_3, WS_GY_ESCAPE_ALLIANCE_4,
-                                                             WS_FLAG_POS_ALLIANCE};
-
 std::vector<Position> const WS_FLAG_HIDE_HORDE = {WS_FLAG_HIDE_HORDE_1, WS_FLAG_HIDE_HORDE_2, WS_FLAG_HIDE_HORDE_3};
 std::vector<Position> const WS_FLAG_HIDE_ALLIANCE = {WS_FLAG_HIDE_ALLIANCE_1, WS_FLAG_HIDE_ALLIANCE_2,
                                                      WS_FLAG_HIDE_ALLIANCE_3};
@@ -110,10 +89,6 @@ Position const AV_MINE_NORTH_2 = {966.362f, -446.570f, 56.641f, 0.0f};
 Position const AV_MINE_NORTH_3 = {952.081f, -335.073f, 63.579f, 0.0f};
 Position const EY_WAITING_POS_HORDE = {1809.102f, 1540.854f, 1267.142f, 0.0f};
 Position const EY_WAITING_POS_ALLIANCE = {2523.827f, 1596.915f, 1270.204f, 0.0f};
-Position const EY_FLAG_RETURN_POS_RETREAT_HORDE = {1885.529f, 1532.157f, 1200.635f, 0.0f};
-Position const EY_FLAG_RETURN_POS_RETREAT_ALLIANCE = {2452.253f, 1602.356f, 1203.617f, 0.0f};
-Position const EY_GY_CAMPING_HORDE = {1874.854f, 1530.405f, 1207.432f, 0.0f};
-Position const EY_GY_CAMPING_ALLIANCE = {2456.887f, 1599.025f, 1206.280f, 0.0f};
 
 Position const IC_WAITING_POS_HORDE = {1166.322f, -762.402f, 48.628f};
 Position const IC_WEST_WAITING_POS_HORDE = {1217.666f, -685.449f, 48.915f};
@@ -1315,6 +1290,7 @@ static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f}
 // state until they have reached the lower field crossroad. Do not let normal
 // objective/chase/mount logic take over while they are still on the start rock.
 static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 305.0f;
+static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1218.0f;
 
 static Position RTG_EotsStartPosition(TeamId team)
 {
@@ -1357,13 +1333,16 @@ static bool RTG_EotsNeedsStartExit(Player* bot)
     if (RTG_EotsReachedStartExitField(bot))
         return false;
 
+    if (bot->GetPositionZ() < RTG_EOTS_START_EXIT_MIN_Z)
+        return false;
+
     Position const start = RTG_EotsStartPosition(RTG_EotsEffectiveTeamId(bot));
     if (bot->GetDistance(start) > RTG_EOTS_START_EXIT_MAX_DIST)
         return false;
 
-    // If the bot is still on the start side, force the exit whether it is on
-    // the upper rock, lip, or lower side shelf.  This keeps the useful spawn
-    // recovery behavior without affecting normal tower play.
+    // If the bot is still on the high start rock/lip, force the exit.  Lower
+    // graveyard/road terrain must stay under normal objective routing so bots
+    // can chase carriers instead of freezing in start-exit mode.
     return true;
 }
 
@@ -1510,6 +1489,119 @@ static std::vector<Position> RTG_EotsBuildObjectiveRoute(TeamId team, uint32 nod
     return route;
 }
 
+static bool RTG_EotsAppendTowerToCenterRoute(std::vector<Position>& route, uint32 fromNode)
+{
+    switch (fromNode)
+    {
+        case POINT_FEL_REAVER:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Fel_Reaver_Ruins, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Flag);
+            return true;
+        case POINT_BLOOD_ELF:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Blood_Elf_Tower, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Flag);
+            return true;
+        case POINT_MAGE_TOWER:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Mage_Tower, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Flag);
+            return true;
+        case POINT_DRAENEI_RUINS:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Draenei_Ruins, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Flag);
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool RTG_EotsAppendCenterToTowerRoute(std::vector<Position>& route, uint32 toNode)
+{
+    switch (toNode)
+    {
+        case POINT_FEL_REAVER:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Flag, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Fel_Reaver_Ruins);
+            return true;
+        case POINT_BLOOD_ELF:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Flag, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Blood_Elf_Tower);
+            return true;
+        case POINT_MAGE_TOWER:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Flag, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Mage_Tower);
+            return true;
+        case POINT_DRAENEI_RUINS:
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Flag, true);
+            RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Draenei_Ruins);
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool RTG_EotsAppendTowerToTowerRoute(std::vector<Position>& route, uint32 fromNode, uint32 toNode)
+{
+    if (!fromNode || !toNode || fromNode == toNode)
+        return false;
+
+    if (fromNode == POINT_FEL_REAVER && toNode == POINT_MAGE_TOWER)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Fel_Reaver_to_Mage_Tower);
+        return true;
+    }
+
+    if (fromNode == POINT_MAGE_TOWER && toNode == POINT_FEL_REAVER)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Fel_Reaver_to_Mage_Tower, true);
+        return true;
+    }
+
+    if (fromNode == POINT_DRAENEI_RUINS && toNode == POINT_BLOOD_ELF)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Draenei_Ruins_to_Blood_Elf_Tower);
+        return true;
+    }
+
+    if (fromNode == POINT_BLOOD_ELF && toNode == POINT_DRAENEI_RUINS)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Draenei_Ruins_to_Blood_Elf_Tower, true);
+        return true;
+    }
+
+    if (fromNode == POINT_FEL_REAVER && toNode == POINT_BLOOD_ELF)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Fel_Reaver_Ruins, true);
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Blood_Elf_Tower);
+        return true;
+    }
+
+    if (fromNode == POINT_BLOOD_ELF && toNode == POINT_FEL_REAVER)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Blood_Elf_Tower, true);
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Horde_to_Fel_Reaver_Ruins);
+        return true;
+    }
+
+    if (fromNode == POINT_MAGE_TOWER && toNode == POINT_DRAENEI_RUINS)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Mage_Tower, true);
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Draenei_Ruins);
+        return true;
+    }
+
+    if (fromNode == POINT_DRAENEI_RUINS && toNode == POINT_MAGE_TOWER)
+    {
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Draenei_Ruins, true);
+        RTG_EotsAppendRoutePath(route, vPath_EY_Crossroad2Alliance_to_Mage_Tower);
+        return true;
+    }
+
+    if (!RTG_EotsAppendTowerToCenterRoute(route, fromNode))
+        return false;
+
+    return RTG_EotsAppendCenterToTowerRoute(route, toNode);
+}
+
 static bool RTG_EotsGetRouteStepFromRoute(Player* bot, std::vector<Position>& route,
                                           Position const& finalTarget, Position& step)
 {
@@ -1562,7 +1654,7 @@ static bool RTG_EotsGetRouteStepFromRoute(Player* bot, std::vector<Position>& ro
             closestIndex = int(i);
         }
 
-        if (dist2d <= 60.0f && zDiff <= 35.0f)
+        if (dist2d <= 32.0f && zDiff <= 14.0f)
             progressIndex = int(i);
     }
 
@@ -1570,10 +1662,18 @@ static bool RTG_EotsGetRouteStepFromRoute(Player* bot, std::vector<Position>& ro
         return false;
 
     uint32 nextIndex = progressIndex >= 0 ? uint32(progressIndex) : uint32(closestIndex);
-    if (nextIndex + 1 < route.size())
+    if (progressIndex >= 0 && nextIndex + 1 < route.size())
         ++nextIndex;
 
-    step.Relocate(route[nextIndex]);
+    Position destination = route[nextIndex];
+    if (bot->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY()) <= 7.0f &&
+        std::fabs(bot->GetPositionZ() - destination.GetPositionZ()) <= 7.0f &&
+        nextIndex + 1 < route.size())
+    {
+        destination.Relocate(route[nextIndex + 1]);
+    }
+
+    step.Relocate(destination);
     return true;
 }
 
@@ -1627,7 +1727,22 @@ static bool RTG_EotsGetObjectiveRouteStep(Player* bot, TeamId team, PositionInfo
     if (!centerObjective && !RTG_EotsGetObjectiveNode(objective, nodeId))
         return false;
 
-    std::vector<Position> route = RTG_EotsBuildObjectiveRoute(team, nodeId, centerObjective);
+    std::vector<Position> route;
+    PositionInfo botPosition;
+    botPosition.Set(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetMapId());
+
+    uint32 currentNodeId = 0;
+    if (RTG_EotsGetObjectiveNode(botPosition, currentNodeId))
+    {
+        if (centerObjective)
+            RTG_EotsAppendTowerToCenterRoute(route, currentNodeId);
+        else if (currentNodeId != nodeId)
+            RTG_EotsAppendTowerToTowerRoute(route, currentNodeId, nodeId);
+    }
+
+    if (route.empty())
+        route = RTG_EotsBuildObjectiveRoute(team, nodeId, centerObjective);
+
     if (route.empty())
         return false;
 
@@ -1871,74 +1986,6 @@ static bool RTG_WsgIsUnsafeCarrierHoldSpot(Player* bot, TeamId team)
         return x >= 1360.0f && x <= 1450.0f && y >= 1510.0f && y <= 1590.0f;
 
     return false;
-}
-
-static bool RTG_WsgIsNearTeamGraveyard(Player* bot, TeamId team, float range = 75.0f)
-{
-    if (!bot)
-        return false;
-
-    if (team == TEAM_HORDE)
-        return bot->GetDistance(WS_GY_CAMPING_HORDE) <= range;
-    if (team == TEAM_ALLIANCE)
-        return bot->GetDistance(WS_GY_CAMPING_ALLIANCE) <= range;
-
-    return false;
-}
-
-static bool RTG_WsgGetOwnGraveyardEscapeStep(Player* bot, TeamId team, Position& target)
-{
-    if (!bot)
-        return false;
-
-    std::vector<Position> const* steps = nullptr;
-    if (team == TEAM_HORDE)
-        steps = &WS_GY_ESCAPE_TO_HORDE_ROOM;
-    else if (team == TEAM_ALLIANCE)
-        steps = &WS_GY_ESCAPE_TO_ALLIANCE_ROOM;
-    else
-        return false;
-
-    for (Position const& step : *steps)
-    {
-        // Advance one breadcrumb at a time.  Use 2D plus Z so a bot standing
-        // under/above a ledge does not think it has reached the safe lane.
-        if (bot->GetExactDist2d(step.GetPositionX(), step.GetPositionY()) > 8.0f ||
-            std::fabs(bot->GetPositionZ() - step.GetPositionZ()) > 12.0f)
-        {
-            target.Relocate(step);
-            return true;
-        }
-    }
-
-    target.Relocate(RTG_WsgOwnFlagRoom(team));
-    return true;
-}
-
-static bool RTG_WsgChooseGraveyardEscapeTarget(Player* bot, TeamId team, Position const& desired, Position& target)
-{
-    if (!bot || team == TEAM_NEUTRAL)
-        return false;
-
-    Position const& ownRoom = RTG_WsgOwnFlagRoom(team);
-    bool const desiredIsOwnRoom =
-        desired.GetExactDist(ownRoom.GetPositionX(), ownRoom.GetPositionY(), ownRoom.GetPositionZ()) <= 35.0f;
-
-    // RTG WSG: this helper is now deliberately narrow.  The previous version
-    // fired for any bot near either graveyard and redirected enemy-room pressure
-    // back to midfield. That created the exact visual problem testers saw:
-    // run ~20 yards toward a flag, enter the GY radius, change mind, repeat.
-    // Only use the staged GY breadcrumbs when the current job is to reach our
-    // own flag room/cap/hide area.  Offense and EFC recovery must be allowed to
-    // pass through graveyard-adjacent lanes on their way to the enemy room.
-    if (!desiredIsOwnRoom)
-        return false;
-
-    if (!RTG_WsgIsNearTeamGraveyard(bot, team, 95.0f) &&
-        !RTG_WsgIsUnsafeCarrierHoldSpot(bot, team))
-        return false;
-
-    return RTG_WsgGetOwnGraveyardEscapeStep(bot, team, target);
 }
 
 static bool RTG_WsgEnemyThreatNearby(Player* bot, Unit* enemy, float range = 35.0f)
@@ -4043,7 +4090,8 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         movementDestination.Relocate(routeStep);
 
     float const finalDist2d = bot->GetExactDist2d(finalDestination.GetPositionX(), finalDestination.GetPositionY());
-    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 65.0f)
+    float const finalZDiff = std::fabs(bot->GetPositionZ() - finalDestination.GetPositionZ());
+    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 18.0f && finalZDiff <= 12.0f)
     {
         movementDestination.Relocate(finalDestination);
         finalRouteStep = true;
@@ -4071,8 +4119,7 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         return true;
     }
 
-    if (assignment.role != RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 6.0f &&
-        std::fabs(bot->GetPositionZ() - finalDestination.GetPositionZ()) <= 10.0f)
+    if (assignment.role != RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 6.0f && finalZDiff <= 10.0f)
     {
         if (!carrierUnderPressure && bot->isMoving())
             bot->StopMoving();
@@ -4233,14 +4280,6 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         }
     }
 
-    Position escapeTarget;
-    if (!RTG_WsgIsInsideOwnFlagRoom(bot, team) &&
-        RTG_WsgChooseGraveyardEscapeTarget(bot, team, finalDestination, escapeTarget))
-    {
-        destination.Relocate(escapeTarget);
-        finalRouteStep = false;
-    }
-
     struct RtgWsgFcStickyDestination
     {
         float finalX = 0.0f;
@@ -4325,7 +4364,7 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         Position(pos.x, pos.y, pos.z, 0.0f).GetExactDist(destination.GetPositionX(), destination.GetPositionY(),
                                                         destination.GetPositionZ()) > 6.0f;
 
-    // FC objective is authoritative every pulse. Do not preserve a stale hide/gy
+    // FC objective is authoritative every pulse. Do not preserve a stale hide
     // point from generic WSG objective selection.
     pos.Set(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), bg->GetMapId());
     posMap["bg objective"] = pos;
@@ -4388,9 +4427,6 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     bool const appearsStuck = dist2d > 10.0f && progress.initialized &&
         getMSTimeDiff(progress.lastProgressMs, now) > 6500;
 
-    bool const forceRedirectFromGraveyard = (RTG_WsgIsNearTeamGraveyard(bot, team, 95.0f) ||
-        RTG_WsgIsUnsafeCarrierHoldSpot(bot, team)) && dist2d > 10.0f;
-
     // If our flag is away, the FC should wait at a deliberate safe spot. Do not let
     // the whole team stack here; non-carrier logic now sends most bots after the enemy FC.
     if (!carrierUnderPressure && ownFlagTaken && RTG_WsgIsInsideOwnFlagRoom(bot, team) &&
@@ -4403,12 +4439,12 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     }
 
     // If movement is already taking us toward the current destination and progress is
-    // happening, do not churn the motion master. If the objective changed from hide ->
-    // cap room or the bot has not moved for a few seconds, hard-redirect.
-    if (bot->isMoving() && !needObjective && !destinationChanged && !appearsStuck && !forceRedirectFromGraveyard)
+    // happening, do not churn the motion master. If the bot has not moved for a few
+    // seconds, hard-redirect based on actual lack of progress rather than graveyard proximity.
+    if (bot->isMoving() && !needObjective && !destinationChanged && !appearsStuck)
         return true;
 
-    if (appearsStuck || forceRedirectFromGraveyard)
+    if (appearsStuck)
     {
         bot->StopMoving();
         bot->GetMotionMaster()->Clear();

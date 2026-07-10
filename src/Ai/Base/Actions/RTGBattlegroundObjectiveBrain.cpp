@@ -46,6 +46,7 @@ PositionInfo const EOTS_HORDE_START(1809.102f, 1540.854f, 1267.142f, 566);
 PositionInfo const EOTS_ALLIANCE_START(2523.827f, 1596.915f, 1270.204f, 566);
 PositionInfo const EOTS_HORDE_ROAD_FORK(1941.452f, 1549.086f, 1176.700f, 566);
 PositionInfo const EOTS_ALLIANCE_ROAD_FORK(2395.737f, 1588.287f, 1176.570f, 566);
+constexpr float RTG_EOTS_START_EXIT_MIN_Z = 1218.0f;
 
 struct RTGTowerDef
 {
@@ -768,6 +769,9 @@ bool RTG_EotsNeedsStartExit(Player* bot, TeamId team)
     if (RTG_EotsReachedStartExitField(bot, team))
         return false;
 
+    if (bot->GetPositionZ() < RTG_EOTS_START_EXIT_MIN_Z)
+        return false;
+
     PositionInfo const& start = team == TEAM_HORDE ? EOTS_HORDE_START : EOTS_ALLIANCE_START;
     return RTG_Distance3d(bot, start) <= 305.0f;
 }
@@ -847,15 +851,18 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
     }
 
     Unit* enemyFC = RTG_GetUnitValue(botAI, "enemy flag carrier");
-    if (RTG_UnitValidForObjective(bot, enemyFC) && bot->GetDistance(enemyFC) < 70.0f)
+    float const enemyFCDist = RTG_UnitValidForObjective(bot, enemyFC) ? bot->GetDistance(enemyFC) : FLT_MAX;
+    bool const closeEnemyFC = enemyFCDist < 115.0f;
+    bool const assignedEnemyFCInterceptor = enemyFCDist < 170.0f && (stableRole % 3u) != 0u;
+    if (closeEnemyFC || assignedEnemyFCInterceptor)
     {
         out.role = RTGBgObjectiveRole::KillEnemyFlagCarrier;
         out.objectiveId = uint32(enemyFC->GetGUID().GetCounter());
         out.targetGuid = enemyFC->GetGUID();
         out.destination.Set(enemyFC->GetPositionX(), enemyFC->GetPositionY(), enemyFC->GetPositionZ(), bg->GetMapId());
-        out.minCommitMs = 8000;
+        out.minCommitMs = closeEnemyFC ? 8000 : 10000;
         out.emergency = true;
-        out.reason = "EnemyFlagCarrierNearby";
+        out.reason = closeEnemyFC ? "EnemyFlagCarrierNearby" : "EnemyFlagCarrierEscaping";
         return true;
     }
 
