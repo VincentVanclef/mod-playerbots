@@ -1291,6 +1291,7 @@ static Position const RTG_EOTS_CENTER_ANCHOR = {2175.0f, 1569.0f, 1159.0f, 0.0f}
 // objective/chase/mount logic take over while they are still on the start rock.
 static float constexpr RTG_EOTS_START_EXIT_MAX_DIST = 305.0f;
 static float constexpr RTG_EOTS_START_EXIT_MIN_Z = 1218.0f;
+static float constexpr RTG_EOTS_VOID_KILL_Z = 1130.0f;
 
 static Position RTG_EotsStartPosition(TeamId team)
 {
@@ -1343,6 +1344,51 @@ static bool RTG_EotsNeedsStartExit(Player* bot)
     // If the bot is still on the high start rock/lip, force the exit.  Lower
     // graveyard/road terrain must stay under normal objective routing so bots
     // can chase carriers instead of freezing in start-exit mode.
+    return true;
+}
+
+static bool RTG_EotsIsVoidRiskLane(float x, float y, float z)
+{
+    if (z < 1138.0f || z > 1186.0f)
+        return false;
+
+    return x >= 2030.0f && x <= 2310.0f && y >= 1370.0f && y <= 1768.0f;
+}
+
+static bool RTG_EotsNeedsVoidLaneSafety(Player* bot, Position const& destination)
+{
+    if (!bot || bot->GetMapId() != 566)
+        return false;
+
+    return RTG_EotsIsVoidRiskLane(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ()) ||
+           RTG_EotsIsVoidRiskLane(destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+}
+
+static void RTG_EotsPrepareVoidLaneSafety(Player* bot)
+{
+    if (!bot)
+        return;
+
+    if (bot->IsMounted())
+        bot->RemoveAurasByType(SPELL_AURA_MOUNTED);
+
+    if (bot->IsInDisallowedMountForm())
+        bot->RemoveAurasByType(SPELL_AURA_MOD_SHAPESHIFT);
+}
+
+static bool RTG_EotsHandleVoidFall(Player* bot)
+{
+    if (!bot || bot->GetMapId() != 566 || !bot->IsAlive())
+        return false;
+
+    if (bot->GetPositionZ() >= RTG_EOTS_VOID_KILL_Z)
+        return false;
+
+    if (bot->isMoving())
+        bot->StopMoving();
+
+    bot->GetMotionMaster()->Clear();
+    bot->Kill(bot, bot);
     return true;
 }
 
@@ -2747,6 +2793,9 @@ bool BGTactics::Execute(Event /*event*/)
             return false;
     }
 
+    if (bgType == BATTLEGROUND_EY && bg->GetStatus() == STATUS_IN_PROGRESS && RTG_EotsHandleVoidFall(bot))
+        return true;
+
     if (getName() == "move to start")
         return moveToStart();
 
@@ -3991,6 +4040,20 @@ bool BGTactics::moveToObjective(bool ignoreDist)
         // ServerFacade::instance().GetDistance2d(bot, pos.x, pos.y); bot->Say(out.str(), LANG_UNIVERSAL);
 
         // dont increase from 1.5 will cause bugs with horde capping AV towers
+        if (bgType == BATTLEGROUND_EY)
+        {
+            Position const destination(pos.x, pos.y, pos.z, 0.0f);
+            if (RTG_EotsNeedsVoidLaneSafety(bot, destination))
+            {
+                RTG_EotsPrepareVoidLaneSafety(bot);
+                if (MoveTo(bot->GetMapId(), pos.x, pos.y, pos.z, false, false, true, false,
+                           MovementPriority::MOVEMENT_NORMAL, true))
+                    return true;
+
+                return true;
+            }
+        }
+
         return MoveNear(bot->GetMapId(), pos.x, pos.y, pos.z, isEyCenterObjective ? 1.0f : 1.5f);
     }
     return false;
@@ -4022,6 +4085,12 @@ bool BGTactics::rtgEotsMoveToObjectiveRoute()
     bool const centerObjective = RTG_EotsIsCenterObjective(objective);
     float const dist2d = bot->GetExactDist2d(objective.x, objective.y);
     float const zDiff = std::fabs(bot->GetPositionZ() - objective.z);
+    Position const finalTarget(objective.x, objective.y, objective.z, 0.0f);
+    Position const movementTarget = finalStep ? finalTarget : routeStep;
+    bool const voidLaneSafety = RTG_EotsNeedsVoidLaneSafety(bot, movementTarget);
+
+    if (voidLaneSafety)
+        RTG_EotsPrepareVoidLaneSafety(bot);
 
     if (finalStep)
     {
@@ -4034,14 +4103,36 @@ bool BGTactics::rtgEotsMoveToObjectiveRoute()
                 return true;
             }
 
+            if (voidLaneSafety)
+            {
+                if (MoveTo(bg->GetMapId(), objective.x, objective.y, objective.z, false, false, true, false,
+                           MovementPriority::MOVEMENT_NORMAL, true))
+                    return true;
+
+                return true;
+            }
+
             return MoveNear(bg->GetMapId(), objective.x, objective.y, objective.z, 1.0f);
+        }
+
+        if (voidLaneSafety)
+        {
+            if (MoveTo(bg->GetMapId(), objective.x, objective.y, objective.z, false, false, true, false,
+                       MovementPriority::MOVEMENT_NORMAL, true))
+                return true;
+
+            return true;
         }
 
         return MoveNear(bg->GetMapId(), objective.x, objective.y, objective.z, 1.5f);
     }
 
     RTG_EotsDebugRaw(bot, bg, "route", "objective_breadcrumb");
-    return MoveTo(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ());
+    if (MoveTo(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ(),
+               false, false, voidLaneSafety, false, MovementPriority::MOVEMENT_NORMAL, voidLaneSafety))
+        return true;
+
+    return voidLaneSafety;
 }
 
 bool BGTactics::rtgEotsMoveFlagCarrier()
@@ -4096,6 +4187,10 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         movementDestination.Relocate(finalDestination);
         finalRouteStep = true;
     }
+
+    bool const voidLaneSafety = RTG_EotsNeedsVoidLaneSafety(bot, movementDestination);
+    if (voidLaneSafety)
+        RTG_EotsPrepareVoidLaneSafety(bot);
 
     Unit* carrierThreat = context->GetValue<Unit*>("enemy player target")->Get();
     bool const carrierUnderPressure = bot->IsInCombat() ||
@@ -4160,6 +4255,16 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         return true;
 
     float const approach = assignment.role == RTGBgObjectiveRole::CarrierTurnIn ? 0.5f : (finalRouteStep ? 4.0f : 2.0f);
+    if (voidLaneSafety)
+    {
+        if (MoveTo(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
+                   movementDestination.GetPositionZ(), false, false, true, false,
+                   MovementPriority::MOVEMENT_NORMAL, true))
+            return true;
+
+        return true;
+    }
+
     if (MoveNear(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
                  movementDestination.GetPositionZ(), approach))
         return true;
