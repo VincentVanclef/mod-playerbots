@@ -1097,9 +1097,12 @@ std::vector<BattleBotPath*> const vPaths_WS = {
     &vPath_WSG_AllianceTunnel_to_AllianceFlagRoom,
     // RTG: do not route WSG bots onto base roofs/upper wall paths. On RTG's 1-19 setup
     // those led bots up inaccessible geometry at the start of WSG instead of playing.
-    &vPath_WSG_AllianceTunnel_to_HordeTunnel,
-    &vPath_WSG_AllianceGraveyardLower_to_HordeFlagRoom,
-    &vPath_WSG_HordeGraveyardLower_to_AllianceFlagRoom
+    //
+    // Also keep the old lower-graveyard attack lanes out of generic fallback.
+    // They contain steep field-to-base climbs that mmaps can accept but real
+    // players cannot reliably use. RTG WSG offense/carriers should enter bases
+    // through the normal tunnel/ramp graph only.
+    &vPath_WSG_AllianceTunnel_to_HordeTunnel
 };
 
 std::vector<BattleBotPath*> const vPaths_AB = {
@@ -1969,6 +1972,19 @@ static Position const& RTG_WsgEnemyFlagRoom(TeamId team)
     return team == TEAM_ALLIANCE ? WS_FLAG_POS_HORDE : WS_FLAG_POS_ALLIANCE;
 }
 
+static Position const RTG_WSG_HORDE_BASE_EXIT = {1016.42f, 1402.33f, 341.352f, 0.0f};
+static Position const RTG_WSG_ALLIANCE_BASE_EXIT = {1443.55f, 1533.40f, 343.148f, 0.0f};
+
+static Position const& RTG_WsgOwnBaseExit(TeamId team)
+{
+    return team == TEAM_ALLIANCE ? RTG_WSG_ALLIANCE_BASE_EXIT : RTG_WSG_HORDE_BASE_EXIT;
+}
+
+static Position const& RTG_WsgEnemyBaseExit(TeamId team)
+{
+    return team == TEAM_ALLIANCE ? RTG_WSG_HORDE_BASE_EXIT : RTG_WSG_ALLIANCE_BASE_EXIT;
+}
+
 static Position RTG_WsgEnemyFlagObjective(BattlegroundWS* wsBg, TeamId team)
 {
     Position target = RTG_WsgEnemyFlagRoom(team);
@@ -2059,6 +2075,26 @@ static bool RTG_WsgIsOwnFlagRoomObjective(TeamId team, Position const& target)
            std::fabs(target.GetPositionZ() - ownRoom.GetPositionZ()) <= 45.0f;
 }
 
+static bool RTG_WsgIsEnemyBaseExitObjective(TeamId team, Position const& target)
+{
+    if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+        return false;
+
+    Position const& exit = RTG_WsgEnemyBaseExit(team);
+    return target.GetExactDist2d(exit.GetPositionX(), exit.GetPositionY()) <= 35.0f &&
+           std::fabs(target.GetPositionZ() - exit.GetPositionZ()) <= 25.0f;
+}
+
+static bool RTG_WsgIsOwnBaseExitObjective(TeamId team, Position const& target)
+{
+    if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+        return false;
+
+    Position const& exit = RTG_WsgOwnBaseExit(team);
+    return target.GetExactDist2d(exit.GetPositionX(), exit.GetPositionY()) <= 35.0f &&
+           std::fabs(target.GetPositionZ() - exit.GetPositionZ()) <= 25.0f;
+}
+
 static void RTG_WsgAppendPath(std::vector<Position>& route, BattleBotPath const& path, bool reverse)
 {
     if (reverse)
@@ -2076,35 +2112,19 @@ static void RTG_WsgAppendPath(std::vector<Position>& route, BattleBotPath const&
 static std::vector<Position> RTG_WsgBuildEnemyFlagRoute(TeamId team, uint32 stableRole)
 {
     std::vector<Position> route;
-    bool const tunnelRoute = (stableRole % 3) == 0;
+    (void)stableRole;
 
     if (team == TEAM_HORDE)
     {
-        if (tunnelRoute)
-        {
-            RTG_WsgAppendPath(route, vPath_WSG_HordeTunnel_to_HordeFlagRoom, true);
-            RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_HordeTunnel, false);
-            RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_AllianceFlagRoom, false);
-        }
-        else
-        {
-            RTG_WsgAppendPath(route, vPath_WSG_HordeFlagRoom_to_HordeGraveyard, false);
-            RTG_WsgAppendPath(route, vPath_WSG_HordeGraveyardLower_to_AllianceFlagRoom, false);
-        }
+        RTG_WsgAppendPath(route, vPath_WSG_HordeTunnel_to_HordeFlagRoom, true);
+        RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_HordeTunnel, false);
+        RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_AllianceFlagRoom, false);
     }
     else if (team == TEAM_ALLIANCE)
     {
-        if (tunnelRoute)
-        {
-            RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_AllianceFlagRoom, true);
-            RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_HordeTunnel, true);
-            RTG_WsgAppendPath(route, vPath_WSG_HordeTunnel_to_HordeFlagRoom, false);
-        }
-        else
-        {
-            RTG_WsgAppendPath(route, vPath_WSG_AllianceFlagRoom_to_AllianceGraveyard, false);
-            RTG_WsgAppendPath(route, vPath_WSG_AllianceGraveyardLower_to_HordeFlagRoom, false);
-        }
+        RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_AllianceFlagRoom, true);
+        RTG_WsgAppendPath(route, vPath_WSG_AllianceTunnel_to_HordeTunnel, true);
+        RTG_WsgAppendPath(route, vPath_WSG_HordeTunnel_to_HordeFlagRoom, false);
     }
 
     return route;
@@ -2149,7 +2169,7 @@ static bool RTG_WsgGetRouteStep(Player* bot, std::vector<Position>& route, Posit
             closestIndex = int(i);
         }
 
-        if (dist2d <= 45.0f && zDiff <= 26.0f)
+        if (dist2d <= 30.0f && zDiff <= 14.0f)
             progressIndex = int(i);
     }
 
@@ -2175,7 +2195,8 @@ static bool RTG_WsgGetRouteStep(Player* bot, std::vector<Position>& route, Posit
 static bool RTG_WsgGetEnemyFlagRouteStep(Player* bot, TeamId team, Position const& finalTarget,
                                          uint32 stableRole, Position& step)
 {
-    if (!RTG_WsgIsEnemyFlagRoomObjective(team, finalTarget))
+    if (!RTG_WsgIsEnemyFlagRoomObjective(team, finalTarget) &&
+        !RTG_WsgIsEnemyBaseExitObjective(team, finalTarget))
         return false;
 
     std::vector<Position> route = RTG_WsgBuildEnemyFlagRoute(team, stableRole);
@@ -2185,7 +2206,8 @@ static bool RTG_WsgGetEnemyFlagRouteStep(Player* bot, TeamId team, Position cons
 static bool RTG_WsgGetCarrierHomeRouteStep(Player* bot, TeamId team, Position const& finalTarget,
                                            uint32 stableRole, Position& step)
 {
-    if (!RTG_WsgIsOwnFlagRoomObjective(team, finalTarget))
+    if (!RTG_WsgIsOwnFlagRoomObjective(team, finalTarget) &&
+        !RTG_WsgIsOwnBaseExitObjective(team, finalTarget))
         return false;
 
     std::vector<Position> route = RTG_WsgBuildCarrierHomeRoute(team, stableRole);
@@ -2521,6 +2543,18 @@ bool BGTactics::wsJumpDown()
             MoveTo(mapId, 1134.380f, 1370.130f, 312.741f);
             return true;
         }
+
+        // Broader own-GY ledge catch: bots may leave the graveyard by the cliff,
+        // but this is strictly one-way down. Do not ever use this as an approach
+        // back up to the graveyard.
+        float const x = bot->GetPositionX();
+        float const y = bot->GetPositionY();
+        float const z = bot->GetPositionZ();
+        if (x >= 1018.0f && x <= 1064.0f && y >= 1380.0f && y <= 1432.0f && z >= 336.0f)
+        {
+            MoveTo(mapId, 1057.076f, 1393.081f, 339.505f);
+            return true;
+        }
     }
     else if (team == TEAM_ALLIANCE)
     {
@@ -2542,6 +2576,15 @@ bool BGTactics::wsJumpDown()
         if (bot->GetDistance({1370.710f, 1543.550f, 321.585f}) < 4.0f)
         {
             MoveTo(mapId, 1339.410f, 1533.420f, 313.336f);
+            return true;
+        }
+
+        float const x = bot->GetPositionX();
+        float const y = bot->GetPositionY();
+        float const z = bot->GetPositionZ();
+        if (x >= 1396.0f && x <= 1430.0f && y >= 1540.0f && y <= 1564.0f && z >= 338.0f)
+        {
+            MoveTo(mapId, 1407.234f, 1551.658f, 343.432f);
             return true;
         }
     }
@@ -2928,6 +2971,12 @@ bool BGTactics::Execute(Event /*event*/)
             PositionInfo wsgObjective = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
             if (!wsgObjective.isSet())
                 selectObjective();
+
+            // WSG graveyard cliffs are exit-only. Non-carriers may drop from
+            // their own graveyard ledge to rejoin play, but objective routing is
+            // never allowed to climb back up those cliffs.
+            if (!RTG_WsgHasFlag(bot) && wsJumpDown())
+                return true;
 
             if (rtgWsgMoveToEnemyFlagObjective())
                 return true;
@@ -4295,23 +4344,31 @@ bool BGTactics::rtgWsgMoveToEnemyFlagObjective()
         return false;
 
     Position const finalTarget(pos.x, pos.y, pos.z, 0.0f);
-    if (!RTG_WsgIsEnemyFlagRoomObjective(team, finalTarget))
-        return false;
 
     uint32 const role = context->GetValue<uint32>("bg role")->Get();
     uint32 const stableRole = RTG_WsgStableRole(bot, role);
 
     Position routeStep;
-    if (!RTG_WsgGetEnemyFlagRouteStep(bot, team, finalTarget, stableRole, routeStep))
+    if (RTG_WsgIsEnemyFlagRoomObjective(team, finalTarget) ||
+        RTG_WsgIsEnemyBaseExitObjective(team, finalTarget))
+    {
+        if (!RTG_WsgGetEnemyFlagRouteStep(bot, team, finalTarget, stableRole, routeStep))
+            return false;
+    }
+    else if (RTG_WsgIsOwnFlagRoomObjective(team, finalTarget) ||
+             RTG_WsgIsOwnBaseExitObjective(team, finalTarget))
+    {
+        if (!RTG_WsgGetCarrierHomeRouteStep(bot, team, finalTarget, stableRole, routeStep))
+            return false;
+    }
+    else
         return false;
 
-    float const approach = routeStep.GetExactDist(finalTarget.GetPositionX(), finalTarget.GetPositionY(),
-                                                 finalTarget.GetPositionZ()) <= 5.0f ? 1.5f : 3.0f;
-
-    if (MoveNear(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ(), approach))
+    if (MoveTo(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ(),
+               false, false, true, false, MovementPriority::MOVEMENT_NORMAL, true))
         return true;
 
-    return MoveTo(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ());
+    return true;
 }
 
 bool BGTactics::rtgWsgMoveFlagCarrier()
@@ -4556,6 +4613,15 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     }
 
     float const approach = finalRouteStep ? (ownFlagTaken ? 3.5f : 0.5f) : 3.0f;
+    if (!finalRouteStep || !ownFlagTaken)
+    {
+        if (MoveTo(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+                   false, false, true, false, MovementPriority::MOVEMENT_NORMAL, true))
+            return true;
+
+        return true;
+    }
+
     if (MoveNear(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), approach))
         return true;
 
