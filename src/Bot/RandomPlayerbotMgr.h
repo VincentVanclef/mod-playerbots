@@ -13,8 +13,10 @@
 #include "GameTime.h"
 #include "PlayerbotCommandServer.h"
 
+#include <list>
 #include <set>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 struct BattlegroundInfo
@@ -72,6 +74,13 @@ struct LfgDemandInfo
 };
 
 struct QueueDemandOfflineCandidate
+{
+    uint32 guid = 0;
+    uint8 cls = 0;
+    uint8 race = 0;
+};
+
+struct RandomBotCharacterInfo
 {
     uint32 guid = 0;
     uint8 cls = 0;
@@ -270,6 +279,10 @@ private:
     uint32 SetEventValue(uint32 bot, std::string const& event, uint32 value, uint32 validIn,
                          std::string const& data = "");
     void GetBots();
+    std::vector<RandomBotCharacterInfo> LoadCharactersForAccounts(std::vector<uint32> const& accountIds);
+    bool HasCurrentBot(uint32 bot) const;
+    void AddCurrentBot(uint32 bot);
+    void RemoveCurrentBot(uint32 bot);
     std::vector<uint32> GetBgBots(uint32 bracket);
     void ProtectRealPlayerBattlegroundSeats();
     bool DisplaceBattlegroundBotForRealPlayer(BattlegroundQueueTypeId queueTypeId, BattlegroundBracketId bracketId,
@@ -311,6 +324,7 @@ private:
     std::map<TeamId, std::map<BattlegroundTypeId, std::vector<uint32>>> BattleMastersCache;
     std::unordered_map<uint32, BotEventCache> eventCache;
     std::list<uint32> currentBots;
+    std::unordered_set<uint32> currentBotSet;
     uint32 bgBotsCount;
     uint32 playersLevel;
 

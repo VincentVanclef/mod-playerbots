@@ -56,8 +56,8 @@ public:
         return instance;
     }
 
-    PerfMonitorOperation* start(PerformanceMetric metric, std::string const name,
-                                       PerformanceStack* stack = nullptr);
+    PerfMonitorOperation* start(PerformanceMetric metric, std::string const& name,
+                                PerformanceStack* stack = nullptr);
     void PrintStats(bool perTick = false, bool fullStack = false);
     void Reset();
 

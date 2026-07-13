@@ -7,8 +7,8 @@
 
 #include "Playerbots.h"
 
-PerfMonitorOperation* PerfMonitor::start(PerformanceMetric metric, std::string const name,
-                                                       PerformanceStack* stack)
+PerfMonitorOperation* PerfMonitor::start(PerformanceMetric metric, std::string const& name,
+                                         PerformanceStack* stack)
 {
     if (!sPlayerbotAIConfig.perfMonEnabled)
         return nullptr;

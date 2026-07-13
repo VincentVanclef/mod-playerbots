@@ -358,7 +358,7 @@ void RandomPlayerbotMgr::UpdateAIInternal(uint32 /*elapsed*/, bool /*minimal*/)
     }
 
     GetBots();
-    std::list<uint32> availableBots = currentBots;
+    std::vector<uint32> availableBots(currentBots.begin(), currentBots.end());
     uint32 availableBotCount = availableBots.size();
     uint32 onlineBotCount = playerBots.size();
 
@@ -734,47 +734,21 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
             accountsToUse = rndBotTypeAccounts;
         }
 
-        // Pre-map all characters from selected accounts
-        struct CharacterInfo
-        {
-            uint32 guid;
-            uint8 rClass;
-            uint8 rRace;
-            uint32 accountId;
-        };
-        std::vector<CharacterInfo> allCharacters;
-
-        for (uint32 accountId : accountsToUse)
-        {
-            CharacterDatabasePreparedStatement* stmt =
-                CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
-            stmt->SetData(0, accountId);
-            PreparedQueryResult result = CharacterDatabase.Query(stmt);
-            if (!result)
-                continue;
-
-            do
-            {
-                Field* fields = result->Fetch();
-                CharacterInfo info;
-                info.guid = fields[0].Get<uint32>();
-                info.rClass = fields[1].Get<uint8>();
-                info.rRace = fields[2].Get<uint8>();
-                info.accountId = accountId;
-                allCharacters.push_back(info);
-            } while (result->NextRow());
-        }
+        // Pre-map all characters from selected accounts in bounded IN() batches.
+        // The old implementation issued one synchronous character query per account,
+        // which could stall the world thread when a real player caused bots to log in.
+        std::vector<RandomBotCharacterInfo> allCharacters = LoadCharactersForAccounts(accountsToUse);
 
         // Shuffle for class balance
         std::shuffle(allCharacters.begin(), allCharacters.end(), rng);
 
         // Separate characters by faction for phased login
-        std::vector<CharacterInfo> allianceChars;
-        std::vector<CharacterInfo> hordeChars;
+        std::vector<RandomBotCharacterInfo> allianceChars;
+        std::vector<RandomBotCharacterInfo> hordeChars;
 
         for (auto const& charInfo : allCharacters)
         {
-            if (IsAlliance(charInfo.rRace))
+            if (IsAlliance(charInfo.race))
                 allianceChars.push_back(charInfo);
 
             else
@@ -782,13 +756,13 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
         }
 
         // Lambda to handle bot login logic
-        auto tryLoginBot = [&](const CharacterInfo& charInfo) -> bool
+        auto tryLoginBot = [&](RandomBotCharacterInfo const& charInfo) -> bool
         {
             if (GetEventValue(charInfo.guid, "add") ||
                 GetEventValue(charInfo.guid, "logout") ||
                 GetPlayerBot(charInfo.guid) ||
-                std::find(currentBots.begin(), currentBots.end(), charInfo.guid) != currentBots.end() ||
-                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.rClass == CLASS_DEATH_KNIGHT))
+                HasCurrentBot(charInfo.guid) ||
+                (sPlayerbotAIConfig.disableDeathKnightLogin && charInfo.cls == CLASS_DEATH_KNIGHT))
             {
                 return false;
             }
@@ -800,7 +774,7 @@ uint32 RandomPlayerbotMgr::AddRandomBots()
 
             SetEventValue(charInfo.guid, "add", 1, add_time);
             SetEventValue(charInfo.guid, "logout", 0, 0);
-            currentBots.push_back(charInfo.guid);
+            AddCurrentBot(charInfo.guid);
 
             return true;
         };
@@ -1766,24 +1740,13 @@ void RandomPlayerbotMgr::RefreshQueueDemandOfflineCandidates(bool force)
     queueDemandOfflineCandidatesLoadedAt = now;
     queueDemandOfflineCandidates.clear();
 
-    for (uint32 accountId : rndBotTypeAccounts)
+    for (RandomBotCharacterInfo const& character : LoadCharactersForAccounts(rndBotTypeAccounts))
     {
-        CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_CHARS_BY_ACCOUNT_ID);
-        stmt->SetData(0, accountId);
-        PreparedQueryResult result = CharacterDatabase.Query(stmt);
-        if (!result)
-            continue;
-
-        do
-        {
-            Field* fields = result->Fetch();
-            QueueDemandOfflineCandidate info;
-            info.guid = fields[0].Get<uint32>();
-            info.cls = fields[1].Get<uint8>();
-            info.race = fields[2].Get<uint8>();
-
-            queueDemandOfflineCandidates.push_back(info);
-        } while (result->NextRow());
+        QueueDemandOfflineCandidate info;
+        info.guid = character.guid;
+        info.cls = character.cls;
+        info.race = character.race;
+        queueDemandOfflineCandidates.push_back(info);
     }
 
     LOG_DEBUG("playerbots", "RTG demand: refreshed offline candidate cache with {} characters",
@@ -1825,7 +1788,7 @@ bool RandomPlayerbotMgr::TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint
             continue;
 
         if (GetEventValue(info.guid, "add") || GetEventValue(info.guid, "logout") ||
-            std::find(currentBots.begin(), currentBots.end(), info.guid) != currentBots.end() ||
+            HasCurrentBot(info.guid) ||
             GetPlayerBot(ObjectGuid::Create<HighGuid::Player>(info.guid)))
             continue;
 
@@ -1859,7 +1822,7 @@ bool RandomPlayerbotMgr::TryLoginQueueDemandBot(uint32 mode, TeamId teamId, uint
     SetEventValue(candidate.guid, "randomize", 0, 0);
     SetEventValue(candidate.guid, "teleport", 0, 0);
     SetEventValue(candidate.guid, "update", 0, 0);
-    currentBots.push_back(candidate.guid);
+    AddCurrentBot(candidate.guid);
 
     LOG_DEBUG("playerbots", "RTG demand: queued offline bot #{} class {} level {} for {} as {} spec#{}",
              candidate.guid, candidate.cls, targetLevel, RTGQueueDemandModeName(mode), RTGQueueDemandRoleName(roleMask),
@@ -1887,7 +1850,7 @@ bool RandomPlayerbotMgr::RetireIdleQueueDemandBot(uint32 mode, TeamId teamId, ui
 
         SetEventValue(botId, "add", 0, 0);
         SetEventValue(botId, "logout", 1, std::max<uint32>(30, sPlayerbotAIConfig.randomBotQueueDemandRetireCooldown));
-        currentBots.remove(botId);
+        RemoveCurrentBot(botId);
         LogoutPlayerBot(bot->GetGUID());
         return true;
     }
@@ -2164,7 +2127,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
                 LOG_DEBUG("playerbots", "Bot #{}: log out", bot);
 
             SetEventValue(bot, "add", 0, 0);
-            currentBots.remove(bot);
+            RemoveCurrentBot(bot);
 
             if (player)
                 LogoutPlayerBot(botGUID);
@@ -2247,7 +2210,7 @@ bool RandomPlayerbotMgr::ProcessBot(uint32 bot)
         LOG_DEBUG("playerbots", "Bot #{} {}:{} <{}>: log out", bot, IsAlliance(player->getRace()) ? "A" : "H",
                   player->GetLevel(), player->GetName().c_str());
         LogoutPlayerBot(botGUID);
-        currentBots.remove(bot);
+        RemoveCurrentBot(bot);
         SetEventValue(bot, "logout", 1,
                       urand(sPlayerbotAIConfig.minRandomBotInWorldTime, sPlayerbotAIConfig.maxRandomBotInWorldTime));
         return true;
@@ -2956,7 +2919,7 @@ bool RandomPlayerbotMgr::IsRandomBot(ObjectGuid::LowType bot)
     if (!sPlayerbotAIConfig.IsInRandomAccountList(sCharacterCache->GetCharacterAccountIdByGuid(guid)))
         return false;
 
-    if (std::find(currentBots.begin(), currentBots.end(), bot) != currentBots.end())
+    if (HasCurrentBot(bot))
         return true;
 
     return false;
@@ -3007,29 +2970,93 @@ bool RandomPlayerbotMgr::IsAddclassBot(ObjectGuid::LowType bot)
     return false;
 }
 
+std::vector<RandomBotCharacterInfo> RandomPlayerbotMgr::LoadCharactersForAccounts(std::vector<uint32> const& accountIds)
+{
+    std::vector<RandomBotCharacterInfo> characters;
+    if (accountIds.empty())
+        return characters;
+
+    // Keep each SQL statement comfortably below packet/query limits while replacing
+    // hundreds of one-account synchronous queries with a handful of indexed reads.
+    static constexpr size_t ACCOUNT_BATCH_SIZE = 250;
+    characters.reserve(accountIds.size() * 10);
+
+    for (size_t begin = 0; begin < accountIds.size(); begin += ACCOUNT_BATCH_SIZE)
+    {
+        size_t const end = std::min(accountIds.size(), begin + ACCOUNT_BATCH_SIZE);
+        std::ostringstream ids;
+        for (size_t i = begin; i < end; ++i)
+        {
+            if (i != begin)
+                ids << ',';
+            ids << accountIds[i];
+        }
+
+        QueryResult result = CharacterDatabase.Query(
+            "SELECT `guid`, `class`, `race` FROM `characters` WHERE `account` IN ({})",
+            ids.str());
+        if (!result)
+            continue;
+
+        do
+        {
+            Field* fields = result->Fetch();
+            RandomBotCharacterInfo info;
+            info.guid = fields[0].Get<uint32>();
+            info.cls = fields[1].Get<uint8>();
+            info.race = fields[2].Get<uint8>();
+            characters.push_back(info);
+        } while (result->NextRow());
+    }
+
+    return characters;
+}
+
+bool RandomPlayerbotMgr::HasCurrentBot(uint32 bot) const
+{
+    return currentBotSet.find(bot) != currentBotSet.end();
+}
+
+void RandomPlayerbotMgr::AddCurrentBot(uint32 bot)
+{
+    if (bot && currentBotSet.insert(bot).second)
+        currentBots.push_back(bot);
+}
+
+void RandomPlayerbotMgr::RemoveCurrentBot(uint32 bot)
+{
+    if (!bot)
+        return;
+
+    currentBotSet.erase(bot);
+    currentBots.remove(bot);
+}
+
 void RandomPlayerbotMgr::GetBots()
 {
     if (!currentBots.empty())
         return;
 
-    PlayerbotsDatabasePreparedStatement* stmt =
-        PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_SEL_RANDOM_BOTS_BY_OWNER_AND_EVENT);
-    stmt->SetData(0, 0);
-    stmt->SetData(1, "add");
-    uint32 maxAllowedBotCount = GetEventValue(0, "bot_count");
-    if (PreparedQueryResult result = PlayerbotsDatabase.Query(stmt))
-    {
-        do
-        {
-            Field* fields = result->Fetch();
-            uint32 bot = fields[0].Get<uint32>();
-            if (GetEventValue(bot, "add"))
-                currentBots.push_back(bot);
+    uint32 const maxAllowedBotCount = GetEventValue(0, "bot_count");
+    uint32 const now = NowSeconds();
 
-            if (currentBots.size() >= maxAllowedBotCount)
-                break;
-        } while (result->NextRow());
-    }
+    // Read the active add events directly. The previous path selected the bot ids and
+    // then synchronously loaded each bot's complete event cache just to re-check the
+    // same add event, creating an N+1 query burst when the current-bot list was rebuilt.
+    QueryResult result = PlayerbotsDatabase.Query(
+        "SELECT `bot` FROM `playerbots_random_bots` "
+        "WHERE `owner` = 0 AND `event` = 'add' AND `value` <> 0 "
+        "AND (`validIn` IS NULL OR `validIn` = 0 OR (`time` + `validIn`) > {})",
+        now);
+    if (!result)
+        return;
+
+    do
+    {
+        AddCurrentBot(result->Fetch()[0].Get<uint32>());
+        if (currentBots.size() >= maxAllowedBotCount)
+            break;
+    } while (result->NextRow());
 }
 
 std::vector<uint32> RandomPlayerbotMgr::GetBgBots(uint32 bracket)
@@ -3493,7 +3520,7 @@ void RandomPlayerbotMgr::OnPlayerLogin(Player* player)
 void RandomPlayerbotMgr::OnPlayerLoginError(uint32 bot)
 {
     SetEventValue(bot, "add", 0, 0);
-    currentBots.remove(bot);
+    RemoveCurrentBot(bot);
 }
 
 Player* RandomPlayerbotMgr::GetRandomPlayer()
