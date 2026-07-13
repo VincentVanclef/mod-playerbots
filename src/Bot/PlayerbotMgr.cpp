@@ -19,6 +19,7 @@
 #include "Common.h"
 #include "Define.h"
 #include "Group.h"
+#include "ItemTemplate.h"
 #include "GuildMgr.h"
 #include "ObjectAccessor.h"
 #include "ObjectGuid.h"
@@ -67,6 +68,183 @@ private:
 
 std::unordered_set<ObjectGuid> BotInitGuard::botsBeingInitialized;
 std::unordered_map<ObjectGuid, uint32> PlayerbotHolder::botLoading;
+
+namespace
+{
+constexpr uint32 RTG_MAIL_ARMOR_PROFICIENCY = 8737;
+constexpr uint32 RTG_PLATE_ARMOR_PROFICIENCY = 750;
+
+uint32 RTGGetMaximumArmorSubclass(uint8 playerClass, uint8 level)
+{
+    switch (playerClass)
+    {
+        case CLASS_MAGE:
+        case CLASS_PRIEST:
+        case CLASS_WARLOCK:
+            return ITEM_SUBCLASS_ARMOR_CLOTH;
+        case CLASS_ROGUE:
+        case CLASS_DRUID:
+            return ITEM_SUBCLASS_ARMOR_LEATHER;
+        case CLASS_HUNTER:
+        case CLASS_SHAMAN:
+            return level >= 40 ? ITEM_SUBCLASS_ARMOR_MAIL : ITEM_SUBCLASS_ARMOR_LEATHER;
+        case CLASS_WARRIOR:
+        case CLASS_PALADIN:
+            return level >= 40 ? ITEM_SUBCLASS_ARMOR_PLATE : ITEM_SUBCLASS_ARMOR_MAIL;
+        case CLASS_DEATH_KNIGHT:
+            return ITEM_SUBCLASS_ARMOR_PLATE;
+        default:
+            return ITEM_SUBCLASS_ARMOR_CLOTH;
+    }
+}
+
+bool RTGIsArmorTooHeavy(ItemTemplate const* itemTemplate, uint8 playerClass, uint8 level)
+{
+    if (!itemTemplate || itemTemplate->Class != ITEM_CLASS_ARMOR)
+        return false;
+
+    switch (itemTemplate->SubClass)
+    {
+        case ITEM_SUBCLASS_ARMOR_CLOTH:
+        case ITEM_SUBCLASS_ARMOR_LEATHER:
+        case ITEM_SUBCLASS_ARMOR_MAIL:
+        case ITEM_SUBCLASS_ARMOR_PLATE:
+            return itemTemplate->SubClass > RTGGetMaximumArmorSubclass(playerClass, level);
+        default:
+            return false;
+    }
+}
+
+void RTGCleanupRandomBotBeforeLogin(ObjectGuid playerGuid)
+{
+    uint32 const guid = playerGuid.GetCounter();
+
+    QueryResult characterResult = CharacterDatabase.Query(
+        "SELECT level, class, race FROM characters WHERE guid = {}", guid);
+    if (!characterResult)
+        return;
+
+    Field* characterFields = characterResult->Fetch();
+    uint8 const level = characterFields[0].Get<uint8>();
+    uint8 const playerClass = characterFields[1].Get<uint8>();
+    uint8 const race = characterFields[2].Get<uint8>();
+
+    // Remove stale level-40 armor proficiency rows before the login spell query
+    // is built. This prevents repeated duplicate-key INSERT attempts.
+    if (level < 40)
+    {
+        CharacterDatabase.DirectExecute(
+            "DELETE FROM character_spell WHERE guid = {} AND spell IN ({}, {})",
+            guid, RTG_MAIL_ARMOR_PROFICIENCY, RTG_PLATE_ARMOR_PROFICIENCY);
+    }
+
+    std::vector<uint32> invalidEquippedItems;
+    QueryResult inventoryResult = CharacterDatabase.Query(
+        "SELECT ci.item, ii.itemEntry "
+        "FROM character_inventory ci "
+        "INNER JOIN item_instance ii ON ii.guid = ci.item "
+        "WHERE ci.guid = {} AND ci.bag = 0 AND ci.slot < {}",
+        guid, EQUIPMENT_SLOT_END);
+
+    if (inventoryResult)
+    {
+        uint32 const classMask = playerClass ? (1u << (playerClass - 1)) : 0;
+        uint32 const raceMask = race ? (1u << (race - 1)) : 0;
+
+        do
+        {
+            Field* fields = inventoryResult->Fetch();
+            uint32 const itemGuid = fields[0].Get<uint32>();
+            uint32 const itemEntry = fields[1].Get<uint32>();
+            ItemTemplate const* itemTemplate = sObjectMgr->GetItemTemplate(itemEntry);
+
+            bool invalid = !itemTemplate;
+            if (itemTemplate)
+            {
+                invalid = itemTemplate->RequiredLevel > level;
+
+                if (!invalid && itemTemplate->AllowableClass != -1)
+                    invalid = (static_cast<uint32>(itemTemplate->AllowableClass) & classMask) == 0;
+
+                if (!invalid && itemTemplate->AllowableRace != -1)
+                    invalid = (static_cast<uint32>(itemTemplate->AllowableRace) & raceMask) == 0;
+
+                if (!invalid)
+                    invalid = RTGIsArmorTooHeavy(itemTemplate, playerClass, level);
+            }
+
+            if (invalid)
+                invalidEquippedItems.push_back(itemGuid);
+        } while (inventoryResult->NextRow());
+    }
+
+    if (!invalidEquippedItems.empty())
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        for (uint32 itemGuid : invalidEquippedItems)
+        {
+            trans->Append("DELETE FROM item_refund_instance WHERE item_guid = {}", itemGuid);
+            trans->Append("DELETE FROM item_soulbound_trade_data WHERE itemGuid = {}", itemGuid);
+            trans->Append("DELETE FROM character_inventory WHERE item = {}", itemGuid);
+            trans->Append("DELETE FROM item_instance WHERE guid = {}", itemGuid);
+        }
+        CharacterDatabase.DirectCommitTransaction(trans);
+
+        LOG_DEBUG("playerbots",
+            "RTG bot pre-login cleanup discarded {} invalid equipped item(s) for bot GUID {}",
+            invalidEquippedItems.size(), guid);
+    }
+
+    // Delete only automatic retrieval mail already created by earlier invalid
+    // bot logins. Player-sent mail and all real-player mail remain untouched.
+    std::vector<uint32> retrievalMailIds;
+    std::vector<uint32> retrievalItemGuids;
+    QueryResult mailResult = CharacterDatabase.Query(
+        "SELECT id FROM mail "
+        "WHERE receiver = {} AND sender = {} "
+        "AND body = 'There were problems with equipping item(s).'",
+        guid, guid);
+
+    if (mailResult)
+    {
+        do
+        {
+            uint32 const mailId = mailResult->Fetch()[0].Get<uint32>();
+            retrievalMailIds.push_back(mailId);
+
+            QueryResult mailItemResult = CharacterDatabase.Query(
+                "SELECT item_guid FROM mail_items WHERE mail_id = {}", mailId);
+            if (mailItemResult)
+            {
+                do
+                {
+                    retrievalItemGuids.push_back(mailItemResult->Fetch()[0].Get<uint32>());
+                } while (mailItemResult->NextRow());
+            }
+        } while (mailResult->NextRow());
+    }
+
+    if (!retrievalMailIds.empty())
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        for (uint32 mailId : retrievalMailIds)
+            trans->Append("DELETE FROM mail_items WHERE mail_id = {}", mailId);
+        for (uint32 itemGuid : retrievalItemGuids)
+        {
+            trans->Append("DELETE FROM item_refund_instance WHERE item_guid = {}", itemGuid);
+            trans->Append("DELETE FROM item_soulbound_trade_data WHERE itemGuid = {}", itemGuid);
+            trans->Append("DELETE FROM item_instance WHERE guid = {}", itemGuid);
+        }
+        for (uint32 mailId : retrievalMailIds)
+            trans->Append("DELETE FROM mail WHERE id = {}", mailId);
+        CharacterDatabase.DirectCommitTransaction(trans);
+
+        LOG_DEBUG("playerbots",
+            "RTG bot pre-login cleanup removed {} retrieval mail(s) for bot GUID {}",
+            retrievalMailIds.size(), guid);
+    }
+}
+}
 
 PlayerbotHolder::PlayerbotHolder() : PlayerbotAIBase(false) {}
 class PlayerbotLoginQueryHolder : public LoginQueryHolder
@@ -145,6 +323,12 @@ void PlayerbotHolder::AddPlayerBot(ObjectGuid playerGuid, uint32 masterAccountId
         }
         return;
     }
+    // Random bots do not need recovery mail for gear that became invalid after
+    // a forced level reduction. Clean their stale proficiencies and equipped
+    // items before the core loads inventory and decides to mail them.
+    if (isRndbot)
+        RTGCleanupRandomBotBeforeLogin(playerGuid);
+
     std::shared_ptr<PlayerbotLoginQueryHolder> holder =
         std::make_shared<PlayerbotLoginQueryHolder>(masterAccountId, accountId, playerGuid);
     if (!holder->Initialize())

@@ -92,6 +92,16 @@ bool RTGSpellOrLearnEffectsKnown(Player* bot, uint32 spellId)
 
 void RTGLearnSpellIfMissing(Player* bot, uint32 spellId, bool dependent = false)
 {
+    if (!bot)
+        return;
+
+    // Mail (8737) and Plate Mail (750) are level-40 armor proficiencies.
+    // RTG random bots are normally level 19, and their custom spell data can
+    // report a lower spell level than the actual proficiency unlock. Never
+    // attempt to relearn these while the bot is below level 40.
+    if (bot->GetLevel() < 40 && (spellId == 750 || spellId == 8737))
+        return;
+
     if (RTGSpellOrLearnEffectsKnown(bot, spellId))
         return;
 
@@ -249,6 +259,11 @@ bool IsRTGSpellAllowedForBotLevel(Player* bot, uint32 spellId)
         return false;
 
     uint32 const botLevel = bot->GetLevel();
+
+    // These proficiency spells unlock at level 40 even when custom DBC data
+    // exposes a lower BaseLevel/SpellLevel. Keep them off level-19 bots.
+    if (botLevel < 40 && (spellId == 750 || spellId == 8737))
+        return false;
 
     if (GetRTGSpellRequiredLevel(spellInfo) > botLevel)
         return false;
