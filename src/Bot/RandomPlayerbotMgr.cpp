@@ -3053,7 +3053,17 @@ void RandomPlayerbotMgr::GetBots()
 
     do
     {
-        AddCurrentBot(result->Fetch()[0].Get<uint32>());
+        uint32 const bot = result->Fetch()[0].Get<uint32>();
+
+        // SetEventValue commits through the DB worker but updates eventCache immediately.
+        // Trust the filtered database row on a cold cache, but let an already-loaded
+        // in-memory state veto it so a just-retired bot cannot be resurrected during
+        // the short asynchronous commit window. The short circuit also avoids restoring
+        // the old one-query-per-bot event-cache load during a normal list rebuild.
+        auto const cacheIt = eventCache.find(bot);
+        if (cacheIt == eventCache.end() || !cacheIt->second.loaded || GetEventValue(bot, "add"))
+            AddCurrentBot(bot);
+
         if (currentBots.size() >= maxAllowedBotCount)
             break;
     } while (result->NextRow());
