@@ -103,6 +103,15 @@ struct RTGObjectiveBrainState
 
 std::unordered_map<uint64, RTGObjectiveBrainState> RTGObjectiveStates;
 
+struct RTGTeamSizeCacheEntry
+{
+    uint32 sampledAtMs = 0;
+    uint32 count = 0;
+};
+
+std::unordered_map<uint64, RTGTeamSizeCacheEntry> RTGTeamSizeCache;
+constexpr uint32 RTG_TEAM_SIZE_CACHE_MS = 250;
+
 BattlegroundTypeId RTG_GetRealBgType(Battleground* bg)
 {
     if (!bg)
@@ -270,12 +279,36 @@ uint32 RTG_TeamSize(Battleground* bg, TeamId team)
     if (!bg || !bg->GetBgMap())
         return 0;
 
+    uint32 const now = getMSTime();
+    uint64 const cacheKey = (uint64(bg->GetInstanceID()) << 8) | uint64(uint32(team) & 0xFFu);
+    auto cacheItr = RTGTeamSizeCache.find(cacheKey);
+    if (cacheItr != RTGTeamSizeCache.end() &&
+        getMSTimeDiff(cacheItr->second.sampledAtMs, now) < RTG_TEAM_SIZE_CACHE_MS)
+    {
+        return cacheItr->second.count;
+    }
+
     uint32 count = 0;
     for (auto& ref : bg->GetBgMap()->GetPlayers())
     {
         Player* player = ref.GetSource();
         if (player && RTG_GetEffectiveBgTeam(player) == team)
             ++count;
+    }
+
+    RTGTeamSizeCache[cacheKey] = { now, count };
+
+    // Avoid retaining instance ids forever on long uptimes. This runs only after
+    // the small cache has grown beyond normal active-BG usage.
+    if (RTGTeamSizeCache.size() > 64)
+    {
+        for (auto itr = RTGTeamSizeCache.begin(); itr != RTGTeamSizeCache.end();)
+        {
+            if (getMSTimeDiff(itr->second.sampledAtMs, now) > 5000u)
+                itr = RTGTeamSizeCache.erase(itr);
+            else
+                ++itr;
+        }
     }
 
     return count;
@@ -1424,8 +1457,28 @@ bool RTG_ShouldHoldBattlegroundObjective(PlayerbotAI* botAI, PositionInfo const&
 void RTG_ClearBattlegroundObjective(PlayerbotAI* botAI)
 {
     Player* bot = botAI ? botAI->GetBot() : nullptr;
-    Battleground* bg = bot ? bot->GetBattleground() : nullptr;
+    if (!bot)
+        return;
+
+    Battleground* bg = bot->GetBattleground();
     uint64 const key = RTG_StateKey(bot, bg);
     if (key)
+    {
         RTGObjectiveStates.erase(key);
+        RTGTeamSizeCache.erase((uint64(bg->GetInstanceID()) << 8) | uint64(uint32(TEAM_ALLIANCE)));
+        RTGTeamSizeCache.erase((uint64(bg->GetInstanceID()) << 8) | uint64(uint32(TEAM_HORDE)));
+        return;
+    }
+
+    // Once GetBattleground() is null the old key cannot be reconstructed. Remove
+    // any state whose low 32 bits belong to this bot so completed BG instances do
+    // not accumulate stale objective records for the lifetime of worldserver.
+    uint32 const guidLow = bot->GetGUID().GetCounter();
+    for (auto itr = RTGObjectiveStates.begin(); itr != RTGObjectiveStates.end();)
+    {
+        if (uint32(itr->first & 0xFFFFFFFFu) == guidLow)
+            itr = RTGObjectiveStates.erase(itr);
+        else
+            ++itr;
+    }
 }
