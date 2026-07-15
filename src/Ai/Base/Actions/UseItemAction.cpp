@@ -9,6 +9,7 @@
 #include "Event.h"
 #include "ItemPackets.h"
 #include "ItemUsageValue.h"
+#include "MotionMaster.h"
 #include "PlayerbotTextMgr.h"
 #include "Playerbots.h"
 
@@ -67,6 +68,32 @@ bool UseItemAction::UseItem(Item* item, ObjectGuid goGuid, Item* itemTarget, Uni
 {
     if (bot->CanUseItem(item) != EQUIP_ERR_OK)
         return false;
+
+    ItemTemplate const* proto = item->GetTemplate();
+    bool const isDrink = proto->Spells[0].SpellCategory == 59;
+    bool const isFood = proto->Spells[0].SpellCategory == 11;
+    bool const isRestConsumable = proto->Class == ITEM_CLASS_CONSUMABLE &&
+        (proto->SubClass == ITEM_SUBCLASS_FOOD || proto->SubClass == ITEM_SUBCLASS_CONSUMABLE) &&
+        (isFood || isDrink);
+
+    // Rest commands must stop first, not merely request a retry. Chat command
+    // events are consumed after one execution attempt, and CanCastSpell can
+    // reject food or water while the bot is still following the group.
+    if (isRestConsumable)
+    {
+        bot->AttackStop();
+        bot->ClearUnitState(UNIT_STATE_CHASE);
+        bot->ClearUnitState(UNIT_STATE_FOLLOW);
+
+        if (bot->isMoving())
+            bot->StopMoving();
+
+        if (MotionMaster* motion = bot->GetMotionMaster())
+            motion->Clear();
+
+        botAI->InterruptSpell();
+        bot->SetStandState(UNIT_STAND_STATE_SIT);
+    }
 
     if (bot->IsNonMeleeSpellCast(false))
         return false;
@@ -189,9 +216,19 @@ bool UseItemAction::UseItem(Item* item, ObjectGuid goGuid, Item* itemTarget, Uni
     if (bot->isMoving())
     {
         bot->StopMoving();
-        botAI->SetNextCheckDelay(sPlayerbotAIConfig.globalCoolDown);
-        return false;
+
+        // Chat commands are one-shot events. Food and drink used to stop a
+        // moving bot and then return false, consuming the command before the
+        // item was ever used. Continue immediately for rest consumables.
+        if (!isRestConsumable)
+        {
+            botAI->SetNextCheckDelay(sPlayerbotAIConfig.globalCoolDown);
+            return false;
+        }
     }
+
+    if (isRestConsumable)
+        bot->SetStandState(UNIT_STAND_STATE_SIT);
 
     for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; i++)
     {
@@ -263,16 +300,12 @@ bool UseItemAction::UseItem(Item* item, ObjectGuid goGuid, Item* itemTarget, Uni
         }
     }
 
-    ItemTemplate const* proto = item->GetTemplate();
-    bool isDrink = proto->Spells[0].SpellCategory == 59;
-    bool isFood = proto->Spells[0].SpellCategory == 11;
-    if (proto->Class == ITEM_CLASS_CONSUMABLE &&
-        (proto->SubClass == ITEM_SUBCLASS_FOOD || proto->SubClass == ITEM_SUBCLASS_CONSUMABLE) && (isFood || isDrink))
+    if (isRestConsumable)
     {
         if (bot->IsInCombat())
             return false;
 
-        // bot->SetStandState(UNIT_STAND_STATE_SIT);
+        bot->SetStandState(UNIT_STAND_STATE_SIT);
         botAI->InterruptSpell();
         float hp = bot->GetHealthPct();
         float mp = bot->GetPower(POWER_MANA) * 100.0f / bot->GetMaxPower(POWER_MANA);
