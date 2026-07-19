@@ -6653,13 +6653,20 @@ uint32 PlayerbotAI::GetReactDelay()
 
     if (inBG)
     {
+        // FastReactInBG should mean the configured base delay in every BG state.
+        // The previous dynamic branch multiplied combat reactions by 2.5, so a
+        // loaded RTG config with ReactDelay=200 produced 500 ms combat ticks—
+        // twice as slow as the old 100 ms fallback configuration.
+        if (sPlayerbotAIConfig.fastReactInBG)
+            return base;
+
         if (bot->IsInCombat() || currentState == BOT_STATE_COMBAT)
         {
-            return static_cast<uint32>(base * (sPlayerbotAIConfig.fastReactInBG ? 2.5f : 5.0f));
+            return base * 5;
         }
         else
         {
-            return static_cast<uint32>(base * (sPlayerbotAIConfig.fastReactInBG ? 1.0f : 10.0f));
+            return base * 10;
         }
     }
 

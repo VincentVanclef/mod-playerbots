@@ -28,6 +28,7 @@ namespace
 constexpr uint32 RTG_BG_WS_SPELL_WARSONG_FLAG = 23333;
 constexpr uint32 RTG_BG_WS_SPELL_SILVERWING_FLAG = 23335;
 constexpr uint32 RTG_BG_EY_NETHERSTORM_FLAG_SPELL = 34976;
+constexpr uint32 RTG_EOTS_INVALID_NODE = EY_POINTS_MAX;
 
 constexpr uint32 RTG_OBJECTIVE_WSG_RETURN_OWN_FLAG = 1;
 constexpr uint32 RTG_OBJECTIVE_WSG_CAPTURE_ENEMY_FLAG = 2;
@@ -554,7 +555,10 @@ RTGTowerDef const* RTG_EotsTower(uint32 nodeId)
 
 bool RTG_EotsNodeOwned(BattlegroundEY* eyeBg, uint32 nodeId, TeamId team)
 {
-    return eyeBg && nodeId && eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId == team;
+    // POINT_FEL_REAVER is node 0, so node IDs must never be tested as booleans.
+    // Treating zero as "no node" made FRR invisible to ownership counts, carrier
+    // turn-ins, defense checks, and Horde's transition into away pressure.
+    return eyeBg && nodeId < EY_POINTS_MAX && eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId == team;
 }
 
 bool RTG_EotsIsHomeNode(TeamId team, uint32 nodeId)
@@ -569,6 +573,13 @@ bool RTG_EotsSplitSecond(uint32 stableRole, uint32 seed, uint32 salt)
 {
     uint32 const hash = seed * 1103515245u + stableRole * 12345u + salt;
     return ((hash >> 16) & 1u) != 0u;
+}
+
+uint32 RTG_EotsStrategyEpoch()
+{
+    // Rotate the offensive plan often enough that a failed tower push does not
+    // become the team's permanent strategy for the rest of the match.
+    return getMSTime() / 30000u;
 }
 
 uint32 RTG_EotsOwnedCount(BattlegroundEY* eyeBg, TeamId team)
@@ -619,7 +630,7 @@ uint32 RTG_EotsAssignedHomeNode(BattlegroundEY* eyeBg, TeamId team, uint32 stabl
         return RTG_EotsSplitSecond(stableRole, seed, 0xE0750004u) ? POINT_DRAENEI_RUINS : POINT_MAGE_TOWER;
     }
 
-    return 0;
+    return RTG_EOTS_INVALID_NODE;
 }
 
 uint32 RTG_EotsEnemyPressureNodeBySlot(TeamId team, uint32 slot)
@@ -630,26 +641,34 @@ uint32 RTG_EotsEnemyPressureNodeBySlot(TeamId team, uint32 slot)
     if (team == TEAM_ALLIANCE)
         return (slot % 2u) == 0u ? POINT_BLOOD_ELF : POINT_FEL_REAVER;
 
-    return 0;
+    return RTG_EOTS_INVALID_NODE;
 }
 
 bool RTG_EotsShouldPressureEnemyWithOneHome(uint32 stableRole, uint32 seed, uint32 teamSize)
 {
-    uint32 const slots = teamSize <= 6 ? 2u : (teamSize <= 10 ? 3u : 4u);
-    uint32 const ticket = (seed * 1103515245u + stableRole * 12345u + 0xE0750007u) % 10u;
+    // Owning one home tower is enough to launch a real away-team. Requiring
+    // almost everyone to recover the second home tower made Horde repeatedly
+    // grind BET while Alliance freely poached FRR and slowly won on resources.
+    uint32 const slots = teamSize <= 6 ? 5u : (teamSize <= 10 ? 6u : 7u);
+    uint32 const epoch = RTG_EotsStrategyEpoch();
+    uint32 const ticket =
+        (seed * 1103515245u + stableRole * 12345u + epoch * 2654435761u + 0xE0750007u) % 10u;
     return ticket < slots;
 }
 
 uint32 RTG_EotsAssignedEnemyNode(BattlegroundEY* eyeBg, TeamId team, uint32 stableRole, uint32 seed)
 {
-    uint32 const pressureSlot = stableRole + ((seed >> 4) & 1u);
+    // Change the preferred enemy-side tower every strategy epoch. Stable roles
+    // still keep a coordinated split, but the same bots no longer hammer the
+    // same failed lane forever.
+    uint32 const pressureSlot = stableRole + ((seed >> 4) & 1u) + RTG_EotsStrategyEpoch();
     uint32 const first = RTG_EotsEnemyPressureNodeBySlot(team, pressureSlot);
     uint32 const second = RTG_EotsEnemyPressureNodeBySlot(team, pressureSlot + 1u);
 
-    if (first && !RTG_EotsNodeOwned(eyeBg, first, team))
+    if (first < EY_POINTS_MAX && !RTG_EotsNodeOwned(eyeBg, first, team))
         return first;
 
-    if (second && !RTG_EotsNodeOwned(eyeBg, second, team))
+    if (second < EY_POINTS_MAX && !RTG_EotsNodeOwned(eyeBg, second, team))
         return second;
 
     for (RTGTowerDef const& tower : EOTS_TOWERS)
@@ -660,7 +679,7 @@ uint32 RTG_EotsAssignedEnemyNode(BattlegroundEY* eyeBg, TeamId team, uint32 stab
         if (!RTG_EotsNodeOwned(eyeBg, tower.nodeId, team))
             return tower.nodeId;
 
-    return 0;
+    return RTG_EOTS_INVALID_NODE;
 }
 
 uint32 RTG_EotsEnemyPressureAtTower(Battleground* bg, TeamId team, RTGTowerDef const& tower, float radius = 72.0f)
@@ -708,7 +727,7 @@ uint32 RTG_EotsAssignedThreatenedDefenseNode(Battleground* bg, BattlegroundEY* e
     }
 
     if (!threatenedCount)
-        return 0;
+        return RTG_EOTS_INVALID_NODE;
 
     return threatenedNodes[(stableRole + (seed >> 3)) % threatenedCount];
 }
@@ -756,7 +775,7 @@ bool RTG_EotsCenterFlagSpawned(Battleground* bg, PositionInfo& out)
 
 bool RTG_EotsNearestOwnedTower(Player* bot, BattlegroundEY* eyeBg, TeamId team, uint32& nodeId, PositionInfo& pos)
 {
-    nodeId = 0;
+    nodeId = RTG_EOTS_INVALID_NODE;
     float bestDist = FLT_MAX;
     for (RTGTowerDef const& tower : EOTS_TOWERS)
     {
@@ -772,7 +791,7 @@ bool RTG_EotsNearestOwnedTower(Player* bot, BattlegroundEY* eyeBg, TeamId team, 
         }
     }
 
-    return nodeId != 0;
+    return nodeId < EY_POINTS_MAX;
 }
 
 bool RTG_EotsShouldRunCenterFlag(Player* bot, uint32 stableRole, uint32 seed, uint32 ownedCount,
@@ -793,7 +812,15 @@ bool RTG_EotsShouldRunCenterFlag(Player* bot, uint32 stableRole, uint32 seed, ui
         return false;
 
     uint32 const pickupRank = RTG_ClassFlagPickupRank(bot);
-    uint32 const ticket = (seed * 1103515245u + stableRole * 12345u + 0xE07500F1u) % 10u;
+    uint32 const ticket =
+        (seed * 1103515245u + stableRole * 12345u + RTG_EotsStrategyEpoch() * 2654435761u +
+         0xE07500F1u) % 10u;
+
+    // With only one tower, flags are a side job—not the team plan. Keep at
+    // most a very small rotating pickup slice while the main force attacks.
+    if (ownedCount < 2)
+        return ticket < 1u;
+
     if (ticket < slots)
         return true;
 
@@ -887,7 +914,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
 
     if (RTG_IsEotsFlagCarrier(bot, eyeBg))
     {
-        uint32 nodeId = 0;
+        uint32 nodeId = RTG_EOTS_INVALID_NODE;
         PositionInfo pos;
         if (RTG_EotsNearestOwnedTower(bot, eyeBg, team, nodeId, pos))
         {
@@ -957,7 +984,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
                 out.role = RTGBgObjectiveRole::CaptureTower;
                 out.objectiveId = attackNode;
                 RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
-                out.minCommitMs = 22000;
+                out.minCommitMs = 12000;
                 out.reason = std::string("OneHomeAwayPressure") + tower->name;
                 return true;
             }
@@ -969,7 +996,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             out.role = RTGBgObjectiveRole::CaptureTower;
             out.objectiveId = nodeId;
             RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
-            out.minCommitMs = 30000;
+            out.minCommitMs = 15000;
             out.reason = nodeId == POINT_FEL_REAVER ? "NeedHomeTowerFRR" : "NeedSecondHomeTower";
             return true;
         }
@@ -1018,14 +1045,14 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
     }
 
     uint32 attackNode = RTG_EotsAssignedEnemyNode(eyeBg, team, stableRole, seed);
-    if (attackNode)
+    if (attackNode < EY_POINTS_MAX)
     {
         if (RTGTowerDef const* tower = RTG_EotsTower(attackNode))
         {
             out.role = RTGBgObjectiveRole::CaptureTower;
             out.objectiveId = attackNode;
             RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
-            out.minCommitMs = 30000;
+            out.minCommitMs = 14000;
             out.reason = std::string("Contest") + tower->name;
             return true;
         }
@@ -1103,12 +1130,12 @@ bool RTG_AssignmentStillValid(PlayerbotAI* botAI, Player* bot, Battleground* bg,
                 return !RTG_IsEotsFlagCarrier(bot, eyeBg) && RTG_EotsCenterFlagSpawned(bg, centerPos);
             }
             case RTGBgObjectiveRole::CaptureTower:
-                if (!assignment.objectiveId)
+                if (assignment.objectiveId >= EY_POINTS_MAX)
                     return elapsed < std::max<uint32>(assignment.minCommitMs, 12000);
                 // Reassign immediately after capture instead of sitting at the base
                 // for another eight seconds. Also refresh a failed push eventually.
                 return !RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team) &&
-                       elapsed < std::max<uint32>(assignment.minCommitMs, 45000);
+                       elapsed < std::max<uint32>(assignment.minCommitMs, 18000);
             case RTGBgObjectiveRole::DefendTower:
                 return RTG_EotsTowerThreatened(bg, eyeBg, team, assignment.objectiveId) &&
                        elapsed < std::max<uint32>(assignment.minCommitMs, 10000);
@@ -1157,9 +1184,15 @@ PositionInfo RTG_RecoveryPoint(Player* bot, Battleground* bg, RTGBgObjectiveAssi
 
     if (bgType == BATTLEGROUND_EY)
     {
-        if (RTGTowerDef const* tower = RTG_EotsTower(current.objectiveId))
-            return tower->nodeId == POINT_FEL_REAVER ? (team == TEAM_HORDE ? EOTS_HORDE_ROAD_FORK : tower->allianceApproach)
-                                                     : (team == TEAM_HORDE ? tower->hordeApproach : tower->allianceApproach);
+        if (RTG_IsTowerRole(current.role) && current.objectiveId < EY_POINTS_MAX)
+        {
+            if (RTGTowerDef const* tower = RTG_EotsTower(current.objectiveId))
+            {
+                return tower->nodeId == POINT_FEL_REAVER
+                    ? (team == TEAM_HORDE ? EOTS_HORDE_ROAD_FORK : tower->allianceApproach)
+                    : (team == TEAM_HORDE ? tower->hordeApproach : tower->allianceApproach);
+            }
+        }
 
         return team == TEAM_HORDE ? EOTS_HORDE_ROAD_FORK : EOTS_ALLIANCE_ROAD_FORK;
     }
@@ -1342,9 +1375,18 @@ bool RTG_SelectBattlegroundObjective(PlayerbotAI* botAI, RTGBgObjectiveAssignmen
 
     uint32 const jitter = bot->GetGUID().GetCounter() % 3000u;
     candidate.assignedAtMs = now;
-    candidate.minCommitMs = std::max<uint32>(candidate.minCommitMs, bgType == BATTLEGROUND_EY
-        ? sPlayerbotAIConfig.rtgBgEotsCommitMs
-        : sPlayerbotAIConfig.rtgBgWsgCommitMs);
+    if (bgType == BATTLEGROUND_EY)
+    {
+        // EotS roles already carry situation-specific commitment windows. Do
+        // not force every push back up to the global 20-second floor, or failed
+        // tower plans cannot rotate quickly enough to answer the live map.
+        candidate.minCommitMs = std::max<uint32>(5000, candidate.minCommitMs);
+    }
+    else
+    {
+        candidate.minCommitMs = std::max<uint32>(candidate.minCommitMs,
+                                                  sPlayerbotAIConfig.rtgBgWsgCommitMs);
+    }
     candidate.minCommitMs += jitter;
 
     state.assignment = candidate;

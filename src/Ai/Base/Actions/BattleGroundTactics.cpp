@@ -24,6 +24,7 @@
 #include "BattlegroundRV.h"
 #include "BattlegroundSA.h"
 #include "BattlegroundWS.h"
+#include "CheckMountStateAction.h"
 #include "Event.h"
 #include "GameObject.h"
 #include "IVMapMgr.h"
@@ -1274,6 +1275,8 @@ static std::unordered_map<uint32, Position> EY_NodePositions = {
     {POINT_MAGE_TOWER, Position(2284.7944f, 1731.2412f, 1189.8682f)}
 };
 
+static uint32 constexpr RTG_EOTS_INVALID_NODE = EY_POINTS_MAX;
+
 static TeamId RTG_BgEffectiveTeamId(Player* bot)
 {
     return RTG_GetEffectiveBgTeam(bot);
@@ -1282,6 +1285,82 @@ static TeamId RTG_BgEffectiveTeamId(Player* bot)
 static bool RTG_EotsUnitValidForObjective(Player* bot, Unit* unit)
 {
     return bot && unit && unit->IsInWorld() && unit->IsAlive() && unit->GetMapId() == bot->GetMapId();
+}
+
+static Player* RTG_EotsNearestEnemyPlayer(Player* bot, Battleground* bg, float maxRange)
+{
+    if (!bot || !bg || !bg->GetBgMap())
+        return nullptr;
+
+    TeamId const team = RTG_BgEffectiveTeamId(bot);
+    if (team != TEAM_ALLIANCE && team != TEAM_HORDE)
+        return nullptr;
+
+    Player* nearest = nullptr;
+    float nearestDistance = maxRange;
+    for (auto& ref : bg->GetBgMap()->GetPlayers())
+    {
+        Player* player = ref.GetSource();
+        if (!player || player == bot || !player->IsAlive() || player->GetMapId() != bot->GetMapId())
+            continue;
+
+        TeamId const playerTeam = RTG_BgEffectiveTeamId(player);
+        if (playerTeam == TEAM_NEUTRAL || playerTeam == team)
+            continue;
+
+        if (player->HasFlag(UNIT_FIELD_FLAGS,
+                            UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_NON_ATTACKABLE_2 | UNIT_FLAG_NOT_SELECTABLE))
+            continue;
+
+        float const distance = bot->GetDistance(player);
+        if (distance > nearestDistance || std::fabs(bot->GetPositionZ() - player->GetPositionZ()) > 30.0f)
+            continue;
+
+        if (!bot->IsWithinLOSInMap(player))
+            continue;
+
+        nearest = player;
+        nearestDistance = distance;
+    }
+
+    return nearest;
+}
+
+static bool RTG_EotsPrepareAggressiveContact(PlayerbotAI* botAI, Player* bot, Battleground* bg)
+{
+    if (!botAI || !bot || !bg || bot->GetMapId() != 566)
+        return false;
+
+    BattlegroundEY* eyeBg = dynamic_cast<BattlegroundEY*>(bg);
+    if (!eyeBg || bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) || eyeBg->GetFlagPickerGUID() == bot->GetGUID())
+        return false;
+
+    Unit* target = botAI->GetAiObjectContext()->GetValue<Unit*>("enemy player target")->Get();
+    if (!RTG_EotsUnitValidForObjective(bot, target) || bot->GetDistance(target) > 55.0f ||
+        std::fabs(bot->GetPositionZ() - target->GetPositionZ()) > 30.0f || !bot->IsWithinLOSInMap(target))
+    {
+        target = RTG_EotsNearestEnemyPlayer(bot, bg, 55.0f);
+    }
+
+    if (!target)
+        return false;
+
+    botAI->GetAiObjectContext()->GetValue<Unit*>("enemy player target")->Set(target);
+    botAI->GetAiObjectContext()->GetValue<Unit*>("current target")->Set(target);
+
+    // Objective movement must never let a mounted bot coast through an enemy
+    // push. Dismount immediately, stop the route, and allow the higher-priority
+    // PvP attack action to take over on this contact.
+    if (bot->IsMounted())
+        CheckMountStateAction::CompleteDismount(bot);
+
+    if (bot->IsInDisallowedMountForm())
+        botAI->RemoveShapeshift();
+
+    if (bot->isMoving())
+        bot->StopMoving();
+
+    return true;
 }
 
 // RTG: static, walkable-feeling center anchor used only when the Netherstorm flag GO is not spawned
@@ -1590,7 +1669,8 @@ static bool RTG_EotsAppendCenterToTowerRoute(std::vector<Position>& route, uint3
 
 static bool RTG_EotsAppendTowerToTowerRoute(std::vector<Position>& route, uint32 fromNode, uint32 toNode)
 {
-    if (!fromNode || !toNode || fromNode == toNode)
+    // POINT_FEL_REAVER is node 0. Zero is a valid tower, not a missing node.
+    if (fromNode >= EY_POINTS_MAX || toNode >= EY_POINTS_MAX || fromNode == toNode)
         return false;
 
     if (fromNode == POINT_FEL_REAVER && toNode == POINT_MAGE_TOWER)
@@ -1739,7 +1819,7 @@ static bool RTG_EotsIsCenterObjective(PositionInfo const& pos)
 
 static bool RTG_EotsGetObjectiveNode(PositionInfo const& pos, uint32& outNodeId)
 {
-    outNodeId = 0;
+    outNodeId = RTG_EOTS_INVALID_NODE;
     if (!pos.valueSet)
         return false;
 
@@ -1761,7 +1841,7 @@ static bool RTG_EotsGetObjectiveNode(PositionInfo const& pos, uint32& outNodeId)
         }
     }
 
-    return outNodeId != 0;
+    return outNodeId < EY_POINTS_MAX;
 }
 
 static bool RTG_EotsGetObjectiveRouteStep(Player* bot, TeamId team, PositionInfo const& objective,
@@ -1772,7 +1852,7 @@ static bool RTG_EotsGetObjectiveRouteStep(Player* bot, TeamId team, PositionInfo
         return false;
 
     bool const centerObjective = RTG_EotsIsCenterObjective(objective);
-    uint32 nodeId = 0;
+    uint32 nodeId = RTG_EOTS_INVALID_NODE;
     if (!centerObjective && !RTG_EotsGetObjectiveNode(objective, nodeId))
         return false;
 
@@ -1780,7 +1860,7 @@ static bool RTG_EotsGetObjectiveRouteStep(Player* bot, TeamId team, PositionInfo
     PositionInfo botPosition;
     botPosition.Set(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetMapId());
 
-    uint32 currentNodeId = 0;
+    uint32 currentNodeId = RTG_EOTS_INVALID_NODE;
     if (RTG_EotsGetObjectiveNode(botPosition, currentNodeId))
     {
         if (centerObjective)
@@ -1831,7 +1911,7 @@ static bool RTG_EotsGetCenterFlagPosition(Battleground* bg, Position& out, bool*
 static bool RTG_EotsGetNearestOwnedNodeToUnit(BattlegroundEY* eyeBg, TeamId team, Unit* unit,
                                               uint32& outNodeId, Position& outPos, float& outDist)
 {
-    outNodeId = 0;
+    outNodeId = RTG_EOTS_INVALID_NODE;
     outDist = FLT_MAX;
 
     if (!eyeBg || !unit || (team != TEAM_ALLIANCE && team != TEAM_HORDE))
@@ -1856,13 +1936,13 @@ static bool RTG_EotsGetNearestOwnedNodeToUnit(BattlegroundEY* eyeBg, TeamId team
         }
     }
 
-    return outNodeId != 0;
+    return outNodeId < EY_POINTS_MAX;
 }
 
 static bool RTG_EotsCarrierAtOwnedTower(BattlegroundEY* eyeBg, TeamId team, Unit* carrier,
                                         uint32* outNodeId = nullptr)
 {
-    uint32 nodeId = 0;
+    uint32 nodeId = RTG_EOTS_INVALID_NODE;
     Position nodePos;
     float dist = FLT_MAX;
     if (!RTG_EotsGetNearestOwnedNodeToUnit(eyeBg, team, carrier, nodeId, nodePos, dist))
@@ -2276,7 +2356,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     }
 
     TeamId const team = RTG_EotsEffectiveTeamId(bot, bg);
-    uint32 bestNodeId = 0;
+    uint32 bestNodeId = RTG_EOTS_INVALID_NODE;
     uint32 bestTriggerId = 0;
     Position bestNodePos;
     float bestDist = FLT_MAX;
@@ -2302,7 +2382,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
 
     struct RtgEotsTurnInProgress
     {
-        uint32 nodeId = 0;
+        uint32 nodeId = RTG_EOTS_INVALID_NODE;
         uint32 startedMs = 0;
     };
 
@@ -2908,6 +2988,12 @@ bool BGTactics::Execute(Event /*event*/)
             if (rtgWsgMoveFlagCarrier())
                 return true;
         }
+
+        // Non-carriers should break from travel immediately when enemy players
+        // are in fighting range. This prevents mounted, passive-looking groups
+        // from riding past a tower fight while waiting for a narrow aggro check.
+        if (bgType == BATTLEGROUND_EY && RTG_EotsPrepareAggressiveContact(botAI, bot, bg))
+            return false;
 
         PositionInfo currentObjective = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
         if (recoverStuckObjective(bgType, currentObjective))
@@ -5895,7 +5981,7 @@ bool BGTactics::protectFC()
             else
             {
                 uint32 nodeId = RTG_EotsAssignedEnemySideNode(team, stableRole, botSeed);
-                if (!nodeId || eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId == team ||
+                if (nodeId >= EY_POINTS_MAX || eyeBg->GetCapturePointInfo(nodeId)._ownerTeamId == team ||
                     !RTG_EotsGetNodePosition(nodeId, pressureTarget))
                     RTG_EotsGetCenterFlagPosition(bg, pressureTarget);
             }
