@@ -1158,6 +1158,11 @@ bool RTG_SameObjective(RTGBgObjectiveAssignment const& a, RTGBgObjectiveAssignme
     return a.role == b.role && a.objectiveId == b.objectiveId && a.targetGuid == b.targetGuid;
 }
 
+bool RTG_IsTowerRole(RTGBgObjectiveRole role)
+{
+    return role == RTGBgObjectiveRole::CaptureTower || role == RTGBgObjectiveRole::DefendTower;
+}
+
 PositionInfo RTG_RecoveryPoint(Player* bot, Battleground* bg, RTGBgObjectiveAssignment const& current)
 {
     TeamId const team = RTG_GetEffectiveBgTeam(bot);
@@ -1201,11 +1206,6 @@ PositionInfo RTG_RecoveryPoint(Player* bot, Battleground* bg, RTGBgObjectiveAssi
     if (bot)
         fallback.Set(bot->GetPositionX(), bot->GetPositionY(), bot->GetPositionZ(), bot->GetMapId());
     return fallback;
-}
-
-bool RTG_IsTowerRole(RTGBgObjectiveRole role)
-{
-    return role == RTGBgObjectiveRole::CaptureTower || role == RTGBgObjectiveRole::DefendTower;
 }
 
 bool RTG_BuildObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, RTGBgObjectiveAssignment& assignment)
