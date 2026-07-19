@@ -2248,9 +2248,23 @@ static uint32 RTG_EotsStableRole(Player* bot, uint32 role)
 static float constexpr RTG_EOTS_TOWER_ARRIVE_RADIUS_2D = 7.5f;
 static float constexpr RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF = 8.0f;
 
+static bool RTG_EotsIsActualFlagCarrier(Player* bot, BattlegroundEY* eyeBg)
+{
+    if (!bot || !eyeBg)
+        return false;
+
+    ObjectGuid const picker = eyeBg->GetFlagPickerGUID();
+    if (!picker.IsEmpty())
+        return picker == bot->GetGUID();
+
+    // The aura is a safe fallback during the short state transition where the
+    // picker GUID has not yet propagated through every bot update.
+    return bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
+}
+
 static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, BattlegroundEY* eyeBg, Battleground* bg)
 {
-    if (!bot || !botAI || !eyeBg || !bg || !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+    if (!bot || !botAI || !eyeBg || !bg || !RTG_EotsIsActualFlagCarrier(bot, eyeBg))
         return false;
 
     // Be strict: only the actual Netherstorm flag carrier should fire the turn-in area trigger.
@@ -2311,7 +2325,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
 
     auto itr = lastTurnInMsByBot.find(botGuid);
     if (itr != lastTurnInMsByBot.end() && getMSTimeDiff(itr->second, now) < 350)
-        return !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
+        return !RTG_EotsIsActualFlagCarrier(bot, eyeBg);
 
     lastTurnInMsByBot[botGuid] = now;
 
@@ -2326,7 +2340,7 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     data << uint32(bestTriggerId);
     bot->GetSession()->HandleAreaTriggerOpcode(data);
     botAI->SetNextCheckDelay(250);
-    return !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL);
+    return !RTG_EotsIsActualFlagCarrier(bot, eyeBg);
 }
 
 static std::pair<uint32, uint32> IC_AttackObjectives[] = {
@@ -2886,11 +2900,8 @@ bool BGTactics::Execute(Event /*event*/)
         // EotS carriers need authoritative scoring movement just like WSG carriers:
         // route to the nearest owned tower and fire the guarded turn-in trigger
         // before generic combat/objective logic can distract them.
-        if (bgType == BATTLEGROUND_EY && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
-        {
-            if (rtgEotsMoveFlagCarrier())
-                return true;
-        }
+        if (bgType == BATTLEGROUND_EY && rtgEotsMoveFlagCarrier())
+            return true;
 
         if (bgType == BATTLEGROUND_WS && RTG_WsgHasFlag(bot))
         {
@@ -4194,11 +4205,11 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
     if (bgType == BATTLEGROUND_RB)
         bgType = bg->GetBgTypeID(true);
 
-    if (bgType != BATTLEGROUND_EY || !bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL) || !bot->IsAlive())
+    if (bgType != BATTLEGROUND_EY || !bot->IsAlive())
         return false;
 
     BattlegroundEY* eyeBg = static_cast<BattlegroundEY*>(bg);
-    if (!eyeBg)
+    if (!eyeBg || !RTG_EotsIsActualFlagCarrier(bot, eyeBg))
         return false;
 
     if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
@@ -4231,7 +4242,7 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
 
     float const finalDist2d = bot->GetExactDist2d(finalDestination.GetPositionX(), finalDestination.GetPositionY());
     float const finalZDiff = std::fabs(bot->GetPositionZ() - finalDestination.GetPositionZ());
-    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 18.0f && finalZDiff <= 12.0f)
+    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn && finalDist2d <= 30.0f && finalZDiff <= 16.0f)
     {
         movementDestination.Relocate(finalDestination);
         finalRouteStep = true;
@@ -4276,12 +4287,22 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         float x = 0.0f;
         float y = 0.0f;
         float z = 0.0f;
+        float lastX = 0.0f;
+        float lastY = 0.0f;
+        float lastZ = 0.0f;
+        float lastDistance = FLT_MAX;
+        uint32 lastProgressMs = 0;
+        uint8 recoveryAttempts = 0;
         bool initialized = false;
     };
 
     static std::unordered_map<uint64, RtgEotsCarrierMoveState> moveStateByCarrier;
     uint64 const key = (uint64(bg->GetInstanceID()) << 32) ^ uint64(bot->GetGUID().GetCounter());
     RtgEotsCarrierMoveState& moveState = moveStateByCarrier[key];
+    uint32 const now = getMSTime();
+    float const moveDistance = bot->GetExactDist(movementDestination.GetPositionX(),
+                                                  movementDestination.GetPositionY(),
+                                                  movementDestination.GetPositionZ());
     bool const destinationChanged = !moveState.initialized ||
         std::fabs(moveState.x - movementDestination.GetPositionX()) > 2.0f ||
         std::fabs(moveState.y - movementDestination.GetPositionY()) > 2.0f ||
@@ -4293,6 +4314,12 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         moveState.x = movementDestination.GetPositionX();
         moveState.y = movementDestination.GetPositionY();
         moveState.z = movementDestination.GetPositionZ();
+        moveState.lastX = bot->GetPositionX();
+        moveState.lastY = bot->GetPositionY();
+        moveState.lastZ = bot->GetPositionZ();
+        moveState.lastDistance = moveDistance;
+        moveState.lastProgressMs = now;
+        moveState.recoveryAttempts = 0;
 
         if (bot->isMoving())
         {
@@ -4300,26 +4327,67 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
             bot->GetMotionMaster()->Clear();
         }
     }
-    else if (bot->isMoving())
-        return true;
-
-    float const approach = assignment.role == RTGBgObjectiveRole::CarrierTurnIn ? 0.5f : (finalRouteStep ? 4.0f : 2.0f);
-    if (voidLaneSafety)
+    else
     {
-        if (MoveTo(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
-                   movementDestination.GetPositionZ(), false, false, true, false,
-                   MovementPriority::MOVEMENT_NORMAL, true))
+        if (getMSTimeDiff(moveState.lastProgressMs, now) >= 1000)
+        {
+            float const moved = bot->GetExactDist(moveState.lastX, moveState.lastY, moveState.lastZ);
+            float const distanceGain = moveState.lastDistance - moveDistance;
+
+            // An active spline is not proof of progress. Require meaningful
+            // displacement or movement toward the current route breadcrumb.
+            if (distanceGain > 0.75f || (moved > 4.0f && moveDistance <= moveState.lastDistance + 0.5f))
+            {
+                moveState.lastX = bot->GetPositionX();
+                moveState.lastY = bot->GetPositionY();
+                moveState.lastZ = bot->GetPositionZ();
+                moveState.lastDistance = moveDistance;
+                moveState.lastProgressMs = now;
+                moveState.recoveryAttempts = 0;
+            }
+        }
+
+        if (bot->isMoving() && getMSTimeDiff(moveState.lastProgressMs, now) < 3500)
             return true;
 
+        if (getMSTimeDiff(moveState.lastProgressMs, now) >= 3500)
+        {
+            if (bot->isMoving())
+                bot->StopMoving();
+
+            bot->GetMotionMaster()->Clear();
+            moveState.lastX = bot->GetPositionX();
+            moveState.lastY = bot->GetPositionY();
+            moveState.lastZ = bot->GetPositionZ();
+            moveState.lastDistance = moveDistance;
+            moveState.lastProgressMs = now;
+            if (moveState.recoveryAttempts < 255)
+                ++moveState.recoveryAttempts;
+
+            RTG_EotsDebugRaw(bot, bg, "carrier_recover", "no_measured_progress", assignment.objectiveId,
+                             moveState.recoveryAttempts);
+        }
+    }
+
+    // Carriers use deterministic exact movement. MoveNear can choose a point
+    // outside the scoring trigger and was one reason they stopped short forever.
+    if (MoveTo(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
+               movementDestination.GetPositionZ(), false, false, voidLaneSafety, false,
+               MovementPriority::MOVEMENT_NORMAL, true))
+    {
         return true;
     }
 
+    float const approach = assignment.role == RTGBgObjectiveRole::CarrierTurnIn ? 0.5f : (finalRouteStep ? 2.0f : 1.0f);
     if (MoveNear(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
                  movementDestination.GetPositionZ(), approach))
+    {
         return true;
+    }
 
-    return MoveTo(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
-                  movementDestination.GetPositionZ());
+    // Keep the carrier objective authoritative even if path generation misses a
+    // pulse; falling through would let generic combat/idle logic take control.
+    return true;
 }
 
 bool BGTactics::rtgWsgMoveToEnemyFlagObjective()
@@ -5305,7 +5373,7 @@ bool BGTactics::atFlag(std::vector<BattleBotPath*> const& vPaths, std::vector<ui
     // RTG EotS: carriers should never try to interact with the center/dropped flag while already carrying.
     // Movement pulses handle carrier routing; this interaction pulse only fires a guarded turn-in if
     // the carrier is already at an owned tower.
-    if (bgType == BATTLEGROUND_EY && eyeBg && bot->HasAura(BG_EY_NETHERSTORM_FLAG_SPELL))
+    if (bgType == BATTLEGROUND_EY && eyeBg && RTG_EotsIsActualFlagCarrier(bot, eyeBg))
     {
         if (RTG_EotsTryCarrierTurnIn(bot, botAI, eyeBg, bg))
         {

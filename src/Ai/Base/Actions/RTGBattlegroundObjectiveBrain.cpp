@@ -103,6 +103,10 @@ struct RTGObjectiveBrainState
 
 std::unordered_map<uint64, RTGObjectiveBrainState> RTGObjectiveStates;
 
+// Only used when core cannot provide a valid battleground side. The normal and
+// authoritative path is Player::GetBgTeamId(); position inference is a fallback.
+std::unordered_map<uint64, TeamId> RTGEotsFallbackSideByBot;
+
 struct RTGTeamSizeCacheEntry
 {
     uint32 sampledAtMs = 0;
@@ -659,20 +663,54 @@ uint32 RTG_EotsAssignedEnemyNode(BattlegroundEY* eyeBg, TeamId team, uint32 stab
     return 0;
 }
 
-uint32 RTG_EotsAssignedDefenseNode(BattlegroundEY* eyeBg, TeamId team, uint32 stableRole, uint32 seed)
+uint32 RTG_EotsEnemyPressureAtTower(Battleground* bg, TeamId team, RTGTowerDef const& tower, float radius = 72.0f)
 {
-    uint32 assigned = RTG_EotsSplitSecond(stableRole, seed, 0xE0750006u)
-        ? (team == TEAM_HORDE ? POINT_BLOOD_ELF : POINT_DRAENEI_RUINS)
-        : (team == TEAM_HORDE ? POINT_FEL_REAVER : POINT_MAGE_TOWER);
+    if (!bg || !bg->GetBgMap() || (team != TEAM_ALLIANCE && team != TEAM_HORDE))
+        return 0;
 
-    if (RTG_EotsNodeOwned(eyeBg, assigned, team))
-        return assigned;
+    uint32 pressure = 0;
+    for (auto& ref : bg->GetBgMap()->GetPlayers())
+    {
+        Player* player = ref.GetSource();
+        if (!player || !player->IsAlive() || player->GetMapId() != bg->GetMapId())
+            continue;
 
+        TeamId const playerTeam = RTG_GetEffectiveBgTeam(player);
+        if (playerTeam == TEAM_NEUTRAL || playerTeam == team)
+            continue;
+
+        if (player->GetExactDist2d(tower.capture.x, tower.capture.y) <= radius &&
+            std::fabs(player->GetPositionZ() - tower.capture.z) <= 35.0f)
+        {
+            ++pressure;
+        }
+    }
+
+    return pressure;
+}
+
+bool RTG_EotsTowerThreatened(Battleground* bg, BattlegroundEY* eyeBg, TeamId team, uint32 nodeId)
+{
+    RTGTowerDef const* tower = RTG_EotsTower(nodeId);
+    return tower && RTG_EotsNodeOwned(eyeBg, nodeId, team) &&
+           RTG_EotsEnemyPressureAtTower(bg, team, *tower) > 0;
+}
+
+uint32 RTG_EotsAssignedThreatenedDefenseNode(Battleground* bg, BattlegroundEY* eyeBg, TeamId team,
+                                             uint32 stableRole, uint32 seed)
+{
+    uint32 threatenedNodes[4] = {0, 0, 0, 0};
+    uint32 threatenedCount = 0;
     for (RTGTowerDef const& tower : EOTS_TOWERS)
-        if (RTG_EotsNodeOwned(eyeBg, tower.nodeId, team))
-            return tower.nodeId;
+    {
+        if (RTG_EotsTowerThreatened(bg, eyeBg, team, tower.nodeId))
+            threatenedNodes[threatenedCount++] = tower.nodeId;
+    }
 
-    return 0;
+    if (!threatenedCount)
+        return 0;
+
+    return threatenedNodes[(stableRole + (seed >> 3)) % threatenedCount];
 }
 
 PositionInfo RTG_EotsTowerDestination(Player* bot, TeamId team, RTGTowerDef const& tower)
@@ -963,6 +1001,22 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
         return true;
     }
 
+    // Reserve only a small role slice for defense, and only while a controlled
+    // tower is actually under enemy pressure. This prevents permanent base sitters.
+    if (RTG_EotsShouldDefendTower(stableRole, ownedCount, teamSize))
+    {
+        uint32 const nodeId = RTG_EotsAssignedThreatenedDefenseNode(bg, eyeBg, team, stableRole, seed);
+        if (RTGTowerDef const* tower = RTG_EotsTower(nodeId))
+        {
+            out.role = RTGBgObjectiveRole::DefendTower;
+            out.objectiveId = nodeId;
+            RTG_SetDestination(out, tower->defense, bg->GetMapId());
+            out.minCommitMs = 8000;
+            out.reason = "ThreatenedTowerDefense";
+            return true;
+        }
+    }
+
     uint32 attackNode = RTG_EotsAssignedEnemyNode(eyeBg, team, stableRole, seed);
     if (attackNode)
     {
@@ -977,33 +1031,8 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
         }
     }
 
-    if (RTG_EotsShouldDefendTower(stableRole, ownedCount, teamSize))
-    {
-        uint32 const nodeId = RTG_EotsAssignedDefenseNode(eyeBg, team, stableRole, seed);
-        if (RTGTowerDef const* tower = RTG_EotsTower(nodeId))
-        {
-            out.role = RTGBgObjectiveRole::DefendTower;
-            out.objectiveId = nodeId;
-            RTG_SetDestination(out, tower->defense, bg->GetMapId());
-            out.minCommitMs = 12000;
-            out.reason = "AssignedTowerDefenseFallback";
-            return true;
-        }
-    }
-
-    uint32 defendNode = RTG_EotsAssignedDefenseNode(eyeBg, team, stableRole, seed);
-    if (defendNode)
-    {
-        if (RTGTowerDef const* tower = RTG_EotsTower(defendNode))
-        {
-            out.role = RTGBgObjectiveRole::DefendTower;
-            out.objectiveId = defendNode;
-            RTG_SetDestination(out, tower->defense, bg->GetMapId());
-            out.reason = "FallbackTowerDefense";
-            return true;
-        }
-    }
-
+    // With every tower already controlled, bots should pressure center, escort,
+    // or fight—not all collapse into an unconditional tower-defense fallback.
     out.role = RTGBgObjectiveRole::MidfieldPressure;
     out.objectiveId = 0;
     RTG_SetDestination(out, centerPos, bg->GetMapId());
@@ -1075,13 +1104,14 @@ bool RTG_AssignmentStillValid(PlayerbotAI* botAI, Player* bot, Battleground* bg,
             }
             case RTGBgObjectiveRole::CaptureTower:
                 if (!assignment.objectiveId)
-                    return true;
-                if (RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team))
-                    return elapsed < 8000;
-                return true;
+                    return elapsed < std::max<uint32>(assignment.minCommitMs, 12000);
+                // Reassign immediately after capture instead of sitting at the base
+                // for another eight seconds. Also refresh a failed push eventually.
+                return !RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team) &&
+                       elapsed < std::max<uint32>(assignment.minCommitMs, 45000);
             case RTGBgObjectiveRole::DefendTower:
-                return RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team) &&
-                       elapsed < 12000;
+                return RTG_EotsTowerThreatened(bg, eyeBg, team, assignment.objectiveId) &&
+                       elapsed < std::max<uint32>(assignment.minCommitMs, 10000);
             case RTGBgObjectiveRole::KillEnemyFlagCarrier:
             case RTGBgObjectiveRole::EscortFriendlyFlagCarrier:
                 return RTG_TargetAssignmentStillValid(botAI, bot, assignment.targetGuid) &&
@@ -1169,21 +1199,22 @@ TeamId RTG_GetEffectiveBgTeam(Player* player)
         Battleground* bg = player->GetBattleground();
         BattlegroundTypeId const bgType = RTG_GetRealBgType(bg);
         TeamId const bgTeam = player->GetBgTeamId();
+
+        // GetBgTeamId is the assigned battleground side and must win over race,
+        // faction, or spawn-position guesses. Ignoring it specifically in EotS
+        // could lock a bot to the wrong side and break targeting/objective routing.
         if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
-        {
-            if (bgType != BATTLEGROUND_EY)
-                return bgTeam;
-        }
+            return bgTeam;
 
         if (bgType == BATTLEGROUND_EY && bg)
         {
-            static std::unordered_map<uint64, TeamId> lockedEotsSideByBot;
             uint64 const key = RTG_StateKey(player, bg);
-
-            auto itr = lockedEotsSideByBot.find(key);
-            if (itr != lockedEotsSideByBot.end() &&
+            auto itr = RTGEotsFallbackSideByBot.find(key);
+            if (itr != RTGEotsFallbackSideByBot.end() &&
                 (itr->second == TEAM_ALLIANCE || itr->second == TEAM_HORDE))
+            {
                 return itr->second;
+            }
 
             float const hordeStartDist = RTG_Distance3d(player, EOTS_HORDE_START);
             float const allianceStartDist = RTG_Distance3d(player, EOTS_ALLIANCE_START);
@@ -1193,16 +1224,9 @@ TeamId RTG_GetEffectiveBgTeam(Player* player)
             if (onStartRockOrExit)
             {
                 TeamId const inferred = hordeStartDist <= allianceStartDist ? TEAM_HORDE : TEAM_ALLIANCE;
-                lockedEotsSideByBot[key] = inferred;
+                RTGEotsFallbackSideByBot[key] = inferred;
                 return inferred;
             }
-
-            if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
-                return bgTeam;
-        }
-        else if (bgTeam == TEAM_ALLIANCE || bgTeam == TEAM_HORDE)
-        {
-            return bgTeam;
         }
     }
 
@@ -1436,7 +1460,16 @@ bool RTG_ShouldHoldBattlegroundObjective(PlayerbotAI* botAI, PositionInfo const&
 
     if (bgType == BATTLEGROUND_EY && RTG_IsTowerRole(assignment.role))
     {
-        if (bot->GetExactDist2d(currentObjective.x, currentObjective.y) <= 8.0f &&
+        BattlegroundEY* eyeBg = dynamic_cast<BattlegroundEY*>(bg);
+        TeamId const team = RTG_GetEffectiveBgTeam(bot);
+        bool shouldHold = false;
+
+        if (eyeBg && assignment.role == RTGBgObjectiveRole::CaptureTower)
+            shouldHold = !RTG_EotsNodeOwned(eyeBg, assignment.objectiveId, team);
+        else if (eyeBg && assignment.role == RTGBgObjectiveRole::DefendTower)
+            shouldHold = RTG_EotsTowerThreatened(bg, eyeBg, team, assignment.objectiveId);
+
+        if (shouldHold && bot->GetExactDist2d(currentObjective.x, currentObjective.y) <= 8.0f &&
             std::fabs(bot->GetPositionZ() - currentObjective.z) <= 10.0f)
         {
             RTG_Debug(bot, bg, assignment, "hold");
@@ -1465,6 +1498,7 @@ void RTG_ClearBattlegroundObjective(PlayerbotAI* botAI)
     if (key)
     {
         RTGObjectiveStates.erase(key);
+        RTGEotsFallbackSideByBot.erase(key);
         RTGTeamSizeCache.erase((uint64(bg->GetInstanceID()) << 8) | uint64(uint32(TEAM_ALLIANCE)));
         RTGTeamSizeCache.erase((uint64(bg->GetInstanceID()) << 8) | uint64(uint32(TEAM_HORDE)));
         return;
@@ -1478,6 +1512,14 @@ void RTG_ClearBattlegroundObjective(PlayerbotAI* botAI)
     {
         if (uint32(itr->first & 0xFFFFFFFFu) == guidLow)
             itr = RTGObjectiveStates.erase(itr);
+        else
+            ++itr;
+    }
+
+    for (auto itr = RTGEotsFallbackSideByBot.begin(); itr != RTGEotsFallbackSideByBot.end();)
+    {
+        if (uint32(itr->first & 0xFFFFFFFFu) == guidLow)
+            itr = RTGEotsFallbackSideByBot.erase(itr);
         else
             ++itr;
     }

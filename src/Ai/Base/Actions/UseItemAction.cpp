@@ -70,8 +70,33 @@ bool UseItemAction::UseItem(Item* item, ObjectGuid goGuid, Item* itemTarget, Uni
         return false;
 
     ItemTemplate const* proto = item->GetTemplate();
-    bool const isDrink = proto->Spells[0].SpellCategory == 59;
-    bool const isFood = proto->Spells[0].SpellCategory == 11;
+    bool isDrink = false;
+    bool isFood = false;
+    uint32 spellId = 0;
+    uint32 fallbackSpellId = 0;
+
+    // Item templates can contain multiple spells. The packet must name the
+    // actual ON_USE spell, not simply the last positive spell in the template.
+    // Scan every slot as custom food/water is not guaranteed to use slot zero.
+    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
+    {
+        auto const& itemSpell = proto->Spells[i];
+        isDrink = isDrink || itemSpell.SpellCategory == 59;
+        isFood = isFood || itemSpell.SpellCategory == 11;
+
+        if (itemSpell.SpellId <= 0)
+            continue;
+
+        if (!fallbackSpellId)
+            fallbackSpellId = itemSpell.SpellId;
+
+        if (!spellId && itemSpell.SpellTrigger == ITEM_SPELLTRIGGER_ON_USE)
+            spellId = itemSpell.SpellId;
+    }
+
+    if (!spellId)
+        spellId = fallbackSpellId;
+
     bool const isRestConsumable = proto->Class == ITEM_CLASS_CONSUMABLE &&
         (proto->SubClass == ITEM_SUBCLASS_FOOD || proto->SubClass == ITEM_SUBCLASS_CONSUMABLE) &&
         (isFood || isDrink);
@@ -105,18 +130,11 @@ bool UseItemAction::UseItem(Item* item, ObjectGuid goGuid, Item* itemTarget, Uni
     uint32 glyphIndex = 0;
     uint8 castFlags = 0;
     uint32 targetFlag = TARGET_FLAG_NONE;
-    uint32 spellId = 0;
-    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; ++i)
-    {
-        if (item->GetTemplate()->Spells[i].SpellId > 0)
-        {
-            spellId = item->GetTemplate()->Spells[i].SpellId;
-            if (!botAI->CanCastSpell(spellId, bot, false, itemTarget, item))
-            {
-                return false;
-            }
-        }
-    }
+
+    // Quest-starting items may legitimately have no cast spell. For ordinary
+    // usable items validate only the spell that will actually be sent to core.
+    if (spellId && !botAI->CanCastSpell(spellId, bot, false, itemTarget, item))
+        return false;
 
     WorldPacket packet(CMSG_USE_ITEM);
     packet << bagIndex << slot << cast_count << spellId << item_guid << glyphIndex << castFlags;
@@ -230,48 +248,37 @@ bool UseItemAction::UseItem(Item* item, ObjectGuid goGuid, Item* itemTarget, Uni
     if (isRestConsumable)
         bot->SetStandState(UNIT_STAND_STATE_SIT);
 
-    for (uint8 i = 0; i < MAX_ITEM_PROTO_SPELLS; i++)
+    if (spellId)
     {
-        uint32 spellId = item->GetTemplate()->Spells[i].SpellId;
-        if (!spellId)
-            continue;
-
-        if (!botAI->CanCastSpell(spellId, bot, false))
-            continue;
-
         SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
-        if (spellInfo->Targets & TARGET_FLAG_ITEM)
+        if (spellInfo && (spellInfo->Targets & TARGET_FLAG_ITEM))
         {
             Item* itemForSpell = AI_VALUE2(Item*, "item for spell", spellId);
-            if (!itemForSpell)
-                continue;
-
-            if (itemForSpell->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
-                continue;
-
-            if (bot->GetTrader())
+            if (itemForSpell && !itemForSpell->GetEnchantmentId(TEMP_ENCHANTMENT_SLOT))
             {
-                if (selfOnly)
-                    return false;
+                if (bot->GetTrader())
+                {
+                    if (selfOnly)
+                        return false;
 
-                targetFlag = TARGET_FLAG_TRADE_ITEM;
-                packet << targetFlag << (uint8)1 << ObjectGuid((uint64)TRADE_SLOT_NONTRADED).WriteAsPacked();
-                targetSelected = true;
-                targetText = "traded item";
+                    targetFlag = TARGET_FLAG_TRADE_ITEM;
+                    packet << targetFlag << (uint8)1 << ObjectGuid((uint64)TRADE_SLOT_NONTRADED).WriteAsPacked();
+                    targetSelected = true;
+                    targetText = "traded item";
+                }
+                else
+                {
+                    targetFlag = TARGET_FLAG_ITEM;
+                    packet << targetFlag;
+                    packet << itemForSpell->GetGUID().WriteAsPacked();
+                    targetSelected = true;
+                    targetText = chat->FormatItem(itemForSpell->GetTemplate());
+                }
+
+                uint32 castTime = spellInfo->CalcCastTime();
+                botAI->SetNextCheckDelay(castTime + sPlayerbotAIConfig.reactDelay);
             }
-            else
-            {
-                targetFlag = TARGET_FLAG_ITEM;
-                packet << targetFlag;
-                packet << itemForSpell->GetGUID().WriteAsPacked();
-                targetSelected = true;
-                targetText = chat->FormatItem(itemForSpell->GetTemplate());
-            }
-            uint32 castTime = spellInfo->CalcCastTime();
-            botAI->SetNextCheckDelay(castTime + sPlayerbotAIConfig.reactDelay);
         }
-
-        break;
     }
 
     if (!targetSelected)

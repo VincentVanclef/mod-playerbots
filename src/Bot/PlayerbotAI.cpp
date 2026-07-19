@@ -3329,7 +3329,11 @@ bool PlayerbotAI::CanCastSpell(uint32 spellid, Unit* target, bool checkHasSpell,
         return false;
     }
 
-    if (!IsRTGBotSpellAllowedForCurrentLevel(bot, spellInfo))
+    // RTG level gating is for learned class spells. Item-use spells are already
+    // validated by Player::CanUseItem and often carry DBC spell levels that do
+    // not match the item's usable level. Applying the learned-spell gate here
+    // made legal food/water sit the bot down but reject the actual item cast.
+    if (!castItem && !IsRTGBotSpellAllowedForCurrentLevel(bot, spellInfo))
     {
         if (!sPlayerbotAIConfig.logInGroupOnly || (bot->GetGroup() && HasRealPlayerMaster()))
         {
