@@ -116,6 +116,87 @@ enum BattleBotWsgWaitSpot
 
 std::unordered_map<uint32, BGStrategyData> bgStrategies;
 
+// RTG: WSG, AB, and EotS all contain cliffs, elevated bases, and narrow ramps.
+// Their objective movement must remain attached to the manual battleground road
+// graph instead of accepting every navmesh shortcut as a player-legal route.
+static bool RTG_IsRouteDisciplinedBg(BattlegroundTypeId bgType)
+{
+    return bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_AB || bgType == BATTLEGROUND_EY;
+}
+
+static bool RTG_HasPlayerLegalBgPath(Player* bot, float x, float y, float z)
+{
+    if (!bot)
+        return false;
+
+    Battleground* bg = bot->GetBattleground();
+    if (!bg)
+        return true;
+
+    BattlegroundTypeId bgType = bg->GetBgTypeID();
+    if (bgType == BATTLEGROUND_RB)
+        bgType = bg->GetBgTypeID(true);
+
+    if (!RTG_IsRouteDisciplinedBg(bgType) || bot->GetExactDist2d(x, y) <= 5.0f)
+        return true;
+
+    PathGenerator path(bot);
+    path.CalculatePath(x, y, z, false);
+
+    PathType const pathType = path.GetPathType();
+    if ((pathType & PATHFIND_NOPATH) || !(pathType & PATHFIND_NORMAL))
+        return false;
+
+    Movement::PointsArray const& points = path.GetPath();
+    if (points.size() < 2)
+        return false;
+
+    // Some generated mmaps mark near-vertical terrain seams as connected.
+    // Reject only pronounced cliff-like rises, while preserving ordinary
+    // stairs, tunnels, and the legitimate ramps used by all three maps.
+    for (size_t i = 1; i < points.size(); ++i)
+    {
+        float const dx = points[i].x - points[i - 1].x;
+        float const dy = points[i].y - points[i - 1].y;
+        float const dz = std::fabs(points[i].z - points[i - 1].z);
+        float const horizontal = std::sqrt(dx * dx + dy * dy);
+
+        if (horizontal < 0.20f)
+        {
+            if (dz > 2.75f)
+                return false;
+            continue;
+        }
+
+        if (dz > 4.0f && dz / horizontal > 0.90f)
+            return false;
+    }
+
+    // Also catch a cliff represented by several tiny navmesh segments rather
+    // than one obvious vertical segment.
+    for (size_t first = 0; first + 2 < points.size(); ++first)
+    {
+        float horizontal = 0.0f;
+        size_t last = first;
+        for (size_t i = first + 1; i < points.size() && horizontal < 10.0f; ++i)
+        {
+            float const dx = points[i].x - points[i - 1].x;
+            float const dy = points[i].y - points[i - 1].y;
+            horizontal += std::sqrt(dx * dx + dy * dy);
+            last = i;
+        }
+
+        if (last > first && horizontal > 0.25f)
+        {
+            float const rise = std::fabs(points[last].z - points[first].z);
+            if (rise > 7.0f && rise / horizontal > 0.80f)
+                return false;
+        }
+    }
+
+    return true;
+}
+
 std::vector<uint32> const vFlagsAV = {
     BG_AV_OBJECTID_BANNER_H_B,      BG_AV_OBJECTID_BANNER_H,      BG_AV_OBJECTID_BANNER_A_B,
     BG_AV_OBJECTID_BANNER_A,        BG_AV_OBJECTID_BANNER_CONT_A, BG_AV_OBJECTID_BANNER_CONT_A_B,
@@ -3078,9 +3159,6 @@ bool BGTactics::Execute(Event /*event*/)
             if (rtgWsgMoveToEnemyFlagObjective())
                 return true;
 
-            if (moveToObjective(false))
-                return true;
-
             if (selectObjectiveWp(*vPaths))
                 return true;
 
@@ -3091,6 +3169,30 @@ bool BGTactics::Execute(Event /*event*/)
                 return true;
 
             return moveToObjective(true);
+        }
+
+        if (bgType == BATTLEGROUND_AB)
+        {
+            // AB has the same cliff-shortcut problem as WSG/EotS. Join the
+            // hand-authored road/ramp graph first, then use direct mmap movement
+            // only for the final short approach to a banner.
+            PositionInfo abObjective = context->GetValue<PositionMap&>("position")->Get()["bg objective"];
+            if (!abObjective.isSet())
+                selectObjective();
+
+            if (selectObjectiveWp(*vPaths))
+                return true;
+
+            if (startNewPathBegin(*vPaths))
+                return true;
+
+            if (startNewPathFree(*vPaths))
+                return true;
+
+            if (moveToObjective(false))
+                return true;
+
+            return resetObjective();
         }
 
         if (!moveToObjective(false))
@@ -4149,6 +4251,16 @@ bool BGTactics::moveToObjective(bool ignoreDist)
 
         float const distToObjective = bot->GetDistance(pos.x, pos.y, pos.z);
 
+        // A valid mmap result is not always a player-legal route on these maps:
+        // terrain seams can connect the field directly to a graveyard ledge,
+        // Lumber Mill, or an EotS island wall. Reject cliff-like direct routes so
+        // the caller falls back to the battleground waypoint graph.
+        if (RTG_IsRouteDisciplinedBg(bgType) && distToObjective > 5.0f &&
+            !RTG_HasPlayerLegalBgPath(bot, pos.x, pos.y, pos.z))
+        {
+            return false;
+        }
+
         if (RTG_ShouldHoldBattlegroundObjective(botAI, pos))
         {
             if (bot->isMoving())
@@ -4274,6 +4386,12 @@ bool BGTactics::rtgEotsMoveToObjectiveRoute()
     }
 
     RTG_EotsDebugRaw(bot, bg, "route", "objective_breadcrumb");
+    if (!voidLaneSafety &&
+        !RTG_HasPlayerLegalBgPath(bot, routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ()))
+    {
+        return false;
+    }
+
     if (MoveTo(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ(),
                false, false, voidLaneSafety, false, MovementPriority::MOVEMENT_NORMAL, voidLaneSafety))
         return true;
@@ -4455,6 +4573,19 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         }
     }
 
+    // If a carrier was knocked or resurrected onto the wrong side of an
+    // island/ledge, do not let the navmesh shortcut straight up the cliff. Rejoin
+    // the EotS road graph while keeping the carrier objective authoritative.
+    if (!voidLaneSafety &&
+        !RTG_HasPlayerLegalBgPath(bot, movementDestination.GetPositionX(), movementDestination.GetPositionY(),
+                                  movementDestination.GetPositionZ()))
+    {
+        if (selectObjectiveWp(vPaths_EY))
+            return true;
+
+        return true;
+    }
+
     // Carriers use deterministic exact movement. MoveNear can choose a point
     // outside the scoring trigger and was one reason they stopped short forever.
     if (MoveTo(bg->GetMapId(), movementDestination.GetPositionX(), movementDestination.GetPositionY(),
@@ -4517,6 +4648,12 @@ bool BGTactics::rtgWsgMoveToEnemyFlagObjective()
     }
     else
         return false;
+
+    if (!RTG_HasPlayerLegalBgPath(bot, routeStep.GetPositionX(), routeStep.GetPositionY(),
+                                  routeStep.GetPositionZ()))
+    {
+        return false;
+    }
 
     if (MoveTo(bg->GetMapId(), routeStep.GetPositionX(), routeStep.GetPositionY(), routeStep.GetPositionZ(),
                false, false, true, false, MovementPriority::MOVEMENT_NORMAL, true))
@@ -4766,6 +4903,15 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         bot->GetMotionMaster()->Clear();
     }
 
+    if (!RTG_HasPlayerLegalBgPath(bot, destination.GetPositionX(), destination.GetPositionY(),
+                                  destination.GetPositionZ()))
+    {
+        if (selectObjectiveWp(vPaths_WS))
+            return true;
+
+        return true;
+    }
+
     float const approach = finalRouteStep ? (ownFlagTaken ? 3.5f : 0.5f) : 3.0f;
     if (!finalRouteStep || !ownFlagTaken)
     {
@@ -4935,7 +5081,7 @@ bool BGTactics::selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths)
         // objectives/path points look artificially close, causing bots to pick
         // bad waypoints and appear stuck/off-task. Keep the legacy scoring for
         // the larger BGs to avoid changing AV/IC behavior in this patch.
-        if (bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY)
+        if (RTG_IsRouteDisciplinedBg(bgType))
             return distance;
 
         return std::sqrt(distance);
@@ -5066,6 +5212,17 @@ bool BGTactics::selectObjectiveWp(std::vector<BattleBotPath*> const& vPaths)
                                : ((closestPointDistToBot - botDistanceScoreSubtract) * botDistanceScoreMultiply)) +
                           distToDestination;
 
+        // Do not select a road graph merely because one of its points is close
+        // in 3D space. On WSG/AB/EotS that point may be directly above the bot
+        // on a cliff or base ledge. The bot must be able to join the graph using
+        // a player-legal mmap route first.
+        if (RTG_IsRouteDisciplinedBg(bgType) && chosenPathScore > pathScore)
+        {
+            BattleBotWaypoint const& joinPoint = path->at(closestPointIndex);
+            if (!RTG_HasPlayerLegalBgPath(bot, joinPoint.x, joinPoint.y, joinPoint.z))
+                continue;
+        }
+
         // LOG_INFO("playerbots", "bot={}\t{:6.1f}\t{:4.1f}\t{:4.1f}\t{}", bot->GetName(), pathScore,
         // closestPointDistToBot, distToDestination, vPaths_AB_name[pathNum]);
 
@@ -5188,8 +5345,9 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
     else
         currPoint++;
 
+    bool const disciplinedRoute = RTG_IsRouteDisciplinedBg(bgType);
     uint32 nPoint = currPoint;
-    if (!isEyStartPath && bgType != BATTLEGROUND_EY)
+    if (!isEyStartPath && !disciplinedRoute)
     {
         nPoint = reverse ? std::max((int)(currPoint - urand(1, 5)), 0)
                          : std::min((uint32)(currPoint + urand(1, 5)), lastPointInPath);
@@ -5197,18 +5355,43 @@ bool BGTactics::moveToObjectiveWp(BattleBotPath* const& currentPath, uint32 curr
             nPoint = 0;
     }
 
-    BattleBotWaypoint& nextPoint = currentPath->at(nPoint);
+    // WSG/AB/EotS must first join the actual road graph at the closest
+    // breadcrumb. Advancing to the following point while still below/above the
+    // graph is what made bots climb directly up cliffs to reach it.
+    uint32 targetPoint = nPoint;
+    if (disciplinedRoute)
+    {
+        BattleBotWaypoint const& joinPoint = currentPath->at(currentPoint);
+        if (bot->GetDistance(joinPoint.x, joinPoint.y, joinPoint.z) > 4.5f)
+            targetPoint = currentPoint;
+    }
+
+    BattleBotWaypoint const* nextPoint = &currentPath->at(targetPoint);
+    if (disciplinedRoute && !isEyStartPath &&
+        !RTG_HasPlayerLegalBgPath(bot, nextPoint->x, nextPoint->y, nextPoint->z))
+    {
+        // If the next breadcrumb is not legally reachable from the bot's
+        // current side of the terrain, try joining at the nearest graph point.
+        BattleBotWaypoint const& joinPoint = currentPath->at(currentPoint);
+        if (targetPoint == currentPoint ||
+            !RTG_HasPlayerLegalBgPath(bot, joinPoint.x, joinPoint.y, joinPoint.z))
+        {
+            return false;
+        }
+
+        nextPoint = &joinPoint;
+    }
 
     // std::ostringstream out;
     // out << "WP: ";
-    // reverse ? out << currPoint << " <<< -> " << nPoint : out << currPoint << ">>> ->" << nPoint;
-    // out << ", " << nextPoint.x << ", " << nextPoint.y << " Path Size: " << currentPath->size() << ", Dist: " <<
-    // ServerFacade::instance().GetDistance2d(bot, nextPoint.x, nextPoint.y); bot->Say(out.str(), LANG_UNIVERSAL);
+    // reverse ? out << currPoint << " <<< -> " << targetPoint : out << currPoint << ">>> ->" << targetPoint;
+    // out << ", " << nextPoint->x << ", " << nextPoint->y << " Path Size: " << currentPath->size() << ", Dist: " <<
+    // ServerFacade::instance().GetDistance2d(bot, nextPoint->x, nextPoint->y); bot->Say(out.str(), LANG_UNIVERSAL);
 
-    if (isEyStartPath)
-        return MoveTo(bot->GetMapId(), nextPoint.x, nextPoint.y, nextPoint.z);
+    if (isEyStartPath || disciplinedRoute)
+        return MoveTo(bot->GetMapId(), nextPoint->x, nextPoint->y, nextPoint->z);
 
-    return MoveTo(bot->GetMapId(), nextPoint.x + frand(-2, 2), nextPoint.y + frand(-2, 2), nextPoint.z);
+    return MoveTo(bot->GetMapId(), nextPoint->x + frand(-2, 2), nextPoint->y + frand(-2, 2), nextPoint->z);
 }
 
 bool BGTactics::startNewPathBegin(std::vector<BattleBotPath*> const& vPaths)
@@ -5223,7 +5406,7 @@ bool BGTactics::startNewPathBegin(std::vector<BattleBotPath*> const& vPaths)
 
     auto EndpointDistanceForCurrentBg = [&](float distance) -> float
     {
-        if (bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY)
+        if (RTG_IsRouteDisciplinedBg(bgType))
             return distance;
 
         return std::sqrt(distance);
@@ -5280,9 +5463,9 @@ bool BGTactics::startNewPathBegin(std::vector<BattleBotPath*> const& vPaths)
         return false;
 
     AvailablePath const* chosenPath = nullptr;
-    if (bgType == BATTLEGROUND_EY || bgType == BATTLEGROUND_WS)
+    if (RTG_IsRouteDisciplinedBg(bgType))
     {
-        // EotS/WSG should not randomly pick an outgoing lane from a tower/base/fork.
+        // WSG/AB/EotS should not randomly pick an outgoing lane from a tower/base/fork.
         // Choose the path whose far endpoint moves closest to the current
         // mission/objective. Random endpoint selection is what made bots reach
         // a tower/base perimeter, turn around, and carousel to another node.
@@ -5326,7 +5509,7 @@ bool BGTactics::startNewPathFree(std::vector<BattleBotPath*> const& vPaths)
 
     auto FreePathDistanceForCurrentBg = [&](float distance) -> float
     {
-        if (bgType == BATTLEGROUND_WS || bgType == BATTLEGROUND_EY)
+        if (RTG_IsRouteDisciplinedBg(bgType))
             return distance;
 
         return std::sqrt(distance);
@@ -5358,9 +5541,9 @@ bool BGTactics::startNewPathFree(std::vector<BattleBotPath*> const& vPaths)
             BattleBotWaypoint& waypoint = ((*pPath)[i]);
             float const distanceToPoint = FreePathDistanceForCurrentBg(bot->GetDistance(waypoint.x, waypoint.y, waypoint.z));
 
-            if (bgType == BATTLEGROUND_EY || bgType == BATTLEGROUND_WS)
+            if (RTG_IsRouteDisciplinedBg(bgType))
             {
-                // EotS/WSG route memory-lite: if we have to jump onto a nearby path
+                // WSG/AB/EotS route memory-lite: if we have to jump onto a nearby path
                 // from open ground, score both directions by the endpoint closest
                 // to the current mission/objective. The old fallback always
                 // walked forward, which was often the wrong direction at towers, graveyards, and tunnels.
