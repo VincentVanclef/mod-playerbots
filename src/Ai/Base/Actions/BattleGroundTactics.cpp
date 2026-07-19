@@ -4352,6 +4352,31 @@ bool BGTactics::rtgEotsMoveToObjectiveRoute()
 
     if (finalStep)
     {
+        bool const towerObjective = RTG_EotsIsTowerObjective(objective);
+        if (towerObjective && dist2d <= RTG_EOTS_TOWER_ARRIVE_RADIUS_2D &&
+            zDiff <= RTG_EOTS_TOWER_ARRIVE_MAX_Z_DIFF)
+        {
+            // Stay inside the real capture radius while the tower is contested,
+            // then immediately refresh the assignment after ownership changes.
+            // This also prevents MoveNear from making bots orbit the objective.
+            if (RTG_ShouldHoldBattlegroundObjective(botAI, objective))
+            {
+                if (bot->isMoving())
+                    bot->StopMoving();
+
+                return true;
+            }
+
+            return resetObjective();
+        }
+
+        if (!centerObjective && !towerObjective && dist2d <= 4.0f && zDiff <= 8.0f)
+        {
+            // Non-tower EotS breadcrumbs are transit points, never long-term
+            // objectives. Refresh immediately instead of idling at a road fork.
+            return resetObjective();
+        }
+
         if (centerObjective)
         {
             if (dist2d <= 1.8f && zDiff <= 5.0f)

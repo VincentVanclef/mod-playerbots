@@ -732,29 +732,6 @@ uint32 RTG_EotsAssignedThreatenedDefenseNode(Battleground* bg, BattlegroundEY* e
     return threatenedNodes[(stableRole + (seed >> 3)) % threatenedCount];
 }
 
-PositionInfo RTG_EotsTowerDestination(Player* bot, TeamId team, RTGTowerDef const& tower)
-{
-    PositionInfo const& fork = team == TEAM_HORDE ? EOTS_HORDE_ROAD_FORK : EOTS_ALLIANCE_ROAD_FORK;
-    PositionInfo const& approach = team == TEAM_HORDE ? tower.hordeApproach : tower.allianceApproach;
-
-    if (!bot)
-        return tower.capture;
-
-    if (tower.nodeId == POINT_FEL_REAVER)
-    {
-        if (RTG_Distance2d(bot, fork) > 95.0f && RTG_Distance2d(bot, tower.capture) > 135.0f)
-            return fork;
-        if (RTG_Distance2d(bot, approach) > 45.0f && RTG_Distance2d(bot, tower.capture) > 55.0f)
-            return approach;
-        return tower.capture;
-    }
-
-    if (RTG_Distance2d(bot, approach) > 65.0f && RTG_Distance2d(bot, tower.capture) > 70.0f)
-        return approach;
-
-    return tower.capture;
-}
-
 bool RTG_EotsCenterFlagSpawned(Battleground* bg, PositionInfo& out)
 {
     out = EOTS_CENTER;
@@ -930,9 +907,13 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
         uint32 const homeNode = RTG_EotsAssignedHomeNode(eyeBg, team, stableRole, seed);
         if (RTGTowerDef const* tower = RTG_EotsTower(homeNode))
         {
+            // Store the real capture point as the mission destination. The movement
+            // layer already supplies safe road/approach breadcrumbs. Persisting an
+            // approach breadcrumb here made bots reach FRR/BET staging ground and
+            // treat it as the completed objective forever.
             out.role = RTGBgObjectiveRole::CaptureTower;
             out.objectiveId = homeNode;
-            RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+            RTG_SetDestination(out, tower->capture, bg->GetMapId());
             out.minCommitMs = 30000;
             out.emergency = true;
             out.reason = "CarrierNeedsOwnedTower";
@@ -983,7 +964,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
             {
                 out.role = RTGBgObjectiveRole::CaptureTower;
                 out.objectiveId = attackNode;
-                RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+                RTG_SetDestination(out, tower->capture, bg->GetMapId());
                 out.minCommitMs = 12000;
                 out.reason = std::string("OneHomeAwayPressure") + tower->name;
                 return true;
@@ -995,7 +976,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
         {
             out.role = RTGBgObjectiveRole::CaptureTower;
             out.objectiveId = nodeId;
-            RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+            RTG_SetDestination(out, tower->capture, bg->GetMapId());
             out.minCommitMs = 15000;
             out.reason = nodeId == POINT_FEL_REAVER ? "NeedHomeTowerFRR" : "NeedSecondHomeTower";
             return true;
@@ -1051,7 +1032,7 @@ bool RTG_SelectEotsObjective(PlayerbotAI* botAI, Player* bot, Battleground* bg, 
         {
             out.role = RTGBgObjectiveRole::CaptureTower;
             out.objectiveId = attackNode;
-            RTG_SetDestination(out, RTG_EotsTowerDestination(bot, team, *tower), bg->GetMapId());
+            RTG_SetDestination(out, tower->capture, bg->GetMapId());
             out.minCommitMs = 14000;
             out.reason = std::string("Contest") + tower->name;
             return true;
