@@ -28,6 +28,7 @@
 #include "Event.h"
 #include "GameObject.h"
 #include "IVMapMgr.h"
+#include "ObjectMgr.h"
 #include "PathGenerator.h"
 #include "Playerbots.h"
 #include "PositionValue.h"
@@ -194,6 +195,38 @@ static bool RTG_HasPlayerLegalBgPath(Player* bot, float x, float y, float z)
         }
     }
 
+    return true;
+}
+
+// RTG flag-carrier last resort. The carrier routes below use hand-authored
+// battleground waypoints. If mmap path generation repeatedly rejects one of
+// those short, player-legal route segments, issue a straight movement spline
+// to the current breadcrumb instead of letting the carrier stand forever.
+// The strict distance/Z limits keep this from becoming a cross-map shortcut.
+static bool RTG_ForceFlagCarrierWaypoint(Player* bot, Position const& destination,
+                                         float maxDistance2d = 70.0f, float maxZDiff = 18.0f)
+{
+    if (!bot || !bot->IsAlive())
+        return false;
+
+    float const distance2d = bot->GetExactDist2d(destination.GetPositionX(), destination.GetPositionY());
+    float const zDiff = std::fabs(bot->GetPositionZ() - destination.GetPositionZ());
+    if (distance2d < 1.0f || distance2d > maxDistance2d || zDiff > maxZDiff)
+        return false;
+
+    if (bot->IsMounted())
+        bot->RemoveAurasByType(SPELL_AURA_MOUNTED);
+
+    bot->StopMoving();
+    bot->GetMotionMaster()->Clear();
+    bot->GetMotionMaster()->MovePoint(
+        /*id*/ 0,
+        /*coords*/ destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(),
+        /*forcedMovement*/ FORCED_MOVEMENT_NONE,
+        /*speed*/ 0.0f,
+        /*orientation*/ 0.0f,
+        /*generatePath*/ false,
+        /*forceDestination*/ true);
     return true;
 }
 
@@ -1565,6 +1598,30 @@ static bool RTG_EotsGetNodePosition(uint32 nodeId, Position& out)
     return true;
 }
 
+static bool RTG_EotsGetTurnInTrigger(uint32 nodeId, uint32& triggerId, Position& triggerPos)
+{
+    triggerId = 0;
+
+    for (auto const& objective : EY_AttackObjectives)
+    {
+        if (std::get<0>(objective) != nodeId)
+            continue;
+
+        triggerId = std::get<2>(objective);
+        if (AreaTrigger const* areaTrigger = sObjectMgr->GetAreaTrigger(triggerId))
+        {
+            triggerPos.Relocate(areaTrigger->x, areaTrigger->y, areaTrigger->z, 0.0f);
+            return true;
+        }
+
+        // Keep the known tower center as a safe fallback if the area-trigger
+        // record is unavailable for any reason.
+        return RTG_EotsGetNodePosition(nodeId, triggerPos);
+    }
+
+    return false;
+}
+
 static bool RTG_EotsIsTowerObjective(PositionInfo const& pos, uint32* outNodeId = nullptr)
 {
     if (!pos.valueSet)
@@ -2445,19 +2502,19 @@ static bool RTG_EotsTryCarrierTurnIn(Player* bot, PlayerbotAI* botAI, Battlegrou
     if (!RTG_EotsGetNearestOwnedNodeToUnit(eyeBg, team, bot, bestNodeId, bestNodePos, bestDist))
         return false;
 
-    for (auto const& objective : EY_AttackObjectives)
-        if (std::get<0>(objective) == bestNodeId)
-            bestTriggerId = std::get<2>(objective);
-
-    // EotS turn-in is an area trigger at an owned tower. Bots do not reliably fire client area
-    // triggers from movement alone, so do it only when the carrier is already basically at the tower.
-    if (!bestTriggerId)
+    Position triggerPos = bestNodePos;
+    if (!RTG_EotsGetTurnInTrigger(bestNodeId, bestTriggerId, triggerPos) || !bestTriggerId)
         return false;
 
-    if (bestDist > 25.0f)
+    // Use the real area-trigger coordinates, not only the visual tower center.
+    // A few EotS tower triggers sit far enough from the banner coordinate that
+    // carriers could look "at the base" while every synthetic trigger packet
+    // was still rejected by the core's distance validation.
+    bestDist = bot->GetDistance(triggerPos);
+    if (bestDist > 12.0f)
     {
         if (bestDist < 75.0f)
-            RTG_EotsDebugRaw(bot, bg, "turnin_wait", "owned_tower_not_close", bestNodeId, bestTriggerId);
+            RTG_EotsDebugRaw(bot, bg, "turnin_wait", "turnin_trigger_not_close", bestNodeId, bestTriggerId);
         return false;
     }
 
@@ -4459,14 +4516,27 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
     if (!RTG_SelectBattlegroundObjective(botAI, assignment) || !assignment.valid || !assignment.destination.valueSet)
         return false;
 
-    PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
-    posMap["bg objective"] = assignment.destination;
+    PositionInfo movementObjective = assignment.destination;
+    if (assignment.role == RTGBgObjectiveRole::CarrierTurnIn)
+    {
+        uint32 turnInTriggerId = 0;
+        Position turnInTriggerPos;
+        if (RTG_EotsGetTurnInTrigger(assignment.objectiveId, turnInTriggerId, turnInTriggerPos))
+        {
+            (void)turnInTriggerId;
+            movementObjective.Set(turnInTriggerPos.GetPositionX(), turnInTriggerPos.GetPositionY(),
+                                  turnInTriggerPos.GetPositionZ(), bg->GetMapId());
+        }
+    }
 
-    Position finalDestination(assignment.destination.x, assignment.destination.y, assignment.destination.z, 0.0f);
+    PositionMap& posMap = context->GetValue<PositionMap&>("position")->Get();
+    posMap["bg objective"] = movementObjective;
+
+    Position finalDestination(movementObjective.x, movementObjective.y, movementObjective.z, 0.0f);
     Position movementDestination = finalDestination;
     Position routeStep;
     bool finalRouteStep = true;
-    if (RTG_EotsGetObjectiveRouteStep(bot, team, assignment.destination, routeStep, finalRouteStep) && !finalRouteStep)
+    if (RTG_EotsGetObjectiveRouteStep(bot, team, movementObjective, routeStep, finalRouteStep) && !finalRouteStep)
         movementDestination.Relocate(routeStep);
 
     float const finalDist2d = bot->GetExactDist2d(finalDestination.GetPositionX(), finalDestination.GetPositionY());
@@ -4521,6 +4591,7 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         float lastZ = 0.0f;
         float lastDistance = FLT_MAX;
         uint32 lastProgressMs = 0;
+        uint32 lastForcedMs = 0;
         uint8 recoveryAttempts = 0;
         bool initialized = false;
     };
@@ -4548,6 +4619,7 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         moveState.lastZ = bot->GetPositionZ();
         moveState.lastDistance = moveDistance;
         moveState.lastProgressMs = now;
+        moveState.lastForcedMs = 0;
         moveState.recoveryAttempts = 0;
 
         if (bot->isMoving())
@@ -4598,16 +4670,22 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
         }
     }
 
-    // If a carrier was knocked or resurrected onto the wrong side of an
-    // island/ledge, do not let the navmesh shortcut straight up the cliff. Rejoin
-    // the EotS road graph while keeping the carrier objective authoritative.
-    if (!voidLaneSafety &&
-        !RTG_HasPlayerLegalBgPath(bot, movementDestination.GetPositionX(), movementDestination.GetPositionY(),
-                                  movementDestination.GetPositionZ()))
-    {
-        if (selectObjectiveWp(vPaths_EY))
-            return true;
+    bool const carrierPathLooksLegal = voidLaneSafety ||
+        RTG_HasPlayerLegalBgPath(bot, movementDestination.GetPositionX(), movementDestination.GetPositionY(),
+                                 movementDestination.GetPositionZ());
 
+    // Do not clear/reissue movement every AI pulse. Once the normal mmap move has
+    // failed twice, trust the short hand-authored breadcrumb and force one direct
+    // spline. This is the hard anti-stall path for carriers that would otherwise
+    // hold the Netherstorm flag for the remainder of the match.
+    if (moveState.recoveryAttempts >= 2 &&
+        (!moveState.lastForcedMs || getMSTimeDiff(moveState.lastForcedMs, now) >= 2500) &&
+        RTG_ForceFlagCarrierWaypoint(bot, movementDestination))
+    {
+        moveState.lastForcedMs = now;
+        RTG_EotsDebugRaw(bot, bg, "carrier_recover", "forced_route_breadcrumb", assignment.objectiveId,
+                         moveState.recoveryAttempts);
+        botAI->SetNextCheckDelay(500);
         return true;
     }
 
@@ -4617,6 +4695,19 @@ bool BGTactics::rtgEotsMoveFlagCarrier()
                movementDestination.GetPositionZ(), false, false, voidLaneSafety, false,
                MovementPriority::MOVEMENT_NORMAL, true))
     {
+        return true;
+    }
+
+    // A failed player-legal path check must never become a silent handled/no-move
+    // result. Try the battleground graph, then the guarded direct breadcrumb.
+    if (!carrierPathLooksLegal && selectObjectiveWp(vPaths_EY))
+        return true;
+
+    if ((!moveState.lastForcedMs || getMSTimeDiff(moveState.lastForcedMs, now) >= 2500) &&
+        RTG_ForceFlagCarrierWaypoint(bot, movementDestination))
+    {
+        moveState.lastForcedMs = now;
+        botAI->SetNextCheckDelay(500);
         return true;
     }
 
@@ -4875,6 +4966,8 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         float lastX = 0.0f;
         float lastY = 0.0f;
         uint32 lastProgressMs = 0;
+        uint32 lastForcedMs = 0;
+        uint8 recoveryAttempts = 0;
         bool initialized = false;
     };
 
@@ -4900,6 +4993,8 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
         progress.lastX = bot->GetPositionX();
         progress.lastY = bot->GetPositionY();
         progress.lastProgressMs = now;
+        progress.lastForcedMs = 0;
+        progress.recoveryAttempts = 0;
     }
 
     bool const appearsStuck = dist2d > 10.0f && progress.initialized &&
@@ -4926,14 +5021,26 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
     {
         bot->StopMoving();
         bot->GetMotionMaster()->Clear();
+
+        // Reset the watchdog window after a recovery attempt. Previously the
+        // timestamp stayed old, so every following AI pulse cleared the newly
+        // issued movement again and an FC could remain frozen forever.
+        progress.lastX = bot->GetPositionX();
+        progress.lastY = bot->GetPositionY();
+        progress.lastProgressMs = now;
+        if (progress.recoveryAttempts < 255)
+            ++progress.recoveryAttempts;
     }
 
-    if (!RTG_HasPlayerLegalBgPath(bot, destination.GetPositionX(), destination.GetPositionY(),
-                                  destination.GetPositionZ()))
-    {
-        if (selectObjectiveWp(vPaths_WS))
-            return true;
+    bool const carrierPathLooksLegal = RTG_HasPlayerLegalBgPath(
+        bot, destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
 
+    if (progress.recoveryAttempts >= 2 &&
+        (!progress.lastForcedMs || getMSTimeDiff(progress.lastForcedMs, now) >= 2500) &&
+        RTG_ForceFlagCarrierWaypoint(bot, destination))
+    {
+        progress.lastForcedMs = now;
+        botAI->SetNextCheckDelay(500);
         return true;
     }
 
@@ -4944,13 +5051,35 @@ bool BGTactics::rtgWsgMoveFlagCarrier()
                    false, false, true, false, MovementPriority::MOVEMENT_NORMAL, true))
             return true;
 
+        if (!carrierPathLooksLegal && selectObjectiveWp(vPaths_WS))
+            return true;
+
+        if ((!progress.lastForcedMs || getMSTimeDiff(progress.lastForcedMs, now) >= 2500) &&
+            RTG_ForceFlagCarrierWaypoint(bot, destination))
+        {
+            progress.lastForcedMs = now;
+            botAI->SetNextCheckDelay(500);
+            return true;
+        }
+
         return true;
     }
 
     if (MoveNear(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ(), approach))
         return true;
 
-    return MoveTo(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ());
+    if (MoveTo(bg->GetMapId(), destination.GetPositionX(), destination.GetPositionY(), destination.GetPositionZ()))
+        return true;
+
+    if ((!progress.lastForcedMs || getMSTimeDiff(progress.lastForcedMs, now) >= 2500) &&
+        RTG_ForceFlagCarrierWaypoint(bot, destination))
+    {
+        progress.lastForcedMs = now;
+        botAI->SetNextCheckDelay(500);
+        return true;
+    }
+
+    return true;
 }
 
 bool BGTactics::recoverStuckObjective(BattlegroundTypeId bgType, PositionInfo const& pos)
