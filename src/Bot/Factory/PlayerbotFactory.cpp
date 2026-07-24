@@ -861,28 +861,21 @@ void PlayerbotFactory::Randomize(bool incremental)
         bot->resetTalents(true);
     }
 
-    // Full randomization still rebuilds the complete spellbook. Incremental
-    // downscaling must not do that: clearing every spell and calling SaveToDB
-    // halfway through Randomize can race the Playerbots world-thread processor
-    // and can also turn retained low-rank spells into delete/reinsert cycles.
-    //
-    // For a downscale, rebuild skills but prune only spells that are invalid at
-    // the new level. This leaves valid known spells intact, removes stale higher
-    // ranks before the lower-level learning pass, and keeps Randomize to its
-    // single normal save at the end.
-    if (!incremental)
+    // Incremental randomization normally preserves learned progression. A
+    // bracket downscale is different: level-bound skills and spells must be
+    // rebuilt from the lower level or stale high-level rows remain in
+    // character_spell.
+    if (!incremental || levelReduced)
     {
         ClearSkills();
         ClearSpells();
         bot->RemoveAllSpellCooldown();
-    }
-    else if (levelReduced)
-    {
-        ClearSkills();
-        bot->RemoveAllSpellCooldown();
-        RemoveRTGSpellsNotAllowedForCurrentLevel(bot);
-        LOG_DEBUG("playerbots", "RTG downscale spell prune completed for {}: {} -> {}", bot->GetName(),
-                  previousLevel, level);
+
+        // Flush PLAYERSPELL_REMOVED states before the lower-level learning pass.
+        // Relearning in the same final save without this flush can attempt a
+        // second INSERT for a row that still exists in character_spell.
+        if (levelReduced)
+            bot->SaveToDB(false, false);
     }
 
     if (!incremental)
