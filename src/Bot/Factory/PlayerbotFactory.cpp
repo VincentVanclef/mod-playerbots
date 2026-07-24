@@ -260,25 +260,6 @@ bool IsRTGSpellAllowedForBotLevel(Player* bot, uint32 spellId)
 
     uint32 const botLevel = bot->GetLevel();
 
-    // Spell 674 (Dual Wield) has no reliable level gate in the client spell
-    // data used by the factory. Match InitSkills(): rogues retain it, while
-    // warriors, hunters, and death knights unlock it only at level 20.
-    if (spellId == 674)
-    {
-        bool const allowed =
-            bot->getClass() == CLASS_ROGUE ||
-            (botLevel >= 20 &&
-             (bot->getClass() == CLASS_WARRIOR ||
-              bot->getClass() == CLASS_HUNTER ||
-              bot->getClass() == CLASS_DEATH_KNIGHT)) ||
-            (botLevel >= 40 &&
-             bot->getClass() == CLASS_SHAMAN &&
-             bot->HasSpell(SPELL_SHAMAN_DUAL_WIELD));
-
-        if (!allowed)
-            return false;
-    }
-
     // These proficiency spells unlock at level 40 even when custom DBC data
     // exposes a lower BaseLevel/SpellLevel. Keep them off level-19 bots.
     if (botLevel < 40 && (spellId == 750 || spellId == 8737))
@@ -302,26 +283,6 @@ bool IsRTGSpellAllowedForBotLevel(Player* bot, uint32 spellId)
     }
 
     return true;
-}
-
-void RemoveRTGSpellsNotAllowedForCurrentLevel(Player* bot)
-{
-    if (!bot)
-        return;
-
-    std::list<uint32> spellsToRemove;
-    for (PlayerSpellMap::iterator itr = bot->GetSpellMap().begin(); itr != bot->GetSpellMap().end(); ++itr)
-    {
-        if (itr->second->State == PLAYERSPELL_REMOVED)
-            continue;
-
-        uint32 const spellId = itr->first;
-        if (!IsRTGSpellAllowedForBotLevel(bot, spellId))
-            spellsToRemove.push_back(spellId);
-    }
-
-    for (std::list<uint32>::const_iterator itr = spellsToRemove.begin(); itr != spellsToRemove.end(); ++itr)
-        bot->removeSpell(*itr, SPEC_MASK_ALL, false);
 }
 
 bool IsRTGTalentRowAllowedForBotLevel(Player* bot, uint32 row)
@@ -849,8 +810,6 @@ void PlayerbotFactory::Randomize(bool incremental)
     LOG_DEBUG("playerbots", "{} randomizing {} (level {} class = {})...", (incremental ? "Incremental" : "Full"),
              bot->GetName().c_str(), level, bot->getClass());
     // LOG_DEBUG("playerbots", "Preparing to {} randomize...", (incremental ? "incremental" : "full"));
-    uint32 const previousLevel = bot->GetLevel();
-    bool const levelReduced = level < previousLevel;
     Prepare();
     LOG_DEBUG("playerbots", "Resetting player...");
     PerfMonitorOperation* pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "PlayerbotFactory_Reset");
@@ -861,25 +820,10 @@ void PlayerbotFactory::Randomize(bool incremental)
         bot->resetTalents(true);
     }
 
-    // Incremental randomization normally preserves learned progression. A
-    // bracket downscale is different: level-bound skills and spells must be
-    // rebuilt from the lower level or stale high-level rows remain in
-    // character_spell.
-    if (!incremental || levelReduced)
+    if (!incremental)
     {
         ClearSkills();
         ClearSpells();
-        bot->RemoveAllSpellCooldown();
-
-        // Flush PLAYERSPELL_REMOVED states before the lower-level learning pass.
-        // Relearning in the same final save without this flush can attempt a
-        // second INSERT for a row that still exists in character_spell.
-        if (levelReduced)
-            bot->SaveToDB(false, false);
-    }
-
-    if (!incremental)
-    {
         ResetQuests();
         if (!sPlayerbotAIConfig.equipAndSpecPersistence ||
             level < sPlayerbotAIConfig.equipAndSpecPersistenceLevel)
@@ -1112,13 +1056,6 @@ void PlayerbotFactory::Randomize(bool incremental)
 
     pmo = sPerfMonitor.start(PERF_MON_RNDBOT, "PlayerbotFactory_Save");
     LOG_DEBUG("playerbots", "Saving to DB...");
-
-    // A lower-bracket rebuild can learn spells through several factory paths,
-    // not only trainer rows. Prune anything whose required level or explicit
-    // RTG proficiency policy exceeds the bot's new level before persisting.
-    if (levelReduced)
-        RemoveRTGSpellsNotAllowedForCurrentLevel(bot);
-
     bot->SetMoney(urand(level * 100000, level * 5 * 100000));
     bot->SetHealth(bot->GetMaxHealth());
     bot->SetPower(POWER_MANA, bot->GetMaxPower(POWER_MANA));
