@@ -4836,7 +4836,22 @@ uint32 PlayerbotAI::AutoScaleActivity(uint32 mod)
     return static_cast<uint32>(mod * (1 - lagProgress));
 }
 
-bool PlayerbotAI::IsOpposing(Player* player) { return IsOpposing(player->getRace(), bot->getRace()); }
+bool PlayerbotAI::IsOpposing(Player* player)
+{
+    // RTG_CFRDF_PLAYERBOT_FRIENDSHIP_V2_BEGIN
+    // Playerbots normally classify opposition from race alone. During an
+    // active RDF dungeon, defer to LFGMgr's narrowly scoped friendliness gate
+    // so an opposite-faction teammate is eligible for healing, following,
+    // resurrection, assistance, and ordinary group coordination.
+    if (!player || !bot)
+        return false;
+
+    if (sLFGMgr->IsCrossFactionDungeonPartyFriendly(bot, player))
+        return false;
+    // RTG_CFRDF_PLAYERBOT_FRIENDSHIP_V2_END
+
+    return IsOpposing(player->getRace(), bot->getRace());
+}
 
 bool PlayerbotAI::IsOpposing(uint8 race1, uint8 race2)
 {
